@@ -16,7 +16,9 @@ class VehicleInfo:
         self.direction = 0
         self.steer_forces = 0
         self.speed_power_axle = 0
+        self.previous_speed_power_axle = 0
         self.speed_over_ground = 0
+        self.previous_speed_over_ground = 0
         self.acceleration = 0
 
         self.accelerator_pedal_pos = 0
