@@ -32,6 +32,7 @@ class LFSConnector:
 
     def connect(self):
         """Stellt Verbindung zu LFS her"""
+        # TODO Test ob LFS läuft und erreichbar ist
         try:
             interval = self.settings.get('assistance_refresh_rate')
             self.insim = pyinsim.insim(

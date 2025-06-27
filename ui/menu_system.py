@@ -1,3 +1,9 @@
+from typing import List
+
+from core.settings_manager import SettingsManager
+from ui.ui_manager import UIManager
+
+
 class MenuSystem:
     """Verwaltet das Menüsystem"""
 

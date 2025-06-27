@@ -1,6 +1,10 @@
 # ui/ui_manager.py
 from typing import Dict, List
 
+from core.event_bus import EventBus
+from core.settings_manager import SettingsManager
+from lfs.message_sender import MessageSender
+
 
 class UIManager:
     """Verwaltet alle UI-Elemente und Menüs"""

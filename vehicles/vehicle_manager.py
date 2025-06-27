@@ -1,4 +1,8 @@
-from typing import Dict, List
+from typing import Dict, List, Any, Optional
+
+from core.event_bus import EventBus
+from vehicles.own_vehicle import OwnVehicle
+from vehicles.vehicle import Vehicle
 
 
 class VehicleManager:
