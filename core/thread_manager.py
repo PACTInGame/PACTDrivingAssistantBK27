@@ -63,5 +63,5 @@ class ThreadManager:
 
             # Warte bis zum nächsten Zyklus
             elapsed = (time.time() - start_time) * 1000
-            sleep_time = max(0, (interval_ms - elapsed) / 1000)
+            sleep_time = max(0.0, (interval_ms - elapsed) / 1000.0)
             time.sleep(sleep_time)

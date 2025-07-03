@@ -4,12 +4,15 @@ import time
 
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from lfs.lfs_state import StateHandler
+from misc import helpers
 
 
 class LFSConnector:
     """Verwaltet die Verbindung zu Live for Speed"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
+        self.debug = True
         self.event_bus = event_bus
         self.settings = settings
         self.insim = None
@@ -19,27 +22,33 @@ class LFSConnector:
         self._packet_handlers: Dict[int, Callable] = {}
         self._setup_handlers()
 
+
     def _setup_handlers(self):
-        """Registriert Standard-Packet-Handler"""
+        """Registriert Standard-Packet-Handler und startet listener"""
+
+        self.state_handler = StateHandler(self)
+
         self._packet_handlers = {
-            pyinsim.ISP_MCI: self._handle_mci,
             pyinsim.ISP_NPL: self._handle_new_player,
             pyinsim.ISP_PLL: self._handle_player_left,
             pyinsim.ISP_STA: self._handle_state,
             pyinsim.ISP_BTC: self._handle_button_click,
             pyinsim.ISP_MSO: self._handle_message,
+            pyinsim.ISP_MCI: self._handle_mci,
         }
 
     def connect(self):
         """Stellt Verbindung zu LFS her"""
-        # TODO Test ob LFS läuft und erreichbar ist
+        while not helpers.is_lfs_running():
+            print("Waiting for Live for Speed to start...")
+            time.sleep(1)
         try:
             interval = self.settings.get('assistance_refresh_rate')
             self.insim = pyinsim.insim(
                 b'127.0.0.1', 29999,
                 Admin=b'',
                 Prefix=b"$",
-                Flags=pyinsim.ISF_MCI | pyinsim.ISF_LOCAL,
+                Flags= pyinsim.ISF_MCI | pyinsim.ISF_LOCAL,
                 Interval=interval
             )
 
@@ -47,15 +56,57 @@ class LFSConnector:
             for packet_type, handler in self._packet_handlers.items():
                 self.insim.bind(packet_type, handler)
 
-            self._start_outgauge()
-            self._start_outsim()
+            self.start_outgauge()
+            self.start_outsim()
 
             self.is_connected = True
             self.event_bus.emit('lfs_connected')
 
+            self.send_button(3, pyinsim.ISB_DARK | pyinsim.ISB_CLICK, 180, 0, 25, 5,
+                             "Waiting for you to hit the road.")
+
         except Exception as e:
             print(f"Failed to connect to LFS: {e}")
             self.is_connected = False
+
+    def unbind_handler(self, packet_type):
+        # TODO Unbinding MCI might not be necessary
+        """Entfernt einen Handler für einen bestimmten Packet-Typ"""
+        if self.debug:
+            print(f"Unbinding handler for packet type: {packet_type}")
+
+        if packet_type in self._packet_handlers:
+            if self.debug:
+                print(f"Removing handler for packet type: {packet_type}")
+            if self.insim:
+               self.insim.unbind(packet_type, self._packet_handlers[packet_type])
+            del self._packet_handlers[packet_type]
+
+    def bind_handler(self, packet_type: int, handler: Callable):
+        """Registriert einen neuen Handler für einen Packet-Typ"""
+        self._packet_handlers[packet_type] = handler
+        if self.insim:
+            self.insim.bind(packet_type, handler)
+
+    def start_outgauge(self):
+        """Startet OutGauge-Verbindung"""
+        try:
+            self.outgauge = pyinsim.outgauge('127.0.0.1', 30000, self._outgauge_handler, 30.0)
+        except Exception as e:
+            print(f"Failed to connect OutGauge: {e}")
+
+    def start_outsim(self):
+        """Startet OutSim-Verbindung"""
+        try:
+            self.outsim = pyinsim.outsim('127.0.0.1', 29998, self._outsim_handler, 30.0)
+        except Exception as e:
+            print(f"Failed to connect OutSim: {e}")
+
+    def start_game_insim(self):
+        self.bind_handler(pyinsim.ISP_MCI, self._handle_mci)
+
+    def start_menu_insim(self):
+        self.unbind_handler(pyinsim.ISP_MCI)
 
     def _handle_mci(self, insim, mci):
         """Verarbeitet MCI (Multi Car Info) Pakete"""
@@ -72,6 +123,8 @@ class LFSConnector:
     def _handle_state(self, insim, sta):
         """Verarbeitet Spielstatus"""
         self.event_bus.emit('game_state_changed', sta)
+        if self.debug:
+            print(f"Game state changed: {sta}")
 
     def _handle_button_click(self, insim, btc):
         """Verarbeitet Button-Klicks"""
@@ -80,20 +133,6 @@ class LFSConnector:
     def _handle_message(self, insim, mso):
         """Verarbeitet Chat-Nachrichten"""
         self.event_bus.emit('message_received', mso)
-
-    def _start_outgauge(self):
-        """Startet OutGauge-Verbindung"""
-        try:
-            self.outgauge = pyinsim.outgauge('127.0.0.1', 30000, self._outgauge_handler, 30.0)
-        except Exception as e:
-            print(f"Failed to connect OutGauge: {e}")
-
-    def _start_outsim(self):
-        """Startet OutSim-Verbindung"""
-        try:
-            self.outsim = pyinsim.outsim('127.0.0.1', 29998, self._outsim_handler, 30.0)
-        except Exception as e:
-            print(f"Failed to connect OutSim: {e}")
 
     def _outgauge_handler(self, outgauge, packet):
         """Handler für OutGauge-Pakete (hochfrequent)"""
@@ -104,7 +143,9 @@ class LFSConnector:
         self.event_bus.emit('outsim_data', packet)
 
     def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text: str, inst: int = 0):
-        """Sendet einen Button an LFS"""
+        """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)"""
+        print(f"Sending button with the following attributes: ")
+        print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
         if self.insim and self.is_connected:
             self.insim.send(
                 pyinsim.ISP_BTN,
@@ -112,10 +153,12 @@ class LFSConnector:
                 ClickID=click_id,
                 BStyle=style | 3,
                 Inst=inst,
-                T=t, L=l, W=w, H=h,
+                T=180, L=l, W=w, H=h,
                 Text=text.encode(),
                 TypeIn=0
             )
+
+
 
     def delete_button(self, click_id: int):
         """Löscht einen Button in LFS"""

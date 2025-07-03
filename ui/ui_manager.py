@@ -32,8 +32,8 @@ class UIManager:
     def show_hud(self):
         """Zeigt das Head-Up Display"""
         # HUD-Elemente erstellen
-        self.message_sender.create_button(1, 10, 10, 200, 30, "Speed: 0 km/h")
-        self.message_sender.create_button(2, 10, 45, 200, 30, "Gear: N")
+        #self.message_sender.create_button(1, 10, 10, 200, 30, "Speed: 0 km/h")
+        #self.message_sender.create_button(2, 10, 45, 200, 30, "Gear: N")
         # Weitere HUD-Elemente...
 
     def hide_hud(self):
