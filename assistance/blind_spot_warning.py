@@ -1,4 +1,5 @@
 import math
+import time
 from typing import Dict, Any
 
 from assistance.base_system import AssistanceSystem
@@ -6,6 +7,55 @@ from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
+from shapely import Polygon
+
+
+def _is_within_threshold(own_heading, other_heading):
+        # Checks if the heading of another car is within a threshold
+        lower_bound = (other_heading - 5000) % 65536
+        upper_bound = (other_heading + 5000) % 65536
+
+        if lower_bound > upper_bound:
+            return own_heading > lower_bound or own_heading < upper_bound
+        return lower_bound < own_heading < upper_bound
+
+
+def _polygon_intersect(p1, p2):
+    return p1.intersects(p2)
+
+
+def _normalize_angle(angle):
+        # Normalizes the angle value
+        if angle < 0:
+            angle *= -1
+        return angle
+
+
+def _calc_polygon_points(own_x, own_y, length, angle):
+    return own_x + length * math.cos(math.radians(angle)), own_y + length * math.sin(math.radians(angle))
+
+
+def _create_rectangles_for_blindspot_warning(cars):
+        rectangles = []
+        factor = 2.3 * 65536
+        heading_offset = 16384
+        heading_divisor = 182.05
+        angle_offsets = [22, 158, 202, 338]
+        for car in cars.values():
+            x, y, heading = car.data.x, car.data.y, car.data.heading
+            angle_of_car = abs((heading - heading_offset) / heading_divisor)
+            polygon_points = [_calc_polygon_points(x, y, factor, angle_of_car + offset) for offset in angle_offsets]
+            rectangles.append((car.data.speed, car.data.distance_to_player, Polygon(polygon_points), heading))
+
+        return rectangles
+
+
+def _create_blindspot_rectangle(vehicle, angle_of_car, angles):
+        # Creates blind spot rectangle using provided angles
+        multipliers = [4, 85, 85, 1]
+        points = [_calc_polygon_points(vehicle.data.x, vehicle.data.y, multiplier * 65536, angle_of_car + angle)
+                  for multiplier, angle in zip(multipliers, angles)]
+        return Polygon(points)
 
 
 class BlindSpotWarning(AssistanceSystem):
@@ -13,58 +63,38 @@ class BlindSpotWarning(AssistanceSystem):
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("BlindSpotWarning", event_bus, settings)
-        self.detection_distance = 30.0
+        self.detection_distance = 70.0
         self.left_warning = False
         self.right_warning = False
+        self.last_exec = time.perf_counter()
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Prüft auf Fahrzeuge im toten Winkel"""
-        if not self.is_enabled():
-            return {'left_warning': False, 'right_warning': False}
+        print("Processing time: ", time.perf_counter() - self.last_exec)
+        self.last_exec = time.perf_counter()
+        blindspot_r, blindspot_l = False, False
+        angle_of_car = _normalize_angle((own_vehicle.data.heading + 16384) / 182.05)
+        print(angle_of_car)
+        # Rectangles for right and left blind spots
+        rectangle_right = _create_blindspot_rectangle(own_vehicle, angle_of_car, [270, 182, 183, 270])
+        rectangle_left = _create_blindspot_rectangle(own_vehicle, angle_of_car, [90, 178, 177, 90])
 
-        left_warning = False
-        right_warning = False
+        rectangles_others = _create_rectangles_for_blindspot_warning(vehicles)
 
-        for vehicle in vehicles.values():
-            if vehicle.data.distance_to_player > self.detection_distance:
-                continue
-
-            side = self._get_vehicle_side(own_vehicle, vehicle)
-            if side == 'left':
-                left_warning = True
-            elif side == 'right':
-                right_warning = True
-
-        # Emit Events bei Änderungen
-        if left_warning != self.left_warning or right_warning != self.right_warning:
-            self.left_warning = left_warning
-            self.right_warning = right_warning
-            self.event_bus.emit('blind_spot_warning_changed', {
-                'left': left_warning,
-                'right': right_warning
-            })
-
+        for rectangle in rectangles_others:
+            print(rectangle)
+            if _is_within_threshold(own_vehicle.data.heading, rectangle[3]) and rectangle[1] < (
+                    rectangle[0] - own_vehicle.data.speed + (5 if own_vehicle.data.speed > 15 else 0)) * 1.2:
+                if _polygon_intersect(rectangle[2], rectangle_left):
+                    blindspot_l = True
+                if _polygon_intersect(rectangle[2], rectangle_right):
+                    blindspot_r = True
+        print("Blindspot L:", blindspot_l, "Blindspot R:", blindspot_r)
         return {
-            'left_warning': left_warning,
-            'right_warning': right_warning
+            'left_warning': blindspot_l,
+            'right_warning': blindspot_r
         }
 
-    def _get_vehicle_side(self, own_vehicle: OwnVehicle, other_vehicle: Vehicle) -> str:
-        """Bestimmt auf welcher Seite sich das andere Fahrzeug befindet"""
-        # Vereinfachte Implementierung
-        dx = other_vehicle.data.x - own_vehicle.data.x
-        dy = other_vehicle.data.y - own_vehicle.data.y
 
-        # Rotiere Koordinaten basierend auf eigener Fahrzeugrichtung
-        cos_h = math.cos(own_vehicle.data.heading)
-        sin_h = math.sin(own_vehicle.data.heading)
 
-        local_x = dx * cos_h + dy * sin_h
-        local_y = -dx * sin_h + dy * cos_h
 
-        if local_y > 0:
-            return 'left'
-        elif local_y < 0:
-            return 'right'
-        else:
-            return 'center'

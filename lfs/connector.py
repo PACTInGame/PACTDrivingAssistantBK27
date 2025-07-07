@@ -12,7 +12,7 @@ class LFSConnector:
     """Verwaltet die Verbindung zu Live for Speed"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
-        self.debug = True
+        self.debug = False
         self.event_bus = event_bus
         self.settings = settings
         self.insim = None
@@ -62,31 +62,11 @@ class LFSConnector:
             self.is_connected = True
             self.event_bus.emit('lfs_connected')
 
-            self.send_button(3, pyinsim.ISB_DARK | pyinsim.ISB_CLICK, 180, 0, 25, 5,
-                             "Waiting for you to hit the road.")
 
         except Exception as e:
             print(f"Failed to connect to LFS: {e}")
             self.is_connected = False
 
-    def unbind_handler(self, packet_type):
-        # TODO Unbinding MCI might not be necessary
-        """Entfernt einen Handler für einen bestimmten Packet-Typ"""
-        if self.debug:
-            print(f"Unbinding handler for packet type: {packet_type}")
-
-        if packet_type in self._packet_handlers:
-            if self.debug:
-                print(f"Removing handler for packet type: {packet_type}")
-            if self.insim:
-               self.insim.unbind(packet_type, self._packet_handlers[packet_type])
-            del self._packet_handlers[packet_type]
-
-    def bind_handler(self, packet_type: int, handler: Callable):
-        """Registriert einen neuen Handler für einen Packet-Typ"""
-        self._packet_handlers[packet_type] = handler
-        if self.insim:
-            self.insim.bind(packet_type, handler)
 
     def start_outgauge(self):
         """Startet OutGauge-Verbindung"""
@@ -101,12 +81,6 @@ class LFSConnector:
             self.outsim = pyinsim.outsim('127.0.0.1', 29998, self._outsim_handler, 30.0)
         except Exception as e:
             print(f"Failed to connect OutSim: {e}")
-
-    def start_game_insim(self):
-        self.bind_handler(pyinsim.ISP_MCI, self._handle_mci)
-
-    def start_menu_insim(self):
-        self.unbind_handler(pyinsim.ISP_MCI)
 
     def _handle_mci(self, insim, mci):
         """Verarbeitet MCI (Multi Car Info) Pakete"""
@@ -144,8 +118,7 @@ class LFSConnector:
 
     def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text: str, inst: int = 0):
         """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)"""
-        print(f"Sending button with the following attributes: ")
-        print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
+        #print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
         if self.insim and self.is_connected:
             self.insim.send(
                 pyinsim.ISP_BTN,
@@ -153,7 +126,7 @@ class LFSConnector:
                 ClickID=click_id,
                 BStyle=style | 3,
                 Inst=inst,
-                T=180, L=l, W=w, H=h,
+                T=t, L=l, W=w, H=h,
                 Text=text.encode(),
                 TypeIn=0
             )

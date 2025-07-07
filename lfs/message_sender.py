@@ -17,9 +17,8 @@ class MessageSender:
     def create_button(self, button_id: int, x: int, y: int, width: int, height: int,
                       text: str, style: int = 0):
         """Erstellt einen Button"""
-        if button_id not in self.active_buttons or not self.active_buttons[button_id]:
-            self.connector.send_button(button_id, style, y, x, width, height, text)
-            self.active_buttons[button_id] = True
+        self.connector.send_button(button_id, style, y, x, width, height, text)
+        self.active_buttons[button_id] = True
 
     def remove_button(self, button_id: int):
         """Entfernt einen Button"""

@@ -50,22 +50,21 @@ class LFSAssistantApp:
         assistance_task = ScheduledTask(
             "assistance_processing",
             self.assistance_manager.process_all_systems,
-            100
+            self.settings.get('assistance_refresh_rate')
         )
         self.thread_manager.add_task(assistance_task)
 
         # UI-Updates alle 200ms
         ui_task = ScheduledTask(
             "ui_updates",
-            self._update_ui,
-            200
+            self.ui_manager.update_hud,
+            self.settings.get('ui_refresh_rate')
         )
         self.thread_manager.add_task(ui_task)
 
     def _on_lfs_connected(self, data=None):
         """Wird aufgerufen wenn LFS-Verbindung hergestellt wurde"""
         print("Connected to LFS")
-        self.ui_manager.show_hud()
 
     def _handle_ui_action(self, data):
         """Verarbeitet UI-Aktionen"""
@@ -77,17 +76,6 @@ class LFSAssistantApp:
                 self.menu_system.handle_menu_click(button_id)
 
             # Andere Button-Aktionen hier hinzufügen...
-
-    def _update_ui(self):
-        """Aktualisiert UI-Elemente regelmäßig"""
-        # HUD-Updates basierend auf aktuellem Fahrzeugzustand
-        own_vehicle = self.vehicle_manager.own_vehicle
-        if own_vehicle and own_vehicle.data.speed > 0:
-            speed_text = f"Speed: {own_vehicle.data.speed:.1f} km/h"
-            gear_text = f"Gear: {own_vehicle.gear}"
-
-            self.message_sender.create_button(1, 10, 10, 200, 30, speed_text)
-            self.message_sender.create_button(2, 10, 45, 200, 30, gear_text)
 
     def start(self):
         """Startet die Anwendung"""

@@ -48,11 +48,11 @@ class AssistanceManager:
         results = {}
         for name, system in self.systems.items():
             if system.is_enabled():
-                try:
+                #try:
                     result = system.process(self.own_vehicle, self.vehicles)
                     results[name] = result
-                except Exception as e:
-                    print(f"Error in assistance system {name}: {e}")
+                #except Exception as e:
+                   # print(f"Error in assistance system {name}: {e}")
 
         self.event_bus.emit('assistance_results', results)
         return results

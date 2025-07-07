@@ -55,11 +55,11 @@ class ThreadManager:
 
             for task in self._tasks.get(interval_ms, []):
                 if task.enabled:
-                    try:
+                    #try:
                         task.callback()
                         task.last_execution = start_time
-                    except Exception as e:
-                        print(f"Error in task {task.name}: {e}")
+                    #except Exception as e:
+                        #print(f"Error in task {task.name}: {e}")
 
             # Warte bis zum nächsten Zyklus
             elapsed = (time.time() - start_time) * 1000

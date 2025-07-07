@@ -31,14 +31,12 @@ class StateHandler:
             if time.time() - self.time_menu_opened >= 30:
                 self.connector.start_outgauge()
             self.connector.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_NPL)
-            self.connector.start_game_insim()
             if self.connector.debug:
                 print("Starting game insim mode")
 
         def start_menu_insim():
             self.time_menu_opened = time.time()
             self.on_track = False
-            self.connector.start_menu_insim()
             if self.connector.debug:
                 print("Starting menu insim mode")
 
@@ -56,7 +54,16 @@ class StateHandler:
 
         elif self.on_track:
             start_menu_insim()
-        print("in game, on track:", self.on_track)
 
         self.text_entry = len(flags) >= 16 and flags[-16] == 1
         self.track = sta.Track
+        # TODO add CIM packet for interface mode
+        state_data = {
+            'on_track': self.on_track,
+            'text_entry': self.text_entry,
+            'track': self.track,
+            'in_game_cam': self.in_game_cam,
+            'in_game_interface': self.in_game_interface,
+            'submode_interface': self.submode_interface
+        }
+        self.connector.event_bus.emit('state_data', state_data)

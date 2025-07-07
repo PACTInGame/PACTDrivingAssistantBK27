@@ -15,8 +15,12 @@ class SettingsManager:
             'automatic_gearbox': False,
             'language': 'en',
             'collision_warning_distance': 1,
-            'ui_refresh_rate': 200,
+            'ui_refresh_rate': 100,
             'assistance_refresh_rate': 100,
+            'hud_height': 119,
+            'hud_width': 90,
+            'unit': "metric",  # 'metric' or 'imperial'
+
         }
         self.load()
 
