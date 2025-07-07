@@ -74,7 +74,6 @@ class BlindSpotWarning(AssistanceSystem):
         self.last_exec = time.perf_counter()
         blindspot_r, blindspot_l = False, False
         angle_of_car = _normalize_angle((own_vehicle.data.heading + 16384) / 182.05)
-        print(angle_of_car)
         # Rectangles for right and left blind spots
         rectangle_right = _create_blindspot_rectangle(own_vehicle, angle_of_car, [270, 182, 183, 270])
         rectangle_left = _create_blindspot_rectangle(own_vehicle, angle_of_car, [90, 178, 177, 90])
@@ -82,9 +81,10 @@ class BlindSpotWarning(AssistanceSystem):
         rectangles_others = _create_rectangles_for_blindspot_warning(vehicles)
 
         for rectangle in rectangles_others:
-            print(rectangle)
+            print(own_vehicle.data.heading, rectangle[3])
             if _is_within_threshold(own_vehicle.data.heading, rectangle[3]) and rectangle[1] < (
                     rectangle[0] - own_vehicle.data.speed + (5 if own_vehicle.data.speed > 15 else 0)) * 1.2:
+                print(rectangle[2], rectangle_left)
                 if _polygon_intersect(rectangle[2], rectangle_left):
                     blindspot_l = True
                 if _polygon_intersect(rectangle[2], rectangle_right):

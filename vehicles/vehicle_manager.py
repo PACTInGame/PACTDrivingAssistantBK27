@@ -31,12 +31,13 @@ class VehicleManager:
 
             # Aktualisiere Fahrzeugdaten
             vehicle = self.vehicles[player_id]
+            print("HEADING:", data.Heading)
             vehicle.update_position(
                 data.X, data.Y, data.Z,
                 data.Heading, data.Direction,
                 data.Speed / 91.02  # Convert to km/h
             )
-
+            # TODO update mci packet for own vehicle
             # Aktualisiere Distanz zum eigenen Fahrzeug
             if self.own_vehicle.data.player_id != 0:
                 vehicle.update_distance_to_player(
