@@ -5,6 +5,7 @@ from typing import Dict, Any
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.helpers import calc_polygon_points
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 from shapely import Polygon
@@ -31,8 +32,7 @@ def _normalize_angle(angle):
         return angle
 
 
-def _calc_polygon_points(own_x, own_y, length, angle):
-    return own_x + length * math.cos(math.radians(angle)), own_y + length * math.sin(math.radians(angle))
+
 
 
 def _create_rectangles_for_blindspot_warning(cars):
@@ -44,7 +44,7 @@ def _create_rectangles_for_blindspot_warning(cars):
         for car in cars.values():
             x, y, heading = car.data.x, car.data.y, car.data.heading
             angle_of_car = abs((heading - heading_offset) / heading_divisor)
-            polygon_points = [_calc_polygon_points(x, y, factor, angle_of_car + offset) for offset in angle_offsets]
+            polygon_points = [calc_polygon_points(x, y, factor, angle_of_car + offset) for offset in angle_offsets]
             rectangles.append((car.data.speed, car.data.distance_to_player, Polygon(polygon_points), heading))
 
         return rectangles
@@ -53,7 +53,7 @@ def _create_rectangles_for_blindspot_warning(cars):
 def _create_blindspot_rectangle(vehicle, angle_of_car, angles):
         # Creates blind spot rectangle using provided angles
         multipliers = [4, 85, 85, 1]
-        points = [_calc_polygon_points(vehicle.data.x, vehicle.data.y, multiplier * 65536, angle_of_car + angle)
+        points = [calc_polygon_points(vehicle.data.x, vehicle.data.y, multiplier * 65536, angle_of_car + angle)
                   for multiplier, angle in zip(multipliers, angles)]
         return Polygon(points)
 
@@ -79,14 +79,9 @@ class BlindSpotWarning(AssistanceSystem):
         rectangles_others = _create_rectangles_for_blindspot_warning(vehicles)
 
         for rectangle in rectangles_others:
-            print("Is within threshold:", _is_within_threshold(own_vehicle.data.heading, rectangle[3]))
-            print("Rectangle speed:", rectangle[0], "Distance to player:", rectangle[1])
-            print("Own vehicle speed:", own_vehicle.data.speed)
 
             if _is_within_threshold(own_vehicle.data.heading, rectangle[3]) and rectangle[1] < (
                     rectangle[0] - own_vehicle.data.speed + (5 if own_vehicle.data.speed > 15 else 0)) * 1.2:
-                print("\nRECTANGLES: ", rectangle[2], rectangle_right)
-
                 if _polygon_intersect(rectangle[2], rectangle_left):
                     blindspot_l = True
                 if _polygon_intersect(rectangle[2], rectangle_right):

@@ -1,3 +1,5 @@
+import math
+
 import psutil
 
 def is_lfs_running():
@@ -28,3 +30,6 @@ def is_spotify_running():
             return True
 
     return False
+
+def calc_polygon_points(own_x, own_y, length, angle):
+    return own_x + length * math.cos(math.radians(angle)), own_y + length * math.sin(math.radians(angle))
