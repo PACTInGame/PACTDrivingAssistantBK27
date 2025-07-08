@@ -25,25 +25,39 @@ class VehicleManager:
         for data in mci_packet.Info:
             player_id = data.PLID
 
-            # Erstelle Fahrzeug falls nicht vorhanden
-            if player_id not in self.vehicles:
-                self.vehicles[player_id] = Vehicle(player_id)
 
             # Aktualisiere Fahrzeugdaten
-            vehicle = self.vehicles[player_id]
-            print("HEADING:", data.Heading)
-            vehicle.update_position(
-                data.X, data.Y, data.Z,
-                data.Heading, data.Direction,
-                data.Speed / 91.02  # Convert to km/h
-            )
-            # TODO update mci packet for own vehicle
-            # Aktualisiere Distanz zum eigenen Fahrzeug
-            if self.own_vehicle.data.player_id != 0:
-                vehicle.update_distance_to_player(
-                    self.own_vehicle.data.x,
-                    self.own_vehicle.data.y,
-                    self.own_vehicle.data.z
+            if not self.own_vehicle.data.player_id == player_id:
+                # Erstelle Fahrzeug falls nicht vorhanden
+                if player_id not in self.vehicles:
+                    self.vehicles[player_id] = Vehicle(player_id)
+
+                vehicle = self.vehicles[player_id]
+                vehicle.update_position(
+                    data.X, data.Y, data.Z,
+                    data.Heading, data.Direction,
+                    data.Speed / 91.02  # Convert to km/h
+                )
+
+                # Aktualisiere Distanz zum eigenen Fahrzeug
+                if self.own_vehicle.data.player_id != 0:
+                    vehicle.update_distance_to_player(
+                        self.own_vehicle.data.x,
+                        self.own_vehicle.data.y,
+                        self.own_vehicle.data.z
+                    )
+            # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
+            if (self.own_vehicle.data.player_id != 0 and
+                    self.own_vehicle.data.player_id in self.vehicles and
+                    self.vehicles[self.own_vehicle.data.player_id]):
+                print("Deleting own vehicle from vehicles list")
+                del self.vehicles[self.own_vehicle.data.player_id]
+
+            if self.own_vehicle.data.player_id == player_id:
+                self.own_vehicle.update_position(
+                    data.X, data.Y, data.Z,
+                    data.Heading, data.Direction,
+                    data.Speed / 91.02  # Convert to km/h
                 )
 
         # Emit Event für andere Komponenten

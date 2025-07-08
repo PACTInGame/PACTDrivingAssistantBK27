@@ -9,6 +9,10 @@ from lfs.message_sender import MessageSender
 
 class UIManager:
     """Verwaltet alle UI-Elemente und Menüs"""
+    # Buttons:
+    # 1-10: HUD-Anzeige
+    # 11-12: Forward Collision Warning
+    # 13-14: Blind Spot Warning
 
     def __init__(self, event_bus: EventBus, message_sender: MessageSender, settings: SettingsManager):
         self.event_bus = event_bus
@@ -69,11 +73,11 @@ class UIManager:
     def _update_blind_spot_display(self, data):
         """Aktualisiert Toter-Winkel-Anzeige"""
         if data['left']:
-            self.message_sender.create_button(44, 5, 150, 50, 30, "BSW L")
+            self.message_sender.create_button(13, 20, self.settings.get("hud_height"), 10, 10, "^3!", pyinsim.ISB_DARK)
         else:
-            self.message_sender.remove_button(44)
+            self.message_sender.remove_button(13)
 
         if data['right']:
-            self.message_sender.create_button(45, 345, 150, 50, 30, "BSW R")
+            self.message_sender.create_button(14, 180, self.settings.get("hud_height"), 10, 10, "^3!", pyinsim.ISB_DARK)
         else:
-            self.message_sender.remove_button(45)
+            self.message_sender.remove_button(14)

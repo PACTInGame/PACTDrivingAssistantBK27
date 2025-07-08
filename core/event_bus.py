@@ -30,9 +30,9 @@ class EventBus:
                 subscribers = self._subscribers[event_type].copy()
 
         for callback in subscribers:
-            try:
+            #try:
                 callback(data)
                 #print(f"Event '{event_type}' emitted with data: {data}")
                 #print(f"Handler {callback.__name__} executed successfully.")
-            except Exception as e:
-                print(f"Error in event handler: {e}")
+            #except Exception as e:
+                #print(f"Error in event handler: {e}")

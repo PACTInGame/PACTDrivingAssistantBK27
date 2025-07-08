@@ -70,29 +70,39 @@ class BlindSpotWarning(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Prüft auf Fahrzeuge im toten Winkel"""
-        print("Processing time: ", time.perf_counter() - self.last_exec)
         self.last_exec = time.perf_counter()
         blindspot_r, blindspot_l = False, False
         angle_of_car = _normalize_angle((own_vehicle.data.heading + 16384) / 182.05)
         # Rectangles for right and left blind spots
         rectangle_right = _create_blindspot_rectangle(own_vehicle, angle_of_car, [270, 182, 183, 270])
         rectangle_left = _create_blindspot_rectangle(own_vehicle, angle_of_car, [90, 178, 177, 90])
-
         rectangles_others = _create_rectangles_for_blindspot_warning(vehicles)
 
         for rectangle in rectangles_others:
-            print(own_vehicle.data.heading, rectangle[3])
+            print("Is within threshold:", _is_within_threshold(own_vehicle.data.heading, rectangle[3]))
+            print("Rectangle speed:", rectangle[0], "Distance to player:", rectangle[1])
+            print("Own vehicle speed:", own_vehicle.data.speed)
+
             if _is_within_threshold(own_vehicle.data.heading, rectangle[3]) and rectangle[1] < (
                     rectangle[0] - own_vehicle.data.speed + (5 if own_vehicle.data.speed > 15 else 0)) * 1.2:
-                print(rectangle[2], rectangle_left)
+                print("\nRECTANGLES: ", rectangle[2], rectangle_right)
+
                 if _polygon_intersect(rectangle[2], rectangle_left):
                     blindspot_l = True
                 if _polygon_intersect(rectangle[2], rectangle_right):
                     blindspot_r = True
-        print("Blindspot L:", blindspot_l, "Blindspot R:", blindspot_r)
+
+        if blindspot_l != self.left_warning or blindspot_r != self.right_warning:
+            self.left_warning = blindspot_l
+            self.right_warning = blindspot_r
+
+            self.event_bus.emit('blind_spot_warning_changed', {
+                'left': self.left_warning,
+                'right': self.right_warning
+            })
         return {
-            'left_warning': blindspot_l,
-            'right_warning': blindspot_r
+            'left_warning': self.left_warning,
+            'right_warning': self.right_warning
         }
 
 

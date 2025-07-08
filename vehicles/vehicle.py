@@ -44,4 +44,7 @@ class Vehicle:
         dx = self.data.x - player_x
         dy = self.data.y - player_y
         dz = self.data.z - player_z
+        dx = dx / 65536
+        dy = dy / 65536
+        dz = dz / 65536
         self.data.distance_to_player = math.sqrt(dx * dx + dy * dy + dz * dz)

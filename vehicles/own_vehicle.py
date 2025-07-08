@@ -34,6 +34,7 @@ class OwnVehicle(Vehicle):
 
     def update_outgauge_data(self, packet):
         """Aktualisiert Daten aus OutGauge-Paket"""
+        self.data.player_id = packet.PLID
         self.fuel = packet.Fuel
         self.data.speed = packet.Speed * 3.6  # Convert to km/h
         self.rpm = packet.RPM
