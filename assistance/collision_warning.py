@@ -24,12 +24,9 @@ class ForwardCollisionWarning(AssistanceSystem):
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Prüft auf Kollisionsgefahr voraus"""
         if not self.is_enabled():
-            return {'warning_level': 0}
+            return {'level': 0}
 
         warning_level = 0
-        closest_vehicle = None
-        min_distance = float('inf')
-
         angle_of_car = abs((own_vehicle.data.heading + 16384) / 182.05)
         ang1, ang2, ang3, ang4 = angle_of_car + 1, angle_of_car - 20, angle_of_car + 20, angle_of_car - 1
         (x1, y1) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang1)
@@ -40,24 +37,28 @@ class ForwardCollisionWarning(AssistanceSystem):
 
         for vehicle in vehicles.values():
             if self._is_vehicle_ahead(vehicle):
-                distance = vehicle.data.distance_to_player
-                print(distance)
-
-
-
-
+                needed_braking = self._calculate_needed_braking(own_vehicle, vehicle)  # Nötiges Bremsen in m/s^2
+                print("needed_braking:", needed_braking)
+                if needed_braking != float('inf'):
+                    if needed_braking > 7.5:
+                        warn = 3
+                    elif needed_braking > 6:
+                        warn = 2
+                    elif needed_braking > 5:
+                        warn = 1
+                    else:
+                        warn = 0
+                    if warn > warning_level:
+                        warning_level = warn
+        print(warning_level)
         if warning_level != self.current_warning_level:
             self.current_warning_level = warning_level
             self.event_bus.emit('collision_warning_changed', {
                 'level': warning_level,
-                'distance': min_distance,
-                'vehicle': closest_vehicle
             })
 
         return {
-            'warning_level': warning_level,
-            'distance': min_distance,
-            'target_vehicle': closest_vehicle
+            'level': warning_level,
         }
 
     def _is_vehicle_ahead(self, other_vehicle: Vehicle) -> bool:
@@ -69,10 +70,27 @@ class ForwardCollisionWarning(AssistanceSystem):
         return is_vehicle_ahead  # Innerhalb 45° voraus
 
     def _calculate_needed_braking(self, own_vehicle: OwnVehicle, other_vehicle: Vehicle) -> float:
-        """Berechnet Zeit bis zur Kollision"""
-        relative_speed = own_vehicle.data.speed - other_vehicle.data.speed
+        """Calculates the needed braking to avoid collision in m/s^2"""
+        relative_speed = (own_vehicle.data.speed - other_vehicle.data.speed) * 0.277778  # Convert from km/h to m/s
+        vehicle_acceleration = other_vehicle.data.acceleration # Relevant, because it can drastically shorten or lengthen the distance
+        distance_to_vehicle = other_vehicle.data.distance_to_player - 5  # -4 because of coordinates distance to front bumper
+
         if relative_speed <= 0:
             return float('inf')
 
-        distance = other_vehicle.data.distance_to_player
-        return distance / (relative_speed / 3.6)  # Convert km/h to m/s
+        # Using kinematic equation: v² = u² + 2as
+        # We want final relative speed to be 0, so: 0 = relative_speed² + 2 * relative_acceleration * distance
+        # Solving for acceleration: a = -relative_speed² / (2 * distance)
+
+        # However, we need to account for the fact that the other vehicle is also accelerating
+        # The relative acceleration we need is: needed_relative_acceleration = -relative_speed² / (2 * distance)
+        needed_relative_acceleration = -(relative_speed ** 2) / (2 * distance_to_vehicle)
+
+        # To get the absolute braking needed for our vehicle:
+        # needed_relative_acceleration = our_new_acceleration - vehicle_acceleration
+        # So: our_new_acceleration = needed_relative_acceleration + vehicle_acceleration
+        needed_braking = needed_relative_acceleration + vehicle_acceleration
+        if needed_braking > own_vehicle.data.acceleration:
+            return float('inf')
+        # Return the absolute value since we want braking force (negative acceleration)
+        return abs(needed_braking)

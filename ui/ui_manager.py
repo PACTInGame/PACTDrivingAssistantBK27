@@ -65,7 +65,7 @@ class UIManager:
         warning_level = data['level']
         if warning_level > 0:
             color = 0  # Rot für Warnung
-            text = f"COLLISION WARNING! Distance: {data['distance']:.1f}m"
+            text = f"{data['level']}"
             self.message_sender.create_button(11, 10, 80, 100, 40, text, color)
         else:
             self.message_sender.remove_button(11)
