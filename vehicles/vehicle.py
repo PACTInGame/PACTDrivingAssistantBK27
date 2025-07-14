@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from typing import Optional
 import math
@@ -35,9 +36,9 @@ class Vehicle:
         self.data.direction = direction
 
         # Berechne Beschleunigung
-        self.data.acceleration = speed - self.previous_speed
-        self.previous_speed = self.data.speed
         self.data.speed = speed
+        self.data.acceleration = (speed - self.previous_speed) * 2.778  # Umrechnung von km/h auf m/s²
+        self.previous_speed = self.data.speed
 
     def update_distance_to_player(self, player_x: float, player_y: float, player_z: float):
         """Berechnet Distanz zum Spieler"""
