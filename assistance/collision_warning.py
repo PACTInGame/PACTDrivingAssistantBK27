@@ -34,23 +34,21 @@ class ForwardCollisionWarning(AssistanceSystem):
         (x3, y3) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang3)
         (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang4)
         self.own_rectangle = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
-
         for vehicle in vehicles.values():
             if self._is_vehicle_ahead(vehicle):
                 needed_braking = self._calculate_needed_braking(own_vehicle, vehicle)  # Nötiges Bremsen in m/s^2
-                print("needed_braking:", needed_braking)
                 if needed_braking != float('inf'):
                     if needed_braking > 7.5:
                         warn = 3
                     elif needed_braking > 6:
                         warn = 2
-                    elif needed_braking > 5:
+                        # TODO Adjust this
+                    elif needed_braking < own_vehicle.data.acceleration:
                         warn = 1
                     else:
                         warn = 0
                     if warn > warning_level:
                         warning_level = warn
-        print(warning_level)
         if warning_level != self.current_warning_level:
             self.current_warning_level = warning_level
             self.event_bus.emit('collision_warning_changed', {

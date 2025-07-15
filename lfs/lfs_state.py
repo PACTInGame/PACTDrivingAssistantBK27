@@ -10,12 +10,12 @@ class StateHandler:
     def __init__(self, connector):
         self.connector = connector
         self.text_entry = False
-        self.on_track = True
+        self.on_track = False
         self.track = ""
         self.in_game_cam = 0  # 0 = Follow, 1 = Heli, 2 = TV, 3 = Driver, 4 = Custom, 255 = Another
         self.in_game_interface = 0  # 0 = Game, 1 = Options, 2 = Host_Options, 3 = Garage, 4 = Car_select, 5 = Track_select,  6 = ShiftU
         self.submode_interface = 0
-        self.time_menu_opened = 0
+        self.time_menu_opened = time.time()
         self.connector.event_bus.subscribe('game_state_changed', self.insim_state)
 
 
@@ -31,21 +31,19 @@ class StateHandler:
             if time.time() - self.time_menu_opened >= 30:
                 self.connector.start_outgauge()
             self.connector.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_NPL)
-            if self.connector.debug:
-                print("Starting game insim mode")
+            print("Starting game insim mode")
 
         def start_menu_insim():
             self.time_menu_opened = time.time()
             self.on_track = False
-            if self.connector.debug:
-                print("Starting menu insim mode")
+            print("Starting menu insim mode")
 
 
         flags = [int(i) for i in str("{0:b}".format(sta.Flags))]
         self.in_game_cam = sta.InGameCam
         if len(flags) >= 15:
             game = flags[-1] == 1 and flags[-15] == 1
-
+            print(self.on_track)
             if not self.on_track and game:
                 start_game_insim()
 

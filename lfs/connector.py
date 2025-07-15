@@ -22,7 +22,6 @@ class LFSConnector:
         self._packet_handlers: Dict[int, Callable] = {}
         self._setup_handlers()
 
-
     def _setup_handlers(self):
         """Registriert Standard-Packet-Handler und startet listener"""
 
@@ -61,6 +60,9 @@ class LFSConnector:
 
             self.is_connected = True
             self.event_bus.emit('lfs_connected')
+
+            self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_SST)
+
 
 
         except Exception as e:
@@ -119,6 +121,10 @@ class LFSConnector:
     def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text: str, inst: int = 0):
         """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)"""
         #print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
+        try:
+            text = text.encode("latin-1")
+        except UnicodeEncodeError:
+            text = text.encode()
         if self.insim and self.is_connected:
             self.insim.send(
                 pyinsim.ISP_BTN,
@@ -127,11 +133,9 @@ class LFSConnector:
                 BStyle=style | 3,
                 Inst=inst,
                 T=t, L=l, W=w, H=h,
-                Text=text.encode(),
+                Text=text,
                 TypeIn=0
             )
-
-
 
     def delete_button(self, click_id: int):
         """Löscht einen Button in LFS"""

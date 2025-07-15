@@ -1,3 +1,3 @@
-text = "¡¶"
-encoded = text.encode('utf-8')
+text = "Menü"
+encoded = text.encode('latin-1')
 print(encoded)

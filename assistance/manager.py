@@ -18,10 +18,12 @@ class AssistanceManager:
         self.systems: Dict[str, AssistanceSystem] = {}
         self.own_vehicle: Optional[OwnVehicle] = None
         self.vehicles: Dict[int, Vehicle] = {}
+        self.on_track = False
 
         # Event-Handler
         self.event_bus.subscribe('own_vehicle_updated', self._on_own_vehicle_updated)
         self.event_bus.subscribe('vehicles_updated', self._on_vehicles_updated)
+        self.event_bus.subscribe('state_data', self._update_state_data)
 
         # Systeme initialisieren
         self._init_systems()
@@ -31,6 +33,9 @@ class AssistanceManager:
         self.systems['fcw'] = ForwardCollisionWarning(self.event_bus, self.settings)
         self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
         # Weitere Systeme hier hinzufügen
+
+    def _update_state_data(self, data):
+        self.on_track = data['on_track']
 
     def _on_own_vehicle_updated(self, own_vehicle: OwnVehicle):
         """Updates own vehicle data"""
@@ -46,13 +51,14 @@ class AssistanceManager:
             return
 
         results = {}
-        for name, system in self.systems.items():
-            if system.is_enabled():
-                #try:
+        if self.on_track:
+            for name, system in self.systems.items():
+                if system.is_enabled():
+                    # try:
                     result = system.process(self.own_vehicle, self.vehicles)
                     results[name] = result
-                #except Exception as e:
-                   # print(f"Error in assistance system {name}: {e}")
+                # except Exception as e:
+                # print(f"Error in assistance system {name}: {e}")
 
         self.event_bus.emit('assistance_results', results)
         return results

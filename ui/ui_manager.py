@@ -9,10 +9,12 @@ from lfs.message_sender import MessageSender
 
 class UIManager:
     """Verwaltet alle UI-Elemente und Menüs"""
+
     # Buttons:
     # 1-10: HUD-Anzeige
     # 11-12: Forward Collision Warning
     # 13-14: Blind Spot Warning
+    # 20-40: Menü-Buttons
 
     def __init__(self, event_bus: EventBus, message_sender: MessageSender, settings: SettingsManager):
         self.event_bus = event_bus
@@ -20,40 +22,44 @@ class UIManager:
         self.settings = settings
         self.active_elements: Dict[str, bool] = {}
         self.current_menu = None
+        self.on_track = False
 
         # Event-Handler
-        self.event_bus.subscribe('button_clicked', self._handle_button_click)
         self.event_bus.subscribe('collision_warning_changed', self._update_collision_warning_display)
         self.event_bus.subscribe('blind_spot_warning_changed', self._update_blind_spot_display)
         self.event_bus.subscribe('outgauge_data', self._get_hud_data)
+        self.event_bus.subscribe('state_data', self._state_change)
 
         self.speed = 0
         self.rpm = 0
         self.gear = 'N'
         self.redline = 0
 
+    def _state_change(self, data):
+        self.on_track = data['on_track']
+
+
     def _get_hud_data(self, data):
         self.speed = round(data.Speed * 3.6)
-        self.rpm = round(data.RPM/1000,1)
+        self.rpm = round(data.RPM / 1000, 1)
         self.redline = self.rpm if self.rpm > self.redline else self.redline
         self.gear = "R" if data.Gear == 0 else "N" if data.Gear == 1 else str(data.Gear - 1)
 
 
-    def _handle_button_click(self, btc_packet):
-        """Verarbeitet Button-Klicks"""
-        click_id = btc_packet.ClickID
-        self.event_bus.emit('ui_action', {
-            'action': 'button_click',
-            'button_id': click_id
-        })
-
     def update_hud(self):
         """Aktualisiert das Head-Up Display"""
-        speed_text = f"{self.speed} km/h" if self.settings.get("unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
-        self.message_sender.create_button(1, self.settings.get("hud_width"), self.settings.get("hud_height"), 13, 8, speed_text, pyinsim.ISB_DARK)
-        rpm_text = f"{self.rpm} rpm" if self.rpm < self.redline - 1 else f"^1{self.rpm} rpm"
-        self.message_sender.create_button(2, self.settings.get("hud_width") + 13, self.settings.get("hud_height"), 13, 8, rpm_text, pyinsim.ISB_DARK)
-        self.message_sender.create_button(3, self.settings.get("hud_width") + 26, self.settings.get("hud_height"), 3, 4, f"{self.gear}", pyinsim.ISB_DARK)
+        if self.on_track:
+            speed_text = f"{self.speed} km/h" if self.settings.get(
+                "unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
+            self.message_sender.create_button(1, self.settings.get("hud_width"), self.settings.get("hud_height"), 13, 8,
+                                              speed_text, pyinsim.ISB_DARK)
+            rpm_text = f"{self.rpm} rpm" if self.rpm < self.redline - 1 else f"^1{self.rpm} rpm"
+            self.message_sender.create_button(2, self.settings.get("hud_width") + 13, self.settings.get("hud_height"), 13,
+                                              8, rpm_text, pyinsim.ISB_DARK)
+            self.message_sender.create_button(3, self.settings.get("hud_width") + 26, self.settings.get("hud_height"), 3, 4,
+                                              f"{self.gear}", pyinsim.ISB_DARK)
+        else:
+            self.hide_hud()
 
     def hide_hud(self):
         """Versteckt das Head-Up Display"""

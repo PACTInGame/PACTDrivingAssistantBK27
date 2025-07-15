@@ -42,7 +42,6 @@ class LFSAssistantApp:
     def _setup_event_handlers(self):
         """Registriert globale Event-Handler"""
         self.event_bus.subscribe('lfs_connected', self._on_lfs_connected)
-        self.event_bus.subscribe('ui_action', self._handle_ui_action)
 
     def _setup_scheduled_tasks(self):
         """Richtet geplante Aufgaben ein"""
@@ -66,16 +65,6 @@ class LFSAssistantApp:
         """Wird aufgerufen wenn LFS-Verbindung hergestellt wurde"""
         print("Connected to LFS")
 
-    def _handle_ui_action(self, data):
-        """Verarbeitet UI-Aktionen"""
-        if data['action'] == 'button_click':
-            button_id = data['button_id']
-
-            # Menü-Buttons
-            if 21 <= button_id <= 40:
-                self.menu_system.handle_menu_click(button_id)
-
-            # Andere Button-Aktionen hier hinzufügen...
 
     def start(self):
         """Startet die Anwendung"""
