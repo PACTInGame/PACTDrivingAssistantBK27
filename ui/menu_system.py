@@ -35,17 +35,17 @@ class MenuSystem:
 
         # Hauptmenü-Buttons
         buttons = [
-            (21, 0, 70, 20, 10, self.translator.get("Main Menu", self.set_language),
+            (21, 0, 80, 20, 5, self.translator.get("Main Menu", self.set_language),
              pyinsim.ISB_LIGHT),
-            (22, 0, 80, 20, 10, self.translator.get("Driving", self.set_language),
+            (22, 0, 85, 20, 5, self.translator.get("Driving", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 0, 90, 20, 10, self.translator.get("Parking", self.set_language),
+            (23, 0, 90, 20, 5, self.translator.get("Parking", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (24, 0, 100, 20, 10, (self.translator.get("Language", self.set_language) + f": {self.set_language}"),
+            (24, 0, 95, 20, 5, (self.translator.get("Language", self.set_language) + f": {self.set_language}"),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 110, 20, 10, self.translator.get("System", self.set_language),
+            (25, 0, 100, 20, 5, self.translator.get("System", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (40, 0, 120, 20, 10, "^1" + self.translator.get("Close", self.set_language),
+            (40, 0, 105, 20, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -66,21 +66,21 @@ class MenuSystem:
         aeb = self.settings.get('automatic_emergency_brake') # 0 = Off, 1 = Warn, 2 = Warn & Brake
         aeb_text = "^3Warn only" if aeb == 1 else "^2Warn & Brake" if aeb == 2 else "^1Off"
         buttons = [
-            (21, 0, 70, 25, 10, self.translator.get("Driving Menu", self.set_language),
+            (21, 0, 80, 25, 5, self.translator.get("Driving Menu", self.set_language),
              pyinsim.ISB_LIGHT),
-            (22, 0, 80, 25, 10, fcw + self.translator.get("Collision Warning", self.set_language),
+            (22, 0, 85, 25, 5, fcw + self.translator.get("Collision Warning", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 0, 90, 25, 10, bsw + self.translator.get("Blind Spot Warn.", self.set_language),
+            (23, 0, 90, 25, 5, bsw + self.translator.get("Blind Spot Warn.", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (24, 0, 100, 25, 10, ctw + (self.translator.get("Cross Traffic Warn.", self.set_language)),
+            (24, 0, 95, 25, 5, ctw + (self.translator.get("Cross Traffic Warn.", self.set_language)),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 110, 25, 10, (self.translator.get("Autom. Braking", self.set_language)),
+            (25, 0, 100, 25, 5, (self.translator.get("Autom. Braking", self.set_language)),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (26, 25, 80, 15, 10, distance,
+            (26, 25, 85, 15, 5, distance,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 25, 110, 15, 10, aeb_text,
+            (27, 25, 100, 15, 5, aeb_text,
              pyinsim.ISB_LIGHT | pyinsim.ISB_CLICK),
-            (40, 0, 120, 25, 10, "^1" + self.translator.get("Close", self.set_language),
+            (40, 0, 105, 25, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -99,15 +99,15 @@ class MenuSystem:
 
         # Parken-Menü-Buttons
         buttons = [
-            (21, 0, 70, 25, 10, self.translator.get("Parking Menu", self.set_language),
+            (21, 0, 80, 25, 5, self.translator.get("Parking Menu", self.set_language),
              pyinsim.ISB_LIGHT),
-            (22, 0, 80, 25, 10, pdc + self.translator.get("Park Distance Control", self.set_language),
+            (22, 0, 85, 25, 5, pdc + self.translator.get("Park Distance Control", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 0, 90, 25, 10, peb + self.translator.get("Parking Emer. Brake", self.set_language),
+            (23, 0, 90, 25, 5, peb + self.translator.get("Parking Emer. Brake", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (24, 25, 80, 20, 10, pdc_text,
+            (24, 25, 85, 20, 5, pdc_text,
              (pyinsim.ISB_DARK | pyinsim.ISB_CLICK) if pdc_on else pyinsim.ISB_LIGHT),
-            (40, 0, 100, 25, 10, "^1" + self.translator.get("Close", self.set_language),
+            (40, 0, 95, 25, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
         for button_id, x, y, w, h, text, style in buttons:

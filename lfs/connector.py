@@ -34,6 +34,7 @@ class LFSConnector:
             pyinsim.ISP_BTC: self._handle_button_click,
             pyinsim.ISP_MSO: self._handle_message,
             pyinsim.ISP_MCI: self._handle_mci,
+            pyinsim.ISP_AXM: self._handle_layout,
         }
 
     def connect(self):
@@ -47,7 +48,7 @@ class LFSConnector:
                 b'127.0.0.1', 29999,
                 Admin=b'',
                 Prefix=b"$",
-                Flags= pyinsim.ISF_MCI | pyinsim.ISF_LOCAL,
+                Flags= pyinsim.ISF_MCI | pyinsim.ISF_AXM_LOAD | pyinsim.ISF_AXM_EDIT | pyinsim.ISF_LOCAL,
                 Interval=interval
             )
 
@@ -109,6 +110,10 @@ class LFSConnector:
     def _handle_message(self, insim, mso):
         """Verarbeitet Chat-Nachrichten"""
         self.event_bus.emit('message_received', mso)
+
+    def _handle_layout(self, insim, axm):
+        """Verarbeitet Layout-Pakete"""
+        self.event_bus.emit('layout_received', axm)
 
     def _outgauge_handler(self, outgauge, packet):
         """Handler für OutGauge-Pakete (hochfrequent)"""
