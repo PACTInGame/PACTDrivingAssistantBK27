@@ -63,6 +63,7 @@ class LFSConnector:
             self.event_bus.emit('lfs_connected')
 
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_SST)
+            self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
 
 
 
