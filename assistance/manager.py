@@ -3,6 +3,7 @@ from typing import Dict, Optional
 from assistance.base_system import AssistanceSystem
 from assistance.blind_spot_warning import BlindSpotWarning
 from assistance.collision_warning import ForwardCollisionWarning
+from assistance.park_distance_control import ParkDistanceControl
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from vehicles.own_vehicle import OwnVehicle
@@ -32,6 +33,7 @@ class AssistanceManager:
         """Initialisiert alle Assistenzsysteme"""
         self.systems['fcw'] = ForwardCollisionWarning(self.event_bus, self.settings)
         self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
+        self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
         # Weitere Systeme hier hinzufügen
 
     def _update_state_data(self, data):

@@ -13,13 +13,21 @@ class SettingsManager:
             'blind_spot_warning': True,
             'cross_traffic_warning': True,
             'automatic_gearbox': False,
+            'collision_warning_distance': 1, # 0 = Early, 1 = Normal, 2 = Late
+            'automatic_emergency_brake': 2,  # 0 = Off, 1 = Warn, 2 = Warn & Brake
+
+            'park_distance_control': True,
+            'parking_emergency_brake': True,
+            'park_distance_control_mode': 0,  # 0 = Off, 1 = Visual, 2 = Visual & Audio
+
             'language': 'de',
-            'collision_warning_distance': 1,
+            'unit': "metric",  # 'metric' or 'imperial'
+
             'ui_refresh_rate': 50,
             'assistance_refresh_rate': 100,
             'hud_height': 119,
             'hud_width': 90,
-            'unit': "metric",  # 'metric' or 'imperial'
+
 
         }
         self.load()

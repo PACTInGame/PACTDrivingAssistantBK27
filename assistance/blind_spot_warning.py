@@ -70,7 +70,6 @@ class BlindSpotWarning(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Prüft auf Fahrzeuge im toten Winkel"""
-        self.last_exec = time.perf_counter()
         blindspot_r, blindspot_l = False, False
         angle_of_car = _normalize_angle((own_vehicle.data.heading + 16384) / 182.05)
         # Rectangles for right and left blind spots
