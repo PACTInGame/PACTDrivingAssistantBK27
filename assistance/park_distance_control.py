@@ -135,11 +135,16 @@ class ParkDistanceControl(AssistanceSystem):
         self.axm = None
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
         self.event_bus.subscribe('layout_received', self._update_axm)
+        self.last_axm_update = time.perf_counter()
 
     def _update_axm(self, axm):
         """Aktualisiert die AXM-Daten"""
+        current_time = time.perf_counter()
         self.axm = axm
         self.park_grid.clear()
+        self._update_axm_track_boundaries(axm)
+        if current_time - self.last_axm_update > 2:
+        # TODO the issue is that axm data is sent in multiple packages! Wait for all packages and then process!
         track_objects = load_rectangles_from_json(filename='park_distance_control_rectangles_ax.json')
         for objects in axm.Info:
             # TODO get all current new objects
@@ -148,6 +153,7 @@ class ParkDistanceControl(AssistanceSystem):
 
         for i, rect in enumerate(track_objects):
             self.park_grid.insert_object(i, [rect[0], rect[1], rect[2], rect[3]], is_static=True)
+        self.last_axm_update = current_time
 
 
     def _update_axm_track_boundaries(self, axm):
