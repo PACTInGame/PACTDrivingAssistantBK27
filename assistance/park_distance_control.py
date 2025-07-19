@@ -24,22 +24,59 @@ def get_object_size(index: int) -> tuple:
 
 def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
     # TODO make this dynamic for different car sizes and with more rectangles
-    angle_of_car = abs((own_vehicle.data.heading + 16384) / 182.05)
-    ang1, ang2, ang3, ang4 = angle_of_car - 160, angle_of_car - 20, angle_of_car + 20, angle_of_car + 160
-    (x1, y1) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang1)
-    (x2, y2) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang2)
-    (x3, y3) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang3)
-    (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang4)
-    own_rectangle_1 = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
+    vehicle_size = (1.8, 4.5)  # Breite, Länge in Metern
+    angle_of_car = (own_vehicle.data.heading + 16384) / 182.05
 
-    angle_of_car = abs((own_vehicle.data.heading + 16384) / 182.05)
-    ang1, ang2, ang3, ang4 = angle_of_car - 160, angle_of_car - 20, angle_of_car + 20, angle_of_car + 160
-    (x1, y1) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 4.0 * 65536, ang1)
-    (x2, y2) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 4.0 * 65536, ang2)
-    (x3, y3) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 4.0 * 65536, ang3)
-    (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 4.0 * 65536, ang4)
-    own_rectangle_2 = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
-    return own_rectangle_1, own_rectangle_2
+    perpendicular_angle = angle_of_car + 90
+
+    (left_side_of_car_x, left_side_of_car_y) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, vehicle_size[0] / 2 * 65536, perpendicular_angle)
+
+    (front_left_x, front_left_y) = calc_polygon_points(left_side_of_car_x, left_side_of_car_y, vehicle_size[1] / 2 * 65536, angle_of_car)
+    (front_middle_x, front_middle_y) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, vehicle_size[1] / 2 * 65536, angle_of_car)
+    (front_right_x, front_right_y) = calc_polygon_points(front_left_x, front_left_y, -vehicle_size[0] * 65536, perpendicular_angle)
+
+    (rear_left_x, rear_left_y) = calc_polygon_points(left_side_of_car_x, left_side_of_car_y, -vehicle_size[1] / 2 * 65536, angle_of_car)
+    (rear_middle_x, rear_middle_y) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, -vehicle_size[1] / 2 * 65536, angle_of_car)
+    (rear_right_x, rear_right_y) = calc_polygon_points(rear_left_x, rear_left_y, -vehicle_size[0] * 65536, perpendicular_angle)
+
+    pdc_sensor_angle = 30
+    sensor_distances = [0.6 * 65536, 1.4 * 65536, 2.8 * 65536]
+
+    # Polygone für die sensoren ausgehend von den Punkten erstellen
+    outer_sensors = []
+    middle_sensors = []
+    inner_sensors = []
+    for i, point in enumerate([(front_left_x, front_left_y), (front_middle_x, front_middle_y), (front_right_x, front_right_y),
+                    (rear_left_x, rear_left_y), (rear_middle_x, rear_middle_y), (rear_right_x, rear_right_y)]):
+            (x, y) = point
+            sensor_angle_1 = (angle_of_car + pdc_sensor_angle) % 360
+            sensor_angle_2 = (angle_of_car - pdc_sensor_angle) % 360
+
+            for j, distance in enumerate(sensor_distances):
+                if i > 2:
+                    distance= -distance  # Negative Werte für die hinteren Sensoren
+                (sensor_1_x, sensor_1_y) = calc_polygon_points(x, y, distance, sensor_angle_1)
+                (sensor_2_x, sensor_2_y) = calc_polygon_points(x, y, distance, sensor_angle_2)
+                if j == 0:
+                    inner_sensors.append([(x, y), (sensor_1_x, sensor_1_y), (sensor_2_x, sensor_2_y)])
+                elif j == 1:
+                    middle_sensors.append([(x, y), (sensor_1_x, sensor_1_y), (sensor_2_x, sensor_2_y)])
+                elif j == 2:
+                    outer_sensors.append([(x, y), (sensor_1_x, sensor_1_y), (sensor_2_x, sensor_2_y)])
+
+
+
+
+    # angle_of_car = abs((own_vehicle.data.heading + 16384) / 182.05)
+    # ang1, ang2, ang3, ang4 = angle_of_car - 160, angle_of_car - 20, angle_of_car + 20, angle_of_car + 160
+    # (x1, y1) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang1)
+    # (x2, y2) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang2)
+    # (x3, y3) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang3)
+    # (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang4)
+    # own_rectangle_0 = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
+
+
+    return outer_sensors, middle_sensors, inner_sensors
 
 def create_rectangle_for_object(x: float, y: float, index: int, heading: float) -> list:
     x = x * 4096
@@ -87,12 +124,12 @@ class ParkDistanceControl(AssistanceSystem):
         super().__init__("ParkDistanceControl", event_bus, settings)
         self.detection_distance = 70.0
         self.pdc_result = {
-            'fl': False,
-            'fm': False,
-            'fr': False,
-            'rl': False,
-            'rm': False,
-            'rr': False
+            0: 0,
+            1: 0,
+            2: 0,
+            3: 0,
+            4: 0,
+            5: 0
         }
         self.last_exec = time.perf_counter()
         self.axm = None
@@ -122,33 +159,41 @@ class ParkDistanceControl(AssistanceSystem):
 
         save_rectangles_as_json(rects, 'park_distance_control_rectangles_ax.json')
 
-    def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
+    def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[int, int]:
         """Prüft auf Fahrzeuge im toten Winkel"""
         new_pdc_result = {
-            'fl': False,
-            'fm': False,
-            'fr': False,
-            'rl': False,
-            'rm': False,
-            'rr': False
+            0: 0,
+            1: 0,
+            2: 0,
+            3: 0,
+            4: 0,
+            5: 0
         }
         if own_vehicle.data.speed < 10:
-            box1, box2 = create_bboxes_for_own_vehicle(own_vehicle)
-            print("Box1:", box1)
+            outer_sensors, middle_sensors, inner_sensors = create_bboxes_for_own_vehicle(own_vehicle)
             nearby = self.park_grid.query_area(own_vehicle.data.x, own_vehicle.data.y, 30 * 65536)
+            collisions = []
             for obj in nearby:
-                # TODO check if bounding boxes need to be axis aligned (i think they do) but that doesnt make sense
-                print(obj['id'], obj['bbox'])
-                if self.park_grid.bbox_overlap(box1, obj['bbox']):
-                    print("overlap, b1")
-                elif self.park_grid.bbox_overlap(box2, obj['bbox']):
-                    print("overlap, b2")
-            print(f"Gefundene Objekte: {len(nearby)}")
-            for obj in nearby:
-                print(f"ID: {obj['id']}, Statisch: {obj['is_static']}, BBox: {obj['bbox']}")
+                for i, sensor in enumerate(outer_sensors):
+                    if self.park_grid.polygon_overlap(sensor, obj['points']):
+                        new_pdc_result[i] = (max(new_pdc_result[i], 1))
+                        collisions.append(obj)
 
+            # Filter secondary collisions for efficiency
+            secondary_collisions = []
+            for obj in collisions:
+                for i, sensor in enumerate(middle_sensors):
+                    if self.park_grid.polygon_overlap(sensor, obj['points']):
+                        new_pdc_result[i] = (max(new_pdc_result[i], 2))
+                        secondary_collisions.append(obj)
 
-        else:
-            if self.pdc_result != new_pdc_result:
-                self.event_bus.emit('pdc_changed', new_pdc_result)
-        return new_pdc_result
+            for obj in secondary_collisions:
+                for i, sensor in enumerate(inner_sensors):
+                    if self.park_grid.polygon_overlap(sensor, obj['points']):
+                        new_pdc_result[i] = (max(new_pdc_result[i], 3))
+            print("New PDC Result:", new_pdc_result)
+        if self.pdc_result != new_pdc_result:
+            self.event_bus.emit('pdc_changed', new_pdc_result)
+            self.pdc_result = new_pdc_result
+
+        return self.pdc_result
