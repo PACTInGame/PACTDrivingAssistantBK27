@@ -7,6 +7,7 @@ from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.helpers import calc_polygon_points
+from misc.pdc_beep import PDCBeepController
 from misc.spacial_hash_grid import SpatialHashGrid
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
@@ -192,12 +193,12 @@ class ParkDistanceControl(AssistanceSystem):
         super().__init__("ParkDistanceControl", event_bus, settings)
         self.detection_distance = 70.0
         self.pdc_result = {
-            0: 0,
-            1: 0,
-            2: 0,
-            3: 0,
-            4: 0,
-            5: 0
+            0: -1,
+            1: -1,
+            2: -1,
+            3: -1,
+            4: -1,
+            5: -1
         }
         self.last_exec = time.perf_counter()
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
@@ -251,14 +252,22 @@ class ParkDistanceControl(AssistanceSystem):
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[int, int]:
         """Prüft auf Fahrzeuge im toten Winkel"""
         new_pdc_result = {
-            0: 0,
-            1: 0,
-            2: 0,
-            3: 0,
-            4: 0,
-            5: 0
+            0: -1,
+            1: -1,
+            2: -1,
+            3: -1,
+            4: -1,
+            5: -1
         }
         if own_vehicle.data.speed < 10:
+            new_pdc_result = {
+                0: 0,
+                1: 0,
+                2: 0,
+                3: 0,
+                4: 0,
+                5: 0
+            }
             outer_sensors, middle_sensors, inner_sensors = create_bboxes_for_own_vehicle(own_vehicle)
             nearby = self.park_grid.query_area(own_vehicle.data.x, own_vehicle.data.y, 30 * 65536)
             collisions = []
