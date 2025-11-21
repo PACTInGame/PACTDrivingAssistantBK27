@@ -68,7 +68,6 @@ class LightAssists(AssistanceSystem):
 
     def _is_vehicle_visible(self, other_vehicle: Vehicle) -> bool:
         """Prüft ob Fahrzeug sichtbar ist - keine Hindernisse werden berücksichtigt"""
-        print(other_vehicle.data.angle_to_player)
         is_vehicle_ahead = other_vehicle.data.distance_to_player < 250 and other_vehicle.data.speed > 1
         player_in_cone = abs(other_vehicle.data.angle_to_player) < 15 or abs(other_vehicle.data.angle_to_player) > 345
 

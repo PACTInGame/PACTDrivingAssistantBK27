@@ -1,3 +1,4 @@
+import math
 from typing import List, Tuple, Dict, Set, Optional
 
 
@@ -494,81 +495,72 @@ class SpatialHashGrid:
         self.static_objects.clear()
         self.dynamic_objects.clear()
 
+    def clear_dynamic_objects(self):
+        """Leert nur die dynamischen Objekte im Grid."""
+        # Alle dynamischen Objekte entfernen
+        for object_id in list(self.dynamic_objects.keys()):
+            self.remove_object(object_id)
+        self.dynamic_objects.clear()
 
-# Beispiel-Verwendung und Tests:
-if __name__ == "__main__":
-    # Grid initialisieren
-    grid = SpatialHashGrid(cell_size=15.0)
+    def plot_grid(self):
+        """
+        Visualisiert das Grid und alle Objekte mit Matplotlib.
+        Benötigt: pip install matplotlib
+        """
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import Polygon
+        except ImportError:
+            print("Fehler: Matplotlib fehlt. Bitte 'pip install matplotlib' ausführen.")
+            return
 
-    # Test 1: Achsenausgerichtetes Rechteck
-    grid.insert_object(1, [(10, 10), (15, 10), (15, 15), (10, 15)], is_static=True)
+        fig, ax = plt.subplots(figsize=(10, 10))
 
-    # Test 2: Rotiertes Rechteck (45° gedreht)
-    import math
+        # 1. Statische Objekte zeichnen (Grau)
+        for obj_id, points in self.static_objects.items():
+            poly = Polygon(points, closed=True, facecolor='lightgray', edgecolor='black', alpha=0.7, label='Static')
+            ax.add_patch(poly)
+            # Optional: ID anzeigen
+            cx = sum(p[0] for p in points) / len(points)
+            cy = sum(p[1] for p in points) / len(points)
+            ax.text(cx, cy, str(obj_id), color='black', ha='center', fontsize=8)
 
-    angle = math.radians(45)
-    cx, cy = 30, 30  # Zentrum
-    w, h = 5, 3  # Breite und Höhe
+        # 2. Dynamische Objekte zeichnen (Rot)
+        for obj_id, points in self.dynamic_objects.items():
+            poly = Polygon(points, closed=True, facecolor='tomato', edgecolor='darkred', alpha=0.8, label='Dynamic')
+            ax.add_patch(poly)
+            cx = sum(p[0] for p in points) / len(points)
+            cy = sum(p[1] for p in points) / len(points)
+            ax.text(cx, cy, str(obj_id), color='white', ha='center', fontsize=8, weight='bold')
 
-    # Rechteck-Punkte um Zentrum rotieren
-    cos_a, sin_a = math.cos(angle), math.sin(angle)
-    rotated_points = []
-    for dx, dy in [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]:
-        rx = cx + dx * cos_a - dy * sin_a
-        ry = cy + dx * sin_a + dy * cos_a
-        rotated_points.append((rx, ry))
+        # Skalierung anpassen, damit wir wissen wo die Grenzen sind
+        ax.autoscale()
 
-    grid.insert_object(2, rotated_points, is_static=True)
+        # 3. Grid-Linien zeichnen (Basierend auf cell_size)
+        # Wir holen uns die aktuellen Grenzen des Plots
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
 
-    # Test 3: Dynamisches Objekt (Fahrzeug)
-    grid.insert_object(100, [(50, 50), (54, 50), (54, 53), (50, 53)], is_static=False)
+        # Grid auf die nächste cell_size runden
+        start_x = math.floor(x_min / self.cell_size) * self.cell_size
+        start_y = math.floor(y_min / self.cell_size) * self.cell_size
 
-    print("=== Test: Kreissuche ===")
-    # Fahrzeug-Position: Nach Objekten in 20m Radius suchen
-    vehicle_pos = (12, 12)
-    nearby = grid.query_area(vehicle_pos[0], vehicle_pos[1], 20)
+        # Vertikale Linien
+        curr_x = start_x
+        while curr_x <= x_max:
+            ax.axvline(x=curr_x, color='blue', linestyle='--', linewidth=0.5, alpha=0.3)
+            curr_x += self.cell_size
 
-    print(f"Gefundene Objekte in 20m Radius um ({vehicle_pos[0]}, {vehicle_pos[1]}): {len(nearby)}")
-    for obj in nearby:
-        print(f"  ID: {obj['id']}, Statisch: {obj['is_static']}, Punkte: {obj['points'][:2]}...")
+        # Horizontale Linien
+        curr_y = start_y
+        while curr_y <= y_max:
+            ax.axhline(y=curr_y, color='blue', linestyle='--', linewidth=0.5, alpha=0.3)
+            curr_y += self.cell_size
 
-    print("\n=== Test: Rechtecksuche ===")
-    # Rechteckige Suche
-    rect_objects = grid.query_rectangle(25, 25, 35, 35)
-    print(f"Gefundene Objekte im Rechteck (25,25)-(35,35): {len(rect_objects)}")
-    for obj in rect_objects:
-        print(f"  ID: {obj['id']}, Statisch: {obj['is_static']}")
-
-    print("\n=== Test: Polygon-Kollision ===")
-    # Test mit einem Such-Polygon
-    search_polygon = [(28, 28), (32, 28), (32, 32), (28, 32)]
-    colliding = grid.query_polygon_collision(search_polygon)
-    print(f"Kollidierende Objekte mit Such-Polygon: {len(colliding)}")
-    for obj in colliding:
-        print(f"  ID: {obj['id']}, Statisch: {obj['is_static']}")
-
-    print("\n=== Test: Fahrzeug bewegen ===")
-    # Fahrzeug bewegen
-    grid.update_dynamic_object(100, [(55, 55), (59, 55), (59, 58), (55, 58)])
-    print("Fahrzeug zu Position (55,55) bewegt")
-
-    # Erneute Suche nach der Bewegung
-    nearby_after_move = grid.query_area(57, 57, 10)
-    print(f"Objekte in 10m Radius um (57,57): {len(nearby_after_move)}")
-
-    print("\n=== Grid-Statistiken ===")
-    stats = grid.get_statistics()
-    for key, value in stats.items():
-        print(f"{key}: {value}")
-
-    print("\n=== Genauigkeitstest ===")
-    # Test der Genauigkeit: Ein rotiertes Objekt sollte nicht mit einem weit entfernten Punkt kollidieren
-    test_point = (50, 50)  # Weit weg vom rotierten Rechteck bei (30,30)
-    distant_objects = grid.query_area(test_point[0], test_point[1], 5)
-    rotated_in_results = any(obj['id'] == 2 for obj in distant_objects)
-    print(f"Rotiertes Rechteck fälschlicherweise in 5m Radius um (50,50) erkannt: {rotated_in_results}")
-
-    # Aber es sollte in einem größeren Radius erkannt werden
-    larger_search = grid.query_area(test_point[0], test_point[1], 25)
-    rotated_in_larger = any(obj['id'] == 2 for obj in larger_search)
-    print(f"Rotiertes Rechteck korrekt in 25m Radius um (50,50) erkannt: {rotated_in_larger}")
+        # Setup
+        ax.set_aspect('equal')  # Wichtig für Karten!
+        plt.title(f"Spatial Hash Grid (Cell Size: {self.cell_size}m)")
+        plt.xlabel("X (Meter)")
+        plt.ylabel("Y (Meter)")
+        plt.grid(False)  # Standard Grid aus, da wir unser eigenes haben
+        plt.show()

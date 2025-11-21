@@ -15,7 +15,6 @@ from vehicles.vehicle import Vehicle
 def get_object_size(index: int) -> tuple:
     """Gibt die Größe des Objekts basierend auf dem Index zurück"""
     # Hier sollten die tatsächlichen Größen der Objekte definiert werden
-    # Beispielwerte für Demonstrationszwecke
     # TODO andere Indizes und Größen hinzufügen
     print("Index:", index)
     object_sizes = {
@@ -139,6 +138,7 @@ def create_rectangle_for_object(x: float, y: float, index: int, heading: float) 
     x = x * 4096
     y = y * 4096
     height, width = get_object_size(index)
+    print("Heading:", heading)
     angle_of_obj = (heading * 360 / 256 + 90) % 360
 
     ang_perp = angle_of_obj + 90
@@ -152,6 +152,24 @@ def create_rectangle_for_object(x: float, y: float, index: int, heading: float) 
     rectangle_for_object = [(corner_x, corner_y), (corner2_x, corner2_y), (corner3_x, corner3_y),
                             (corner4_x, corner4_y)]
     return rectangle_for_object
+
+def create_rectangle_for_vehicle(x: float, y: float, type: int, heading: float) -> list:
+    height, width = (4.5, 1.8)  # Standard Fahrzeuggröße Höhe, Breite in Metern TODO: make this dynamic for different car sizes
+    # cars use a different heading system than objects, so we need to convert it
+    angle_of_obj = (heading * 360 / 65536 + 90) % 360
+
+    ang_perp = angle_of_obj + 90
+    (x1, y1) = calc_polygon_points(x, y, width / 2 * 65536, ang_perp)
+    (x2, y2) = calc_polygon_points(x, y, -width / 2 * 65536, ang_perp)
+    (corner_x, corner_y) = calc_polygon_points(x1, y1, height / 2 * 65536, angle_of_obj)
+    (corner2_x, corner2_y) = calc_polygon_points(x2, y2, height / 2 * 65536, angle_of_obj)
+    (corner3_x, corner3_y) = calc_polygon_points(x2, y2, -height / 2 * 65536, angle_of_obj)
+    (corner4_x, corner4_y) = calc_polygon_points(x1, y1, -height / 2 * 65536, angle_of_obj)
+
+    rectangle_for_object = [(corner_x, corner_y), (corner2_x, corner2_y), (corner3_x, corner3_y),
+                            (corner4_x, corner4_y)]
+    return rectangle_for_object
+
 
 
 def save_rectangles_as_json(rectangles: list, filename: str):
@@ -201,6 +219,7 @@ class ParkDistanceControl(AssistanceSystem):
         }
         self.last_exec = time.perf_counter()
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
+        self.park_grid.plot_grid()
         self.event_bus.subscribe('layout_received', self._update_axm)
         self.last_axm_update = time.perf_counter()
         self.track = "ax"
@@ -221,9 +240,10 @@ class ParkDistanceControl(AssistanceSystem):
         if current_time - self.last_axm_update > 5:
             self.park_grid.clear()
             self.object_id = 10000
-        #self._update_axm_track_boundaries_and_save(axm)
-        self._update_axm_track_boundaries(axm)
+        self._update_axm_track_boundaries_and_save(axm)
+        #self._update_axm_track_boundaries(axm)
         self.load_rectangles_from_json(filename='park_distance_control_rectangles_ax.json')
+        self.park_grid.plot_grid()
         print("statistics: ", self.park_grid.get_statistics())
         self.last_axm_update = current_time
 
@@ -232,10 +252,11 @@ class ParkDistanceControl(AssistanceSystem):
         """Aktualisiert die AXM-Daten"""
         rects = []
         for object in axm.Info:
-            if object.Index == 98: # Armco 5
+            if object.Index == 98 or object.Index == 97 or object.Index == 96: # Armco 1-5
                 rects.append(create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading))
             elif object.Index == 136: # Post Green
                 rects.append(create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading))
+        print(len(rects))
         save_rectangles_as_json(rects, 'park_distance_control_rectangles_ax.json')
 
     def _update_axm_track_boundaries(self, axm):
@@ -267,6 +288,15 @@ class ParkDistanceControl(AssistanceSystem):
                 4: 0,
                 5: 0
             }
+            self.park_grid.clear_dynamic_objects()
+            vehicle_copy = vehicles.copy() # to avoid runtime error for changing dict size during iteration
+            for vehicle in vehicle_copy.values():
+                if vehicle.data.distance_to_player > 15:
+                    self.park_grid.remove_object(vehicle.data.player_id)
+                    continue
+                rectangle = create_rectangle_for_vehicle(vehicle.data.x, vehicle.data.y,
+                                                        0, vehicle.data.heading)
+                self.park_grid.insert_object(vehicle.data.player_id, [rectangle[0], rectangle[1], rectangle[2], rectangle[3]], is_static=False)
             outer_sensors, middle_sensors, inner_sensors = create_bboxes_for_own_vehicle(own_vehicle)
             nearby = self.park_grid.query_area(own_vehicle.data.x, own_vehicle.data.y, 30 * 65536)
             collisions = []
