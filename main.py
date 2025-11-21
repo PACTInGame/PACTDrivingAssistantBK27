@@ -5,6 +5,7 @@ from core.settings_manager import SettingsManager
 from core.thread_manager import ThreadManager, ScheduledTask
 from lfs.connector import LFSConnector
 from lfs.message_sender import MessageSender
+from misc.audio_player import AudioPlayer
 from ui.menu_system import MenuSystem
 from ui.ui_manager import UIManager
 from vehicles.vehicle_manager import VehicleManager
@@ -32,6 +33,9 @@ class LFSAssistantApp:
         # UI
         self.ui_manager = UIManager(self.event_bus, self.message_sender, self.settings)
         self.menu_system = MenuSystem(self.ui_manager, self.settings)
+
+        # Audio Player
+        self.audio_player = AudioPlayer(self.event_bus, self.settings)
 
         # Event-Handler registrieren
         self._setup_event_handlers()

@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 
+from assistance.adaptive_lights import LightAssists
 from assistance.auto_hold import AutoHold
 from assistance.base_system import AssistanceSystem
 from assistance.blind_spot_warning import BlindSpotWarning
@@ -36,6 +37,8 @@ class AssistanceManager:
         self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
         self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
         self.systems['autoh'] = AutoHold(self.event_bus, self.settings)
+        self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
+
 
         # Weitere Systeme hier hinzufügen
 

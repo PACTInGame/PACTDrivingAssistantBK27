@@ -30,6 +30,9 @@ class UIManager:
         self.pdc_data = None
         self.notifications = []
         self.notification_time = time.perf_counter()
+        self.collision_warning_level = 0
+        self.collision_warning_color = pyinsim.ISB_DARK
+
 
         # Event-Handler
         self.event_bus.subscribe('collision_warning_changed', self._update_collision_warning_display)
@@ -46,8 +49,6 @@ class UIManager:
         self.pdc_beeper = PDCBeepController()
 
     def _update_notifications(self, data):
-        print("New notification:", data['notification'])
-        print(self.notifications)
         self.notifications.append(data['notification'])
 
     def show_notifications(self):
@@ -142,15 +143,27 @@ class UIManager:
         if self.on_track:
             speed_text = f"{self.speed} km/h" if self.settings.get(
                 "unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
-            self.message_sender.create_button(1, self.settings.get("hud_width"), self.settings.get("hud_height"), 13, 8,
-                                              speed_text, pyinsim.ISB_DARK)
             rpm_text = f"{self.rpm} rpm" if self.rpm < self.redline - 1 else f"^1{self.rpm} rpm"
-            self.message_sender.create_button(2, self.settings.get("hud_width") + 13, self.settings.get("hud_height"),
-                                              13,
-                                              8, rpm_text, pyinsim.ISB_DARK)
+            if self.collision_warning_level >= 2:
+                self.collision_warning_color = pyinsim.ISB_LIGHT if self.collision_warning_color == pyinsim.ISB_DARK else pyinsim.ISB_DARK
+
+            if self.collision_warning_level > 0:
+                speed_text = "^1- - -"
+                rpm_text = "^1- - -"
+            if self.collision_warning_level <= 2:
+                self.collision_warning_color = pyinsim.ISB_DARK
+
+            self.message_sender.create_button(1, self.settings.get("hud_width"), self.settings.get("hud_height"),
+                                                13, 8,
+                                                speed_text, self.collision_warning_color)
+            self.message_sender.create_button(2, self.settings.get("hud_width") + 13,
+                                                  self.settings.get("hud_height"),
+                                                  13,
+                                                  8, rpm_text, self.collision_warning_color)
             self.message_sender.create_button(3, self.settings.get("hud_width") + 26, self.settings.get("hud_height"),
-                                              3, 4,
-                                              f"{self.gear}", pyinsim.ISB_DARK)
+                                                3, 4,
+                                                f"{self.gear}", pyinsim.ISB_DARK)
+
             if self.pdc_data and self.pdc_data[0] != -1:
                 self._show_pdc_display()
 
@@ -168,12 +181,9 @@ class UIManager:
     def _update_collision_warning_display(self, data):
         """Aktualisiert Kollisionswarn-Anzeige"""
         warning_level = data['level']
-        if warning_level > 0:
-            color = 0  # Rot für Warnung
-            text = f"{data['level']}"
-            self.message_sender.create_button(11, 10, 80, 100, 40, text, color)
-        else:
-            self.message_sender.remove_button(11)
+        if warning_level >= 2 > self.collision_warning_level:
+            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+        self.collision_warning_level = warning_level
 
     def _update_blind_spot_display(self, data):
         """Aktualisiert Toter-Winkel-Anzeige"""
