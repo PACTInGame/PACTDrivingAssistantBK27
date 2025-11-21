@@ -23,9 +23,10 @@ class AudioPlayer():
         print(f"AudioPlayer: Received request to play audio file: {audio_file}")
         if audio_file:
             # Clean up last_played_audio list
-            self.last_played_audio = [item for item in self.last_played_audio if item[1] + 3 > time.perf_counter()]
 
-            can_be_played = audio_file in self.no_multiple_playback_audios and audio_file not in self.last_played_audio
+            self.last_played_audio = [item for item in self.last_played_audio if item[1] + 3 > time.perf_counter()]
+            last_played_files = [item[0] for item in self.last_played_audio]
+            can_be_played = audio_file in self.no_multiple_playback_audios and audio_file not in last_played_files
             if can_be_played or audio_file not in self.no_multiple_playback_audios:
                 if audio_file in self.no_multiple_playback_audios:
                     self.last_played_audio.append([audio_file, time.perf_counter()])

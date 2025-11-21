@@ -183,6 +183,9 @@ class UIManager:
         warning_level = data['level']
         if warning_level >= 2 > self.collision_warning_level:
             self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+
         self.collision_warning_level = warning_level
 
     def _update_blind_spot_display(self, data):

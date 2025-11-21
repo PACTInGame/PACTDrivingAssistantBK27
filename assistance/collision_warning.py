@@ -23,11 +23,17 @@ class ForwardCollisionWarning(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Prüft auf Kollisionsgefahr voraus"""
-        if not self.is_enabled():
-            return {'level': 0}
-        if (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000:
-            return {'level': 0}  # Keine Warnung bei starkem Rückwärtsfart
         warning_level = 0
+        reversing = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
+        if not self.is_enabled() or own_vehicle.data.speed < 9 or reversing:
+            if warning_level != self.current_warning_level:
+                self.current_warning_level = warning_level
+                self.event_bus.emit('collision_warning_changed', {
+                    'level': warning_level,
+                })
+            return {'level': 0}
+
+
         angle_of_car = abs((own_vehicle.data.heading + 16384) / 182.05)
         ang1, ang2, ang3, ang4 = angle_of_car + 1, angle_of_car - 20, angle_of_car + 20, angle_of_car - 1
         (x1, y1) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang1)
