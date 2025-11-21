@@ -11,7 +11,25 @@ from misc.spacial_hash_grid import SpatialHashGrid
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
-
+def get_vehicle_size(cname) -> tuple:
+    car_sizes = {
+        b'UF1': (3.1, 1.6),
+        b'XFG': (3.7, 1.7),
+        b'XRG': (4.5, 1.8),
+        b'LX4': (3.6, 1.7),
+        b'LX6': (3.6, 1.7),
+        b'RB4': (4.5, 1.9),
+        b'FXO': (4.5, 1.9),
+        b'XRT': (4.5, 1.9),
+        b'RAC': (4.1, 1.8),
+        b'FZ5': (4.6, 2),
+        b'UFR': (3.2, 1.6),
+        b'XFR': (3.9, 1.9),
+        b'FXR': (5.0, 2.1),
+        b'XRR': (5.0, 2.1),
+        b'FZR': (5.0, 2.1),
+    }
+    return car_sizes.get(cname, (1.8, 4.5))  # Standardgröße falls Index nicht gefunden wird
 def get_object_size(index: int) -> tuple:
     """Gibt die Größe des Objekts basierend auf dem Index zurück"""
     # Hier sollten die tatsächlichen Größen der Objekte definiert werden
@@ -79,8 +97,7 @@ def get_object_size(index: int) -> tuple:
     return object_sizes.get(index, (0.5, 0.5))  # Standardgröße falls Index nicht gefunden wird
 
 def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
-    # TODO make this dynamic for different car sizes and with more rectangles
-    vehicle_size = (1.8, 4.5)  # Breite, Länge in Metern
+    vehicle_size = get_vehicle_size(own_vehicle.data.cname)
     angle_of_car = (own_vehicle.data.heading + 16384) / 182.05
 
     perpendicular_angle = angle_of_car + 90
@@ -153,8 +170,8 @@ def create_rectangle_for_object(x: float, y: float, index: int, heading: float) 
                             (corner4_x, corner4_y)]
     return rectangle_for_object
 
-def create_rectangle_for_vehicle(x: float, y: float, type: int, heading: float) -> list:
-    height, width = (4.5, 1.8)  # Standard Fahrzeuggröße Höhe, Breite in Metern TODO: make this dynamic for different car sizes
+def create_rectangle_for_vehicle(x: float, y: float, type: str, heading: float) -> list:
+    height, width = get_vehicle_size(type)
     # cars use a different heading system than objects, so we need to convert it
     angle_of_obj = (heading * 360 / 65536 + 90) % 360
 
@@ -295,7 +312,7 @@ class ParkDistanceControl(AssistanceSystem):
                     self.park_grid.remove_object(vehicle.data.player_id)
                     continue
                 rectangle = create_rectangle_for_vehicle(vehicle.data.x, vehicle.data.y,
-                                                        0, vehicle.data.heading)
+                                                        vehicle.data.cname, vehicle.data.heading)
                 self.park_grid.insert_object(vehicle.data.player_id, [rectangle[0], rectangle[1], rectangle[2], rectangle[3]], is_static=False)
             outer_sensors, middle_sensors, inner_sensors = create_bboxes_for_own_vehicle(own_vehicle)
             nearby = self.park_grid.query_area(own_vehicle.data.x, own_vehicle.data.y, 30 * 65536)

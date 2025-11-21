@@ -17,6 +17,8 @@ class VehicleData:
     distance_to_player: float = 0.0
     angle_to_player: float = 0.0
     acceleration: float = 0.0
+    cname = "Unknown"
+    pname = "Unknown"
 
 
 class Vehicle:
@@ -26,6 +28,7 @@ class Vehicle:
         self.data = VehicleData(player_id=player_id)
         self.last_update = 0
         self.previous_speed = 0.0
+
 
     def update_position(self, x: float, y: float, z: float, heading: float,
                         direction: float, speed: float):
@@ -40,6 +43,8 @@ class Vehicle:
         self.data.speed = speed
         self.data.acceleration = (speed - self.previous_speed) * 2.778  # Umrechnung von km/h auf m/s²
         self.previous_speed = self.data.speed
+
+
 
     def update_distance_to_player(self, player_x: float, player_y: float, player_z: float):
         """Berechnet Distanz zum Spieler"""
@@ -62,3 +67,8 @@ class Vehicle:
             consider_dir -= 360.0
         angle = (consider_dir + 180.0) % 360.0
         self.data.angle_to_player = angle
+
+    def update_model_and_driver(self, cname: str, pname: str):
+        """Aktualisiert Modell- und Fahrerdaten"""
+        self.data.cname = cname
+        self.data.pname = pname

@@ -91,6 +91,7 @@ class LFSConnector:
 
     def _handle_new_player(self, insim, npl):
         """Verarbeitet neue Spieler"""
+
         self.event_bus.emit('player_joined', npl)
 
     def _handle_player_left(self, insim, pll):

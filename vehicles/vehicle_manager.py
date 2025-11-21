@@ -25,7 +25,6 @@ class VehicleManager:
         for data in mci_packet.Info:
             player_id = data.PLID
 
-
             # Aktualisiere Fahrzeugdaten
             if not self.own_vehicle.data.player_id == player_id:
                 # Erstelle Fahrzeug falls nicht vorhanden
@@ -51,6 +50,11 @@ class VehicleManager:
                         self.own_vehicle.data.y,
                         self.own_vehicle.data.heading
                     )
+                if self.players:
+                    vehicle.update_model_and_driver(
+                        self.players.get(player_id).get("CName", "Unknown"),
+                        self.players.get(player_id).get("PName", "Unknown")
+                    )
 
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
             if (self.own_vehicle.data.player_id != 0 and
@@ -71,7 +75,11 @@ class VehicleManager:
 
     def _handle_player_joined(self, npl_packet):
         """Verarbeitet neue Spieler"""
-        self.players[npl_packet.PLID] = npl_packet
+        player_info = {
+            "PName": npl_packet.PName,
+            "CName": npl_packet.CName,
+        }
+        self.players[npl_packet.PLID] = player_info
         self.event_bus.emit('player_data_updated', self.players)
 
     def _handle_player_left(self, pll_packet):
