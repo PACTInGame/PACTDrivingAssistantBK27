@@ -27,6 +27,9 @@ class ForwardCollisionWarning(AssistanceSystem):
         reversing = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
         if not self.is_enabled() or own_vehicle.data.speed < 9 or reversing:
             if warning_level != self.current_warning_level:
+                self.event_bus.emit('needed_deceleration_update', {
+                    'deceleration': 0,
+                })
                 self.current_warning_level = warning_level
                 self.event_bus.emit('collision_warning_changed', {
                     'level': warning_level,
@@ -41,13 +44,15 @@ class ForwardCollisionWarning(AssistanceSystem):
         (x3, y3) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang3)
         (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang4)
         self.own_rectangle = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
+        max_needed_deceleration = 0
         for vehicle in vehicles.values():
             if self._is_vehicle_ahead(vehicle):
                 needed_braking = self._calculate_needed_braking(own_vehicle, vehicle)  # Nötiges Bremsen in m/s^2
+                max_needed_deceleration = max(max_needed_deceleration, needed_braking)
                 if needed_braking != float('inf'):
                     if needed_braking > 6:
                         warn = 3
-                    elif needed_braking > 5:
+                    elif needed_braking > 5 or needed_braking > 0 and self.current_warning_level > 1:
                         warn = 2
                     elif -needed_braking < own_vehicle.data.acceleration and needed_braking > 2:
                         warn = 1
@@ -55,6 +60,14 @@ class ForwardCollisionWarning(AssistanceSystem):
                         warn = 0
                     if warn > warning_level:
                         warning_level = warn
+        if warning_level > 1:
+            self.event_bus.emit('needed_deceleration_update', {
+                'deceleration': max_needed_deceleration,
+            })
+        else:
+            self.event_bus.emit('needed_deceleration_update', {
+                'deceleration': 0,
+            })
         if warning_level != self.current_warning_level:
             self.current_warning_level = warning_level
             self.event_bus.emit('collision_warning_changed', {

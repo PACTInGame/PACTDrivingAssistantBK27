@@ -41,12 +41,17 @@ class UIManager:
         self.event_bus.subscribe('state_data', self._state_change)
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
         self.event_bus.subscribe("notification", self._update_notifications)
+        self.event_bus.subscribe("send_lfs_command", self._handle_lfs_command)
 
         self.speed = 0
         self.rpm = 0
         self.gear = 'N'
         self.redline = 0
         self.pdc_beeper = PDCBeepController()
+
+    def _handle_lfs_command(self, data):
+        command = data['command']
+        self.message_sender.send_command(command)
 
     def _update_notifications(self, data):
         self.notifications.append(data['notification'])

@@ -35,6 +35,11 @@ class SettingsManager:
             'user_shift_down_key': "x",
             'user_ignition_key': "i",
 
+            'user_axis_steering': 8,
+            'user_axis_throttle': 9,
+            'user_axis_brake': 12,
+            'user_axis_clutch': 13,
+            'vjoy_axis_1': 15,
 
         }
         self.load()

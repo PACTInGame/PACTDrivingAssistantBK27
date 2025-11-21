@@ -27,7 +27,7 @@ class LightAssists(AssistanceSystem):
             return {'adaptive_lights': False}
         adaptive_lights = False
         reverse = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
-        if (own_vehicle.data.acceleration < -8 or own_vehicle.brake > 0.85) and not reverse:
+        if (own_vehicle.data.acceleration < -8 or (own_vehicle.brake > 0.85 and own_vehicle.data.speed > 10)) and not reverse:
             adaptive_lights = True
             if self.indi_on:
                 # TODO use insim to toggle lights

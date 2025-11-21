@@ -86,6 +86,7 @@ class LFSAssistantApp:
 
         except KeyboardInterrupt:
             print("Shutting down...")
+            # TODO Axis cleanup needed
         except Exception as e:
             print(f"Error: {e}")
         finally:

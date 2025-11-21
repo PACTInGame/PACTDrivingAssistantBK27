@@ -13,6 +13,9 @@ class MessageSender:
         """Sendet eine Chat-Nachricht"""
         # Implementation für Chat-Nachrichten
         pass
+    def send_command(self, command: str):
+        """Sendet einen Befehl an LFS"""
+        self.connector.send_command_to_lfs(command)
 
     def create_button(self, button_id: int, x: int, y: int, width: int, height: int,
                       text: str, style: int = 0):

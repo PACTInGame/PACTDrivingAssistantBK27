@@ -48,7 +48,7 @@ class LFSConnector:
                 b'127.0.0.1', 29999,
                 Admin=b'',
                 Prefix=b"$",
-                Flags= pyinsim.ISF_MCI | pyinsim.ISF_AXM_LOAD | pyinsim.ISF_AXM_EDIT | pyinsim.ISF_LOCAL,
+                Flags=pyinsim.ISF_MCI | pyinsim.ISF_AXM_LOAD | pyinsim.ISF_AXM_EDIT | pyinsim.ISF_LOCAL,
                 Interval=interval
             )
 
@@ -70,7 +70,6 @@ class LFSConnector:
         except Exception as e:
             print(f"Failed to connect to LFS: {e}")
             self.is_connected = False
-
 
     def start_outgauge(self):
         """Startet OutGauge-Verbindung"""
@@ -124,9 +123,15 @@ class LFSConnector:
         """Handler für OutSim-Pakete"""
         self.event_bus.emit('outsim_data', packet)
 
+    def send_command_to_lfs(self, command: str):
+        """Sendet einen Befehl an LFS"""
+        command = command.encode()
+        self.insim.send(pyinsim.ISP_MST,
+                   Msg=command)
+
     def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text: str, inst: int = 0):
         """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)"""
-        #print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
+        # print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
         try:
             text = text.encode("latin-1")
         except UnicodeEncodeError:
@@ -147,4 +152,3 @@ class LFSConnector:
         """Löscht einen Button in LFS"""
         if self.insim and self.is_connected:
             self.insim.send(pyinsim.ISP_BFN, ReqI=255, ClickID=click_id)
-
