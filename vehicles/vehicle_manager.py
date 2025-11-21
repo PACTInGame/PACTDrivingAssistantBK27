@@ -46,6 +46,12 @@ class VehicleManager:
                         self.own_vehicle.data.y,
                         self.own_vehicle.data.z
                     )
+                    vehicle.update_angle_to_player(
+                        self.own_vehicle.data.x,
+                        self.own_vehicle.data.y,
+                        self.own_vehicle.data.heading
+                    )
+
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
             if (self.own_vehicle.data.player_id != 0 and
                     self.own_vehicle.data.player_id in self.vehicles and

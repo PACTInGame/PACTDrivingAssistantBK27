@@ -15,6 +15,7 @@ class VehicleData:
     heading: float = 0.0
     direction: float = 0.0
     distance_to_player: float = 0.0
+    angle_to_player: float = 0.0
     acceleration: float = 0.0
 
 
@@ -49,3 +50,15 @@ class Vehicle:
         dy = dy / 65536
         dz = dz / 65536
         self.data.distance_to_player = math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    def update_angle_to_player(self, player_x: float, player_y: float, own_heading: float):
+        """Berechnet Winkel zum Spieler"""
+        ang = (math.atan2((player_x / 65536 - self.data.x / 65536),
+                          (player_y / 65536 - self.data.y / 65536)) * 180.0) / 3.1415926535897931
+        if ang < 0.0:
+            ang = 360.0 + ang
+        consider_dir = ang + own_heading / 182
+        if consider_dir > 360.0:
+            consider_dir -= 360.0
+        angle = (consider_dir + 180.0) % 360.0
+        self.data.angle_to_player = angle

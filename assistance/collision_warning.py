@@ -80,11 +80,10 @@ class ForwardCollisionWarning(AssistanceSystem):
 
     def _is_vehicle_ahead(self, other_vehicle: Vehicle) -> bool:
         """Prüft ob Fahrzeug vor uns ist"""
-        # Vereinfachte Implementierung - kann erweitert werden
 
         is_vehicle_ahead = point_in_rectangle(other_vehicle.data.x, other_vehicle.data.y, self.own_rectangle)
 
-        return is_vehicle_ahead  # Innerhalb 45° voraus
+        return is_vehicle_ahead
 
     def _calculate_needed_braking(self, own_vehicle: OwnVehicle, other_vehicle: Vehicle) -> float:
         """Calculates the needed braking to avoid collision in m/s^2"""
