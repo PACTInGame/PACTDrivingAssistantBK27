@@ -27,14 +27,14 @@ class ControllerEmulator(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         initial_brake_pressure = self._wanted_deceleration * 0.1  # -10 m/s² corresponds to 1.0 brake pressure
-        print("----------------")
-        print("Initial brake pressure:", initial_brake_pressure)
-        print("Current acceleration:", own_vehicle.data.acceleration)
-        print("Wanted deceleration:", self._wanted_deceleration)
+        #print("----------------")
+        #print("Initial brake pressure:", initial_brake_pressure)
+        #print("Current acceleration:", own_vehicle.data.acceleration)
+        #print("Wanted deceleration:", self._wanted_deceleration)
         # Calculate delta between current deceleration and wanted deceleration
         wanted = -self._wanted_deceleration
         delta = -(wanted - own_vehicle.data.acceleration)
-        print("Delta:", delta)
+        #print("Delta:", delta)
         # if delta is positive, we need to increase brake pressure
 
         # Increase brake pressure smoothly
@@ -43,13 +43,13 @@ class ControllerEmulator(AssistanceSystem):
             brake_pressure = 1.0
         elif brake_pressure < 0:
             brake_pressure = 0.0
-        print("Final brake pressure:", brake_pressure)
+        #print("Final brake pressure:", brake_pressure)
         if self.controller_type == 2:
             if brake_pressure > 0.5:
                 if not self.emulating_input:
                     self.emulating_input = True
                     self.event_bus.emit('send_lfs_command', {'command': f"/axis {self.settings.get('vjoy_axis_1')} brake"})
-                print("Pressing wheel brake")
+                #print("Pressing wheel brake")
                 self.wheel_driver.press_wheel_brake(brake_pressure)
 
             elif brake_pressure < 0.5 and self.emulating_input:

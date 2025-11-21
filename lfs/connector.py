@@ -21,6 +21,7 @@ class LFSConnector:
         self.is_connected = False
         self._packet_handlers: Dict[int, Callable] = {}
         self._setup_handlers()
+        self.event_bus.subscribe("send_light_command", self.send_light_command)
 
     def _setup_handlers(self):
         """Registriert Standard-Packet-Handler und startet listener"""
@@ -64,7 +65,6 @@ class LFSConnector:
 
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_SST)
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
-
 
 
         except Exception as e:
@@ -127,7 +127,39 @@ class LFSConnector:
         """Sendet einen Befehl an LFS"""
         command = command.encode()
         self.insim.send(pyinsim.ISP_MST,
-                   Msg=command)
+                        Msg=command)
+
+    def send_light_command(self, data):
+        """Schaltet ein Licht ein oder aus
+
+        Args:
+            light: 0=Standlicht, 1=Abblendlicht, 2=Fernlicht, 3=Nebelscheinwerfer,
+                   4=Nebelschlussleuchte, 5=Extra, 6=Blinker links, 7=Blinker rechts, 8=Warnblinkanlage
+            on: True zum Einschalten, False zum Ausschalten
+        """
+        light = data['light']
+        on = data['on']
+        # Mapping: light_id -> (SET_flag, MASK_flag)
+        light_config = {
+            0: (pyinsim.LCL_SET_LIGHTS, pyinsim.LCL_Mask_SideLight),      # Standlicht
+            1: (pyinsim.LCL_SET_LIGHTS, pyinsim.LCL_Mask_LowBeam),        # Abblendlicht
+            2: (pyinsim.LCL_SET_LIGHTS, pyinsim.LCL_Mask_HighBeam),       # Fernlicht
+            3: (pyinsim.LCL_SET_FOG_FRONT, pyinsim.LCL_Mask_FogFront),    # Nebelscheinwerfer
+            4: (pyinsim.LCL_SET_FOG_REAR, pyinsim.LCL_Mask_FogRear),      # Nebelschlussleuchte
+            5: (pyinsim.LCL_SET_EXTRA, pyinsim.LCL_Mask_Extra),           # Extra
+            6: (pyinsim.LCL_SET_SIGNALS, pyinsim.LCL_Mask_Left),          # Blinker links
+            7: (pyinsim.LCL_SET_SIGNALS, pyinsim.LCL_Mask_Right),         # Blinker rechts
+            8: (pyinsim.LCL_SET_SIGNALS, pyinsim.LCL_Mask_Signals),       # Warnblinkanlage
+        }
+
+        if light not in light_config:
+            print("DEBUG: CAUTION: Invalid light ID")
+            return
+
+        set_flag, mask_flag = light_config[light]
+        UVal = set_flag | (mask_flag if on else 0)
+
+        self.insim.send(pyinsim.ISP_SMALL, SubT=pyinsim.SMALL_LCL, UVal=UVal)
 
     def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text: str, inst: int = 0):
         """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)"""
