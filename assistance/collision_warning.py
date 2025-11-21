@@ -5,6 +5,7 @@ import shapely
 from shapely.geometry.point import Point
 from shapely.geometry.polygon import Polygon
 
+from assistance import park_distance_control
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
@@ -25,7 +26,7 @@ class ForwardCollisionWarning(AssistanceSystem):
         """Prüft auf Kollisionsgefahr voraus"""
         warning_level = 0
         reversing = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
-        if not self.is_enabled() or own_vehicle.data.speed < 9 or reversing:
+        if not self.is_enabled() or own_vehicle.data.speed < 0 or reversing: # TODO speed reset to 9
             if warning_level != self.current_warning_level:
                 self.event_bus.emit('needed_deceleration_update', {
                     'deceleration': 0,
@@ -89,7 +90,10 @@ class ForwardCollisionWarning(AssistanceSystem):
         """Calculates the needed braking to avoid collision in m/s^2"""
         relative_speed = (own_vehicle.data.speed - other_vehicle.data.speed) * 0.277778  # Convert from km/h to m/s
         vehicle_acceleration = other_vehicle.data.acceleration # Relevant, because it can drastically shorten or lengthen the distance
-        distance_to_vehicle = other_vehicle.data.distance_to_player - 5  # -4 because of coordinates distance to front bumper
+        own_vehicle_size = park_distance_control.get_vehicle_size(own_vehicle.data.cname)
+        other_vehicle_size = park_distance_control.get_vehicle_size(other_vehicle.data.cname)
+        length_of_both_vehicles = (own_vehicle_size[0] + other_vehicle_size[0]) /2 + 0.2  # Adding 20 cm as safety distance
+        distance_to_vehicle = other_vehicle.data.distance_to_player - length_of_both_vehicles
         if relative_speed <= 0:
             return float('inf')
 

@@ -57,6 +57,7 @@ class LightAssists(AssistanceSystem):
                 if self._is_vehicle_visible(vehicle):
                     any_vehicle_visible = True
                     break
+            # TODO seems to not work anymore!
             if any_vehicle_visible:
                 self.event_bus.emit("send_light_command", {"light": 1, "on": True})
             else:
@@ -70,5 +71,4 @@ class LightAssists(AssistanceSystem):
         """Prüft ob Fahrzeug sichtbar ist - keine Hindernisse werden berücksichtigt"""
         is_vehicle_ahead = other_vehicle.data.distance_to_player < 250 and other_vehicle.data.speed > 1
         player_in_cone = abs(other_vehicle.data.angle_to_player) < 15 or abs(other_vehicle.data.angle_to_player) > 345
-
         return is_vehicle_ahead and player_in_cone

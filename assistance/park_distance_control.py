@@ -29,7 +29,7 @@ def get_vehicle_size(cname) -> tuple:
         b'XRR': (5.0, 2.1),
         b'FZR': (5.0, 2.1),
     }
-    return car_sizes.get(cname, (1.8, 4.5))  # Standardgröße falls Index nicht gefunden wird
+    return car_sizes.get(cname, (4.5, 1.8))  # Standardgröße falls Index nicht gefunden wird
 def get_object_size(index: int) -> tuple:
     """Gibt die Größe des Objekts basierend auf dem Index zurück"""
     # Hier sollten die tatsächlichen Größen der Objekte definiert werden
@@ -236,7 +236,6 @@ class ParkDistanceControl(AssistanceSystem):
         }
         self.last_exec = time.perf_counter()
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
-        self.park_grid.plot_grid()
         self.event_bus.subscribe('layout_received', self._update_axm)
         self.last_axm_update = time.perf_counter()
         self.track = "ax"
@@ -314,6 +313,8 @@ class ParkDistanceControl(AssistanceSystem):
                 rectangle = create_rectangle_for_vehicle(vehicle.data.x, vehicle.data.y,
                                                         vehicle.data.cname, vehicle.data.heading)
                 self.park_grid.insert_object(vehicle.data.player_id, [rectangle[0], rectangle[1], rectangle[2], rectangle[3]], is_static=False)
+                #self.park_grid.plot_grid()
+
             outer_sensors, middle_sensors, inner_sensors = create_bboxes_for_own_vehicle(own_vehicle)
             nearby = self.park_grid.query_area(own_vehicle.data.x, own_vehicle.data.y, 30 * 65536)
             collisions = []
