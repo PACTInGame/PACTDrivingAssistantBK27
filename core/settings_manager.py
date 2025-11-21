@@ -28,6 +28,11 @@ class SettingsManager:
             'hud_height': 119,
             'hud_width': 90,
 
+            'user_handbrake_key': "q",
+            'user_shift_up_key': "s",
+            'user_shift_down_key': "x",
+            'user_ignition_key': "i",
+
 
         }
         self.load()
@@ -38,6 +43,7 @@ class SettingsManager:
 
     def set(self, key: str, value: Any):
         """Setzt einen Einstellungswert"""
+        print(f"Setting {key} to {value}")
         self._settings[key] = value
         self.save()
 

@@ -32,6 +32,8 @@ class OwnVehicle(Vehicle):
         self.oil_light: bool = False
         self.eng_light: bool = False
 
+
+
     def update_outgauge_data(self, packet):
         """Aktualisiert Daten aus OutGauge-Paket"""
         self.data.player_id = packet.PLID

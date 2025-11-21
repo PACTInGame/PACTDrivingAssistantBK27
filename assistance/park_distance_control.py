@@ -7,7 +7,6 @@ from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.helpers import calc_polygon_points
-from misc.pdc_beep import PDCBeepController
 from misc.spacial_hash_grid import SpatialHashGrid
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
@@ -187,10 +186,10 @@ def save_rectangles_as_json(rectangles: list, filename: str):
 
 
 class ParkDistanceControl(AssistanceSystem):
-    """Toter-Winkel-Warner"""
+    """PDC"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
-        super().__init__("ParkDistanceControl", event_bus, settings)
+        super().__init__("park_distance_control", event_bus, settings)
         self.detection_distance = 70.0
         self.pdc_result = {
             0: -1,
@@ -289,7 +288,7 @@ class ParkDistanceControl(AssistanceSystem):
                 for i, sensor in enumerate(inner_sensors):
                     if self.park_grid.polygon_overlap(sensor, obj['points']):
                         new_pdc_result[i] = (max(new_pdc_result[i], 3))
-            print("New PDC Result:", new_pdc_result)
+            #print("New PDC Result:", new_pdc_result)
         if self.pdc_result != new_pdc_result:
             self.event_bus.emit('pdc_changed', new_pdc_result)
             self.pdc_result = new_pdc_result

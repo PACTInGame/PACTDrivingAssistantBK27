@@ -62,7 +62,7 @@ class BlindSpotWarning(AssistanceSystem):
     """Toter-Winkel-Warner"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
-        super().__init__("BlindSpotWarning", event_bus, settings)
+        super().__init__("blind_spot_warning", event_bus, settings)
         self.detection_distance = 70.0
         self.left_warning = False
         self.right_warning = False

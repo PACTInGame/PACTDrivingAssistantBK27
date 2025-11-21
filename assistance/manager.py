@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 
+from assistance.auto_hold import AutoHold
 from assistance.base_system import AssistanceSystem
 from assistance.blind_spot_warning import BlindSpotWarning
 from assistance.collision_warning import ForwardCollisionWarning
@@ -34,6 +35,8 @@ class AssistanceManager:
         self.systems['fcw'] = ForwardCollisionWarning(self.event_bus, self.settings)
         self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
         self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
+        self.systems['autoh'] = AutoHold(self.event_bus, self.settings)
+
         # Weitere Systeme hier hinzufügen
 
     def _update_state_data(self, data):

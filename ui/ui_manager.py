@@ -1,4 +1,5 @@
 # ui/ui_manager.py
+import time
 from typing import Dict, List
 
 import pyinsim
@@ -17,6 +18,7 @@ class UIManager:
     # 13-14: Blind Spot Warning
     # 20-40: Menü-Buttons
     # 41-60: PDC-Anzeige
+    # 61: Notifications
 
     def __init__(self, event_bus: EventBus, message_sender: MessageSender, settings: SettingsManager):
         self.event_bus = event_bus
@@ -26,6 +28,8 @@ class UIManager:
         self.current_menu = None
         self.on_track = False
         self.pdc_data = None
+        self.notifications = []
+        self.notification_time = time.perf_counter()
 
         # Event-Handler
         self.event_bus.subscribe('collision_warning_changed', self._update_collision_warning_display)
@@ -33,6 +37,7 @@ class UIManager:
         self.event_bus.subscribe('outgauge_data', self._get_hud_data)
         self.event_bus.subscribe('state_data', self._state_change)
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
+        self.event_bus.subscribe("notification", self._update_notifications)
 
         self.speed = 0
         self.rpm = 0
@@ -40,6 +45,22 @@ class UIManager:
         self.redline = 0
         self.pdc_beeper = PDCBeepController()
 
+    def _update_notifications(self, data):
+        print("New notification:", data['notification'])
+        print(self.notifications)
+        self.notifications.append(data['notification'])
+
+    def show_notifications(self):
+        x = self.settings.get("hud_width")
+        y = self.settings.get("hud_height") + 8
+
+        if self.notification_time + 3 < time.perf_counter() and not self.notifications:
+            self.message_sender.remove_button(61)
+            return
+        elif self.notification_time + 3 < time.perf_counter() and self.notifications:
+            self.notification_time = time.perf_counter()
+            notification_text = self.notifications.pop(0)
+            self.message_sender.create_button(61, x, y, 26, 5, notification_text, pyinsim.ISB_DARK)
 
     def _update_pdc(self, data):
         """Aktualisiert Park Distance Control (PDC) Anzeige"""
@@ -132,6 +153,9 @@ class UIManager:
                                               f"{self.gear}", pyinsim.ISB_DARK)
             if self.pdc_data and self.pdc_data[0] != -1:
                 self._show_pdc_display()
+
+            self.show_notifications()
+
 
         else:
             self.hide_hud()

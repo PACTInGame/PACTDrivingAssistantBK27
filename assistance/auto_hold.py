@@ -1,6 +1,7 @@
 import math
 from typing import Dict, Any
 
+import pyautogui
 import shapely
 from shapely.geometry.point import Point
 from shapely.geometry.polygon import Polygon
@@ -13,50 +14,30 @@ from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
 
-class ForwardCollisionWarning(AssistanceSystem):
-    """Kollisionswarnung für Fahrzeuge voraus"""
+class AutoHold(AssistanceSystem):
+    """Automatic Parking Brake"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
-        super().__init__("forward_collision_warning", event_bus, settings)
+        super().__init__("auto_hold", event_bus, settings)
         self.current_warning_level = 0
         self.own_rectangle = None
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
-        """Prüft auf Kollisionsgefahr voraus"""
+        """Verarbeitet die Auto-Hold-Logik"""
         if not self.is_enabled():
-            return {'level': 0}
-
-        warning_level = 0
-        angle_of_car = abs((own_vehicle.data.heading + 16384) / 182.05)
-        ang1, ang2, ang3, ang4 = angle_of_car + 1, angle_of_car - 20, angle_of_car + 20, angle_of_car - 1
-        (x1, y1) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang1)
-        (x2, y2) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang2)
-        (x3, y3) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 3.0 * 65536, ang3)
-        (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang4)
-        self.own_rectangle = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
-        for vehicle in vehicles.values():
-            if self._is_vehicle_ahead(vehicle):
-                needed_braking = self._calculate_needed_braking(own_vehicle, vehicle)  # Nötiges Bremsen in m/s^2
-                if needed_braking != float('inf'):
-                    if needed_braking > 7.5:
-                        warn = 3
-                    elif needed_braking > 6:
-                        warn = 2
-                        # TODO Adjust this
-                    elif needed_braking < own_vehicle.data.acceleration:
-                        warn = 1
-                    else:
-                        warn = 0
-                    if warn > warning_level:
-                        warning_level = warn
-        if warning_level != self.current_warning_level:
-            self.current_warning_level = warning_level
-            self.event_bus.emit('collision_warning_changed', {
-                'level': warning_level,
-            })
+            return {'auto_hold_active': False}
+        auto_hold = False
+        if own_vehicle.data.speed < 0.05 and own_vehicle.brake > 0.05:
+            auto_hold = True
+            if not own_vehicle.handbrake_light:
+                user_handbrake_key = self.settings.get('user_handbrake_key')
+                # Press the handbrake key to activate auto-hold using direct input, right here
+                pyautogui.keyDown(user_handbrake_key)
+                pyautogui.keyUp(user_handbrake_key)
+                self.event_bus.emit("notification", {'notification': 'Auto Hold'})
 
         return {
-            'level': warning_level,
+            'auto_hold_active': auto_hold
         }
 
     def _is_vehicle_ahead(self, other_vehicle: Vehicle) -> bool:

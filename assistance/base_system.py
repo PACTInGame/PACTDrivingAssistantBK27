@@ -41,4 +41,4 @@ class AssistanceSystem(ABC):
 
     def is_enabled(self) -> bool:
         """Prüft ob System aktiviert ist"""
-        return self.enabled and self.settings.get(f'{self.name.lower()}_enabled', True)
+        return self.enabled and self.settings.get(f'{self.name.lower()}', True)

@@ -70,6 +70,16 @@ class LanguageManager:
                 "no": "Lukk",
                 "dk": "Luk",
                 "se": "Stäng"
+            },
+            "Auto Hold": {
+                "en": "Auto Hold",
+                "de": "Auto Hold",
+                "it": "Freno Auto",
+                "fr": "Frein Auto",
+                "tr": "Otomatik El Freni",
+                "no": "Auto Hold",
+                "dk": "Auto Hold",
+                "se": "Auto Hold"
             }
         }
 
