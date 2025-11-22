@@ -1,3 +1,4 @@
+import time
 from typing import Dict, List, Any, Optional
 
 from core.event_bus import EventBus
@@ -13,6 +14,8 @@ class VehicleManager:
         self.vehicles: Dict[int, Vehicle] = {}
         self.own_vehicle = OwnVehicle()
         self.players: Dict[int, Any] = {}  # Player info from NPL packets
+        self.time_since_last_update = time.perf_counter()
+        self.received_cars_count = 0
 
         # Event-Handler registrieren
         self.event_bus.subscribe('vehicle_data_received', self._handle_vehicle_data)
@@ -22,6 +25,9 @@ class VehicleManager:
 
     def _handle_vehicle_data(self, mci_packet):
         """Verarbeitet MCI-Pakete mit Fahrzeugdaten"""
+        if self.time_since_last_update + 0.05 < time.perf_counter():
+            self.received_cars_count = 0
+        self.received_cars_count += len(mci_packet.Info)
         for data in mci_packet.Info:
             player_id = data.PLID
 
@@ -38,18 +44,6 @@ class VehicleManager:
                     data.Speed / 91.02  # Convert to km/h
                 )
 
-                # Aktualisiere Distanz zum eigenen Fahrzeug
-                if self.own_vehicle.data.player_id != 0:
-                    vehicle.update_distance_to_player(
-                        self.own_vehicle.data.x,
-                        self.own_vehicle.data.y,
-                        self.own_vehicle.data.z
-                    )
-                    vehicle.update_angle_to_player(
-                        self.own_vehicle.data.x,
-                        self.own_vehicle.data.y,
-                        self.own_vehicle.data.heading
-                    )
                 if self.players:
                     vehicle.update_model_and_driver(
                         self.players.get(player_id).get("CName", "Unknown"),
@@ -70,8 +64,25 @@ class VehicleManager:
                     data.Speed / 91.02  # Convert to km/h
                 )
 
-        # Emit Event für andere Komponenten
-        self.event_bus.emit('vehicles_updated', self.vehicles)
+        if self.received_cars_count == len(self.players): # Received all cars for this frame
+            if self.own_vehicle.data.player_id != 0:
+                for vehicle in self.vehicles.values():
+                        vehicle.update_distance_to_player(
+                            self.own_vehicle.data.x,
+                            self.own_vehicle.data.y,
+                            self.own_vehicle.data.z
+                        )
+                        vehicle.update_angle_to_player(
+                            self.own_vehicle.data.x,
+                            self.own_vehicle.data.y,
+                            self.own_vehicle.data.heading
+                        )
+            # Emit Event für andere Komponenten
+
+            self.event_bus.emit('vehicles_updated', self.vehicles)
+
+        self.time_since_last_update = time.perf_counter()
+
 
     def _handle_player_joined(self, npl_packet):
         """Verarbeitet neue Spieler"""
@@ -80,6 +91,7 @@ class VehicleManager:
             "CName": npl_packet.CName,
         }
         self.players[npl_packet.PLID] = player_info
+        print(len(self.players))
         self.event_bus.emit('player_data_updated', self.players)
 
     def _handle_player_left(self, pll_packet):
@@ -89,6 +101,8 @@ class VehicleManager:
             del self.players[player_id]
         if player_id in self.vehicles:
             del self.vehicles[player_id]
+        print(len(self.players))
+
         self.event_bus.emit('player_data_updated', self.players)
 
     def _handle_outgauge_data(self, outgauge_packet):

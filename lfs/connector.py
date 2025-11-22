@@ -23,6 +23,9 @@ class LFSConnector:
         self._setup_handlers()
         self.event_bus.subscribe("send_light_command", self.send_light_command)
 
+
+
+
     def _setup_handlers(self):
         """Registriert Standard-Packet-Handler und startet listener"""
 
@@ -65,10 +68,6 @@ class LFSConnector:
 
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_SST)
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
-            inputs = [
-                pyinsim.AIInputVal(Input=pyinsim.CS_HORN, Time=50, Value=1)  # Horn type 1 for 0.5 sec
-            ]
-            self.insim.send(pyinsim.ISP_AIC, PLID=2, Inputs=inputs)
 
 
         except Exception as e:
@@ -105,8 +104,6 @@ class LFSConnector:
     def _handle_state(self, insim, sta):
         """Verarbeitet Spielstatus"""
         self.event_bus.emit('game_state_changed', sta)
-        if self.debug:
-            print(f"Game state changed: {sta}")
 
     def _handle_button_click(self, insim, btc):
         """Verarbeitet Button-Klicks"""

@@ -25,11 +25,9 @@ class WheelController():
 
     def press_wheel_brake(self, brake_pressure: float):
         if self.vjoy_available:
-            print("WheelController: Applying brake pressure:", brake_pressure)
             vj.open()
             scale = 16.39
             brake_value = -int((brake_pressure * 1000)) + 23
-            print("Calculated brake value for vJoy:", brake_value)
             throttle_value = 1000 + 23  # No throttle
             steer_value = 0 + 23  # No steering
             setJoy(brake_value, throttle_value, steer_value, scale)

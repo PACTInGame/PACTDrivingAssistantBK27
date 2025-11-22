@@ -43,6 +43,8 @@ class ControllerEmulator(AssistanceSystem):
             brake_pressure = 1.0
         elif brake_pressure < 0:
             brake_pressure = 0.0
+        if self._wanted_deceleration <= 0:
+            brake_pressure = 0.0
         #print("Final brake pressure:", brake_pressure)
         if self.controller_type == 2:
             if brake_pressure > 0.5:

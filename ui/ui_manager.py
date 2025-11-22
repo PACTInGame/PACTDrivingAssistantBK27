@@ -32,6 +32,7 @@ class UIManager:
         self.notification_time = time.perf_counter()
         self.collision_warning_level = 0
         self.collision_warning_color = pyinsim.ISB_DARK
+        self.hud_enabled = True # TODO get from settings
 
 
         # Event-Handler
@@ -42,13 +43,25 @@ class UIManager:
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
         self.event_bus.subscribe("notification", self._update_notifications)
         self.event_bus.subscribe("send_lfs_command", self._handle_lfs_command)
+        self.event_bus.subscribe("decel_debug", self._decel_debug)
+        self.event_bus.subscribe("dist_debug", self._dist_debug)
+
 
         self.speed = 0
         self.rpm = 0
         self.gear = 'N'
         self.redline = 0
         self.pdc_beeper = PDCBeepController()
-
+    def _decel_debug(self, data):
+        decel = data['deceleration']
+        self.message_sender.create_button(100, self.settings.get("hud_width"), self.settings.get("hud_height") - 10,
+                                          20, 5,
+                                          f"Decel: {decel:.2f} m/s²", pyinsim.ISB_DARK)
+    def _dist_debug(self, data):
+        decel = data['distance']
+        self.message_sender.create_button(101, self.settings.get("hud_width"), self.settings.get("hud_height") - 15,
+                                          20, 5,
+                                          f"Distance: {decel:.2f} m", pyinsim.ISB_DARK)
     def _handle_lfs_command(self, data):
         command = data['command']
         self.message_sender.send_command(command)
@@ -136,6 +149,15 @@ class UIManager:
 
     def _state_change(self, data):
         self.on_track = data['on_track']
+        if not self.on_track:
+            for i in range(0, 239):
+                self.message_sender.remove_button(i)
+            self.redline = 0
+            self.current_menu = None
+            self.message_sender.create_button(1, 0, 180, 25, 5,
+                                 "PACT Driving Assist Active.", pyinsim.ISB_DARK)
+        else:
+            self.message_sender.remove_button(1)
 
     def _get_hud_data(self, data):
         self.speed = round(data.Speed * 3.6)
@@ -145,7 +167,7 @@ class UIManager:
 
     def update_hud(self):
         """Aktualisiert das Head-Up Display"""
-        if self.on_track:
+        if self.hud_enabled and self.on_track:
             speed_text = f"{self.speed} km/h" if self.settings.get(
                 "unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
             rpm_text = f"{self.rpm} rpm" if self.rpm < self.redline - 1 else f"^1{self.rpm} rpm"
@@ -175,7 +197,7 @@ class UIManager:
             self.show_notifications()
 
 
-        else:
+        elif self.on_track:
             self.hide_hud()
 
     def hide_hud(self):

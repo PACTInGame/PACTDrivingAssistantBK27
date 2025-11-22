@@ -31,13 +31,10 @@ class StateHandler:
             if time.time() - self.time_menu_opened >= 30:
                 self.connector.start_outgauge()
             self.connector.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_NPL)
-            print("Starting game insim mode")
 
         def start_menu_insim():
             self.time_menu_opened = time.time()
             self.on_track = False
-            print("Starting menu insim mode")
-
 
         flags = [int(i) for i in str("{0:b}".format(sta.Flags))]
         self.in_game_cam = sta.InGameCam
@@ -48,6 +45,7 @@ class StateHandler:
                 start_game_insim()
 
             elif self.on_track and not game:
+                print("Switching to menu insim mode")
                 start_menu_insim()
 
         elif self.on_track:

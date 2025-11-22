@@ -26,7 +26,7 @@ class ForwardCollisionWarning(AssistanceSystem):
         """Prüft auf Kollisionsgefahr voraus"""
         warning_level = 0
         reversing = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
-        if not self.is_enabled() or own_vehicle.data.speed < 0 or reversing: # TODO speed reset to 9
+        if not self.is_enabled() or own_vehicle.data.speed < 0 or reversing:
             if warning_level != self.current_warning_level:
                 self.event_bus.emit('needed_deceleration_update', {
                     'deceleration': 0,
@@ -51,9 +51,9 @@ class ForwardCollisionWarning(AssistanceSystem):
                 needed_braking = self._calculate_needed_braking(own_vehicle, vehicle)  # Nötiges Bremsen in m/s^2
                 max_needed_deceleration = max(max_needed_deceleration, needed_braking)
                 if needed_braking != float('inf'):
-                    if needed_braking > 6:
+                    if needed_braking > 7.5 or (needed_braking > 0 and self.current_warning_level > 2):
                         warn = 3
-                    elif needed_braking > 5 or needed_braking > 0 and self.current_warning_level > 1:
+                    elif needed_braking > 5 or (needed_braking > 0 and self.current_warning_level > 1):
                         warn = 2
                     elif -needed_braking < own_vehicle.data.acceleration and needed_braking > 2:
                         warn = 1
@@ -61,7 +61,10 @@ class ForwardCollisionWarning(AssistanceSystem):
                         warn = 0
                     if warn > warning_level:
                         warning_level = warn
-        if warning_level > 1:
+        self.event_bus.emit('decel_debug', {
+            'deceleration': max_needed_deceleration,
+        })
+        if warning_level > 2:
             self.event_bus.emit('needed_deceleration_update', {
                 'deceleration': max_needed_deceleration,
             })
@@ -87,27 +90,83 @@ class ForwardCollisionWarning(AssistanceSystem):
         return is_vehicle_ahead
 
     def _calculate_needed_braking(self, own_vehicle: OwnVehicle, other_vehicle: Vehicle) -> float:
-        """Calculates the needed braking to avoid collision in m/s^2"""
-        relative_speed = (own_vehicle.data.speed - other_vehicle.data.speed) * 0.277778  # Convert from km/h to m/s
-        vehicle_acceleration = other_vehicle.data.acceleration # Relevant, because it can drastically shorten or lengthen the distance
+        """
+        Calculates the EXACT needed acceleration (negative for braking)
+        to avoid collision.
+        """
+
+        # --- 1. SETUP & CONVERSION ---
+        v_own = own_vehicle.data.speed * 0.277778  # km/h to m/s
+        v_other = other_vehicle.data.speed * 0.277778  # km/h to m/s
+        # Ensure a_other is treated as signed (negative for braking)
+        relative_speed = v_own - v_other
+        a_other = other_vehicle.data.acceleration
+
+        # --- 2. GEOMETRY & DISTANCE ---
         own_vehicle_size = park_distance_control.get_vehicle_size(own_vehicle.data.cname)
         other_vehicle_size = park_distance_control.get_vehicle_size(other_vehicle.data.cname)
-        length_of_both_vehicles = (own_vehicle_size[0] + other_vehicle_size[0]) /2 + 0.2  # Adding 20 cm as safety distance
-        distance_to_vehicle = other_vehicle.data.distance_to_player - length_of_both_vehicles
-        if relative_speed <= 0:
-            return float('inf')
 
-        # Using kinematic equation: v² = u² + 2as
-        # We want final relative speed to be 0, so: 0 = relative_speed² + 2 * relative_acceleration * distance
-        # Solving for acceleration: a = -relative_speed² / (2 * distance)
+        # Average length is used to find center-to-center offset,
+        # assuming data.distance_to_player is center-to-center.
+        length_of_both_vehicles = (own_vehicle_size[0] + other_vehicle_size[0]) / 2
 
-        # However, we need to account for the fact that the other vehicle is also accelerating
-        # The relative acceleration we need is: needed_relative_acceleration = -relative_speed² / (2 * distance)
-        needed_relative_acceleration = -(relative_speed ** 2) / (2 * distance_to_vehicle)
+        SAFETY_BUFFER = 0.5  # meters
+        d = other_vehicle.data.distance_to_player - length_of_both_vehicles - SAFETY_BUFFER
+        if relative_speed > 0:
+            d = d - relative_speed * 0.2 # Reaction time buffer (0.2s)
+        self.event_bus.emit('dist_debug', {
+            'distance': d,
+        })
+        # --- 3. PANIC & TRIVIAL CHECKS ---
 
-        # To get the absolute braking needed for our vehicle:
-        # needed_relative_acceleration = our_new_acceleration - vehicle_acceleration
-        # So: our_new_acceleration = needed_relative_acceleration + vehicle_acceleration
-        needed_braking = needed_relative_acceleration + vehicle_acceleration
-        # Return the absolute value since we want braking force (negative acceleration)
-        return abs(needed_braking)
+        # If we have already hit the buffer (or the car), brake maximally immediately
+        if d <= 0.01:
+            return 20  # Max panic braking (negative)
+
+        # If we are slower than them and they are not braking (or accelerating away),
+        # we don't need to do anything.
+        if v_own <= v_other and a_other >= 0:
+            return 0.0
+
+        # --- 4. CALCULATE TIME HORIZONS ---
+
+        # Time until the lead car comes to a complete stop
+        # If a_other is 0 (constant speed) or > 0 (accelerating), it never stops.
+        if a_other >= -0.001:
+            t_stop = float('inf')
+        else:
+            t_stop = -v_other / a_other
+
+        # Time until we would crash/match speed if we used dynamic braking logic
+        # If v_own <= v_other here, we are slower but they are braking.
+        # The time to match is theoretically infinite/undefined in this specific math
+        # context until they slow down below our speed, so we treat it as 'never catch dynamically'
+        if v_own <= v_other:
+            t_match = float('inf')
+        else:
+            t_match = (2 * d) / (v_own - v_other)
+
+        # --- 5. THE LOGIC SWITCH ---
+        if t_match < t_stop:
+            # === DYNAMIC CASE ===
+            # We will catch them while they are still moving.
+            # We need to match their acceleration plus a term to close the gap.
+            # Formula: a_req = a_lead - (delta_v^2 / 2d)
+            req_accel = a_other - ((v_own - v_other) ** 2 / (2 * d))
+
+        else:
+            # === STATIC CASE ===
+            # They will stop before we catch them.
+            # Treat them as a stationary wall located at their stopping point.
+
+            # 1. Calculate distance lead car travels before stopping
+            d_lead_stop = -(v_other ** 2) / (2 * a_other)
+
+            # 2. Total distance we have available to stop
+            d_total = d + d_lead_stop
+
+            # 3. Calculate braking to stop in that distance
+            # Formula: v^2 = 2*a*d  ->  a = -v^2 / 2d
+            req_accel = -(v_own ** 2) / (2 * d_total)
+
+        return abs(req_accel)

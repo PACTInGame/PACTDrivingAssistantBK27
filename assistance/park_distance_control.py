@@ -12,6 +12,7 @@ from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
 def get_vehicle_size(cname) -> tuple:
+    # TODO qmight be wrong way for pdc
     car_sizes = {
         b'UF1': (3.1, 1.6),
         b'XFG': (3.7, 1.7),
