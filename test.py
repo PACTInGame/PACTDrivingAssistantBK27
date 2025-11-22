@@ -1,42 +1,24 @@
 import pyinsim
-from MapBuilder import RoadMapper
-
-
-class CarData:
-    def __init__(self):
-        self.x = 0
-        self.y = 0
-        self.z = 0
-        self.heading = 0
-        self.plid = 0
-
-    def update(self, x, y, z, heading, plid):
-        self.x = x
-        self.y = y
-        self.z = z
-        self.heading = heading / 182.04
-        self.plid = plid
-
-    def print_data(self):
-        print(f"Car PLID: {self.plid}, X: {self.x:.2f}, Y: {self.y:.2f}, Z: {self.z:.2f}, Heading: {self.heading:.2f}°")
+from MapBuilder import MapGenerator
 
 insim = pyinsim.insim(b'127.0.0.1', 29999, Admin=b'', Flags=pyinsim.ISF_MCI | pyinsim.ISF_LOCAL, Interval=1000)
+objects = []
+def handle_layout(insim, axm):
+    for object in axm.Info:
+        index = object.Index
+        x = object.X / 16
+        y = object.Y / 16
+        z = object.Zbyte / 4
+        # Coordinates in Meters:
+        objects.append((index, x, y, z))
+    print(objects)
+    if len(objects) >= 560:
+        gen = MapGenerator(objects)
+        gen.process()
+        gen.save_to_json()
+        gen.debug_plot()
 
-car_data = CarData()
-mapper = RoadMapper()
-mapper.start_recording()
-def get_car_data(insim, mci):
-    car = mci.Info[0]
-    x = car.X / 65536
-    y = car.Y / 65536
-    z = car.Z / 65536
-    heading = car.Heading
-    if car.Speed > 10:
-        car_data.update(x, y, z,heading, car.PLID)
-        car_data.print_data()
-        mapper.update_position(x, y, z, heading)
-
-
-insim.bind(pyinsim.ISP_MCI, get_car_data)
+insim.bind(pyinsim.ISP_AXM, handle_layout)
+insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
 
 pyinsim.run()

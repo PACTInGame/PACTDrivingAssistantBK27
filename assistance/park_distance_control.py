@@ -153,7 +153,7 @@ def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
     return outer_sensors, middle_sensors, inner_sensors
 
 def create_rectangle_for_object(x: float, y: float, index: int, heading: float) -> list:
-    x = x * 4096
+    x = x * 4096 # TODO check if correct for 65536 scale
     y = y * 4096
     height, width = get_object_size(index)
     print("Heading:", heading)
