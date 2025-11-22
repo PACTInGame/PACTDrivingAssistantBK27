@@ -6,6 +6,7 @@ from assistance.base_system import AssistanceSystem
 from assistance.blind_spot_warning import BlindSpotWarning
 from assistance.collision_warning import ForwardCollisionWarning
 from assistance.controller_emulator import ControllerEmulator
+from assistance.navigation import NavigationSystem
 from assistance.park_distance_control import ParkDistanceControl
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
@@ -40,6 +41,8 @@ class AssistanceManager:
         self.systems['autoh'] = AutoHold(self.event_bus, self.settings)
         self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
         self.systems['controller_emulator'] = ControllerEmulator(self.event_bus, self.settings)
+        self.systems['sat_nav'] = NavigationSystem(self.event_bus, self.settings)
+
 
 
         # Weitere Systeme hier hinzufügen
