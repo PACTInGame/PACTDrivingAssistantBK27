@@ -65,6 +65,10 @@ class LFSConnector:
 
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_SST)
             self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
+            inputs = [
+                pyinsim.AIInputVal(Input=pyinsim.CS_HORN, Time=50, Value=1)  # Horn type 1 for 0.5 sec
+            ]
+            self.insim.send(pyinsim.ISP_AIC, PLID=2, Inputs=inputs)
 
 
         except Exception as e:

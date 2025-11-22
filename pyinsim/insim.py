@@ -80,6 +80,11 @@ ISP_TTC = 61
 ISP_SLC = 62
 ISP_CSC = 63
 ISP_CIM = 64
+ISP_MAL = 65
+ISP_PLH = 66
+ISP_IPB = 67
+ISP_AIC = 68
+ISP_AII = 69
 
 # Relay packets.
 IRP_ARQ = 250
@@ -129,6 +134,8 @@ SMALL_NLI = 7
 SMALL_ALC = 8
 SMALL_LCS = 9 #switches
 SMALL_LCL = 10 #lights
+SMALL_AII = 11  # get local AI info
+
 
 # Fourth byte of IS_TTC
 TTC_NONE = 0
@@ -438,6 +445,44 @@ LCL_Mask_SideLight = 0x00040000
 LCL_Mask_FogRear = 0x00100000       # bit   20    (0 off / 1 on)
 LCL_Mask_FogFront = 0x00200000      # bit   21    (0 off / 1 on)
 LCL_Mask_Extra = 0x00400000         # bit   22    (0 off / 1 on)
+
+
+# AI Control Input Values
+CS_MSX = 0              # steer: 1 hard left / 32768 centre / 65535 hard right
+CS_THROTTLE = 1         # 0 to 65535
+CS_BRAKE = 2            # 0 to 65535
+CS_CHUP = 3             # hold shift up lever
+CS_CHDN = 4             # hold shift down lever
+CS_IGNITION = 5         # toggle
+CS_EXTRALIGHT = 6       # toggle
+CS_HEADLIGHTS = 7       # 1:off / 2:side / 3:low / 4:high
+CS_SIREN = 8            # hold siren - 1:fast / 2:slow
+CS_HORN = 9             # hold horn - 1 to 5
+CS_FLASH = 10           # hold flash - 1:on
+CS_CLUTCH = 11          # 0 to 65535
+CS_HANDBRAKE = 12       # 0 to 65535
+CS_INDICATORS = 13      # 1: cancel / 2: left / 3: right / 4: hazard
+CS_GEAR = 14            # for shifter (leave at 255 for sequential control)
+CS_LOOK = 15            # 0: none / 4: left / 5: left+ / 6: right / 7: right+
+CS_PITSPEED = 16        # toggle
+CS_TCDISABLE = 17       # toggle
+CS_FOGREAR = 18         # toggle
+CS_FOGFRONT = 19        # toggle
+
+# Special AI Control values
+CS_SEND_AI_INFO = 240
+CS_REPEAT_AI_INFO = 241
+CS_SET_HELP_FLAGS = 253
+CS_RESET_INPUTS = 254
+CS_STOP_CONTROL = 255
+
+# AI Flags
+AIFLAGS_IGNITION = 1    # detect if engine running
+AIFLAGS_CHUP = 4        # upshift lever currently held
+AIFLAGS_CHDN = 8        # downshift lever currently held
+
+AIC_MAX_INPUTS = 20
+
 
 def _eat_null_chars(str_):
     return str_.rstrip(b'\x00')
@@ -1664,6 +1709,105 @@ class IR_ERR(object):
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.ErrNo = self.pack_s.unpack(data)
         return self
+
+
+class AIInputVal(object):
+    """Sub-packet for IS_AIC. Defines a single input control."""
+    pack_s = struct.Struct('2BH')
+
+    def __init__(self, Input=0, Time=0, Value=0):
+        """
+        Args:
+            Input : Select input value to set (CS_* constants)
+            Time  : Time to hold (optional, hundredths of a second)
+            Value : Value to set (e.g. 0-65535 for throttle)
+        """
+        self.Input = Input
+        self.Time = Time
+        self.Value = Value
+
+    def pack(self):
+        return self.pack_s.pack(self.Input, self.Time, self.Value)
+
+
+class IS_AIC(object):
+    """AI Control - Instruction to control the AI."""
+    pack_s = struct.Struct('4B')  # Header only
+
+    def __init__(self, ReqI=0, PLID=0, Inputs=None):
+        """
+        Args:
+            ReqI   : Optional - returned in any immediate response
+            PLID   : Unique ID of AI driver to control
+            Inputs : List of AIInputVal objects (Max 20)
+        """
+        self.Type = ISP_AIC
+        self.ReqI = ReqI
+        self.PLID = PLID
+        self.Inputs = Inputs if Inputs is not None else []
+
+    def pack(self):
+        # Limit inputs to AIC_MAX_INPUTS (20)
+        if len(self.Inputs) > AIC_MAX_INPUTS:
+            raise ValueError(f"IS_AIC: Too many inputs. Max is {AIC_MAX_INPUTS}")
+
+        # Size = 4 bytes header + (number of inputs * 4 bytes)
+        self.Size = 4 + (len(self.Inputs) * 4)
+
+        data = self.pack_s.pack(self.Size, self.Type, self.ReqI, self.PLID)
+
+        for inp in self.Inputs:
+            data += inp.pack()
+
+        return data
+
+
+class IS_AII(object):
+    """AI Info - Info about AI car.
+    Received after sending CS_SEND_AI_INFO or CS_REPEAT_AI_INFO.
+    """
+    # 4B (Header) + 12f3i (OSMain) + 4B (Flags/Gear/Sp) + 3f (RPM/Sp) + 4I (Lights/Sp)
+    pack_s = struct.Struct('4B12f3i4B3f4I')
+
+    def unpack(self, data):
+        # Unpack all fields into a flat tuple first
+        unpacked = self.pack_s.unpack(data)
+
+        self.Size = unpacked[0]
+        self.Type = unpacked[1]
+        self.ReqI = unpacked[2]
+        self.PLID = unpacked[3]
+
+        # OSMain Data (Indices 4 to 18)
+        self.OSData = OutSimPack()  # Re-using existing class structure for convenience
+        # Note: IS_AII OSData does not have Time or ID, just physics
+        self.OSData.AngVel = [unpacked[4], unpacked[5], unpacked[6]]
+        self.OSData.Heading = unpacked[7]
+        self.OSData.Pitch = unpacked[8]
+        self.OSData.Roll = unpacked[9]
+        self.OSData.Accel = [unpacked[10], unpacked[11], unpacked[12]]
+        self.OSData.Vel = [unpacked[13], unpacked[14], unpacked[15]]
+        self.OSData.Pos = [unpacked[16], unpacked[17], unpacked[18]]
+
+        # Remaining Data
+        self.Flags = unpacked[19]
+        self.Gear = unpacked[20]
+        self.Sp2 = unpacked[21]
+        self.Sp3 = unpacked[22]
+
+        self.RPM = unpacked[23]
+        self.SpF0 = unpacked[24]
+        self.SpF1 = unpacked[25]
+
+        self.ShowLights = unpacked[26]
+        self.SPU1 = unpacked[27]
+        self.SPU2 = unpacked[28]
+        self.SPU3 = unpacked[29]
+
+        return self
+
+
+
 
 class OutSimPack(object):
     pack_s = struct.Struct('I12f3i')
