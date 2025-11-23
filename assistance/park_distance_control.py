@@ -13,7 +13,6 @@ from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
 def get_vehicle_size(cname) -> tuple:
-    # TODO qmight be wrong way for pdc
     car_sizes = {
         b'UF1': (2.95, 1.5),
         b'XFG': (3.7, 1.7),
@@ -275,8 +274,8 @@ class ParkDistanceControl(AssistanceSystem):
             self.park_grid.clear()
             self.event_bus.emit("request_axm_update", {})
 
-        self.load_rectangles_from_json(filename='park_distance_control_rectangles_ax.json')
-        self.park_grid.plot_grid()
+        #self.load_rectangles_from_json(filename='park_distance_control_rectangles_ax.json')
+        #self.park_grid.plot_grid()
 
 
     def _update_axm_track_boundaries_and_save(self, axm):
