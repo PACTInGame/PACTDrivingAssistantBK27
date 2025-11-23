@@ -75,7 +75,6 @@ class UIManager:
         if ui:
             siren_text = "^7Siren" if not self.siren_active else "^4Siren"
             strobe_text = "^7Strobe" if not self.strobe_active else "^4Strobe"
-            print(siren_text)
             self.message_sender.create_button(62, self.settings.get("hud_width"), self.settings.get("hud_height") - 5, 6, 5, siren_text, pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
             self.message_sender.create_button(63, self.settings.get("hud_width")+6, self.settings.get("hud_height") - 5, 7, 5, strobe_text,
                                               pyinsim.ISB_DARK | pyinsim.ISB_CLICK)

@@ -51,7 +51,6 @@ class LightAssists(AssistanceSystem):
 
     def _handle_state_change(self, data):
         new_on_track = data['on_track']
-        print(f"On Track changed: {new_on_track}")
         if new_on_track != self.on_track:
             if new_on_track:
                 pn = self.player_name.lower()
@@ -72,7 +71,6 @@ class LightAssists(AssistanceSystem):
 
     def _handle_button_click(self, btc):
         button_id = btc.ClickID
-        print(f"Button {button_id} clicked")
         if button_id == 62:
             self.siren_active = not self.siren_active
             self.event_bus.emit("siren_state_changed", {"siren_active": self.siren_active})

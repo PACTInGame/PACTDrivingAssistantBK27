@@ -20,7 +20,6 @@ class AudioPlayer():
     def _update_audio_queue(self, event):
         """Updates the audio playback queue based on events."""
         audio_file = event.get('audio_file')
-        print(f"AudioPlayer: Received request to play audio file: {audio_file}")
         if audio_file:
             # Clean up last_played_audio list
 

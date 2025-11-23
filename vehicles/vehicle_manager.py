@@ -63,7 +63,6 @@ class VehicleManager:
             if (self.own_vehicle.data.player_id != 0 and
                     self.own_vehicle.data.player_id in self.vehicles and
                     self.vehicles[self.own_vehicle.data.player_id]):
-                print("Deleting own vehicle from vehicles list")
                 del self.vehicles[self.own_vehicle.data.player_id]
 
             if self.own_vehicle.data.player_id == player_id:
@@ -100,7 +99,6 @@ class VehicleManager:
             "CName": npl_packet.CName,
         }
         self.players[npl_packet.PLID] = player_info
-        print(len(self.players))
         self.event_bus.emit('player_data_updated', self.players)
 
     def _handle_player_left(self, pll_packet):
@@ -110,7 +108,6 @@ class VehicleManager:
             del self.players[player_id]
         if player_id in self.vehicles:
             del self.vehicles[player_id]
-        print(len(self.players))
 
         self.event_bus.emit('player_data_updated', self.players)
 

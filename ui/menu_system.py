@@ -196,7 +196,6 @@ class MenuSystem:
                 self.settings.set('park_distance_control_mode', new_value)
                 self.open_parking_menu()
                 if new_value == 0:
-                    print("Removing PDC display")
                     self.ui_manager.remove_pdc_display()
 
 

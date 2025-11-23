@@ -58,9 +58,7 @@ class LFSConnector:
 
     def connect(self):
         """Stellt Verbindung zu LFS her"""
-        while not helpers.is_lfs_running():
-            print("Waiting for Live for Speed to start...")
-            time.sleep(1)
+
         try:
             interval = self.settings.get('assistance_refresh_rate')
             self.insim = pyinsim.insim(

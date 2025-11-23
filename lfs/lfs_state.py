@@ -40,12 +40,10 @@ class StateHandler:
         self.in_game_cam = sta.InGameCam
         if len(flags) >= 15:
             game = flags[-1] == 1 and flags[-15] == 1
-            print(self.on_track)
             if not self.on_track and game:
                 start_game_insim()
 
             elif self.on_track and not game:
-                print("Switching to menu insim mode")
                 start_menu_insim()
 
         elif self.on_track:

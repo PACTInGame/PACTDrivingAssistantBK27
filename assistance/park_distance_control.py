@@ -264,8 +264,6 @@ class ParkDistanceControl(AssistanceSystem):
 
     def _update_axm(self, axm):
         """Aktualisiert die AXM-Daten"""
-        # TODO if object is deleted that doesnt work yet
-        print("AXM:", axm.PMOAction)
         if axm.PMOAction == pyinsim.PMO_ADD_OBJECTS or axm.PMOAction == pyinsim.PMO_TINY_AXM:
             print("Updating AXM objects...")
             self._update_axm_track_boundaries(axm)

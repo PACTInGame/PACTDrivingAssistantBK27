@@ -1,10 +1,15 @@
+import sys
+import time
+
 import pyinsim
 from assistance.manager import AssistanceManager
+from core.connection_test import LfsConnectionTest
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from core.thread_manager import ThreadManager, ScheduledTask
 from lfs.connector import LFSConnector
 from lfs.message_sender import MessageSender
+from misc import helpers
 from misc.audio_player import AudioPlayer
 from ui.menu_system import MenuSystem
 from ui.ui_manager import UIManager
@@ -19,6 +24,27 @@ class LFSAssistantApp:
         self.event_bus = EventBus()
         self.settings = SettingsManager()
         self.thread_manager = ThreadManager(self.event_bus)
+        backoff = 1
+        while not helpers.is_lfs_running():
+            if backoff > 60:
+                sys.exit("LFS is not running")
+            print(f"LFS is not running, checking again in {backoff} seconds...")
+            time.sleep(backoff)
+            backoff *= 2
+
+
+        is_connected = False
+        test = LfsConnectionTest()
+        backoff = 2
+        while not is_connected:
+            print("Trying to connect to LFS...")
+            is_connected = test.run_test()
+            if not is_connected:
+                print(f"Connection failed, retrying in {backoff} seconds...")
+                time.sleep(backoff)
+                backoff *= 2
+                if backoff > 60:
+                    sys.exit("Connection failed")
 
         # LFS-Kommunikation
         self.lfs_connector = LFSConnector(self.event_bus, self.settings)
