@@ -314,7 +314,7 @@ class ParkDistanceControl(AssistanceSystem):
             4: -1,
             5: -1
         }
-        if own_vehicle.data.speed < 10:
+        if own_vehicle.data.speed < 10 :
             new_pdc_result = {
                 0: 0,
                 1: 0,

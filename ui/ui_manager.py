@@ -115,65 +115,69 @@ class UIManager:
         """Aktualisiert Park Distance Control (PDC) Anzeige"""
         self.pdc_data = data
         if self.pdc_data[0] == -1:
-            self._remove_pdc_display()
+            self.remove_pdc_display()
 
-    def _remove_pdc_display(self):
+    def remove_pdc_display(self):
         for i in range(41, 61):
             self.message_sender.remove_button(i)
 
     def _show_pdc_display(self):
-        top_left = (self.settings.get("hud_width") - 3, self.settings.get("hud_height") - 6)
-        bottom_left = (self.settings.get("hud_width") - 3, self.settings.get("hud_height") + 6)
-        self.message_sender.create_button(60 , top_left[0] , top_left[1] +6,
-                                          3, 2, "^7PDC", pyinsim.ISB_DARK)
-        # create buttons for each PDC sensor
-        for i, distance in enumerate(self.pdc_data.values()):
-            if i < 3:  # Front sensors (0, 1, 2)
-                # Green button (furthest distance)
-                if distance >= 1:
-                    self.message_sender.create_button(41 + i, top_left[0] + i, top_left[1],
-                                                      1, 2, "^2o", pyinsim.ISB_DARK)
-                else:
-                    self.message_sender.remove_button(41 + i)
+        mode = self.settings.get("park_distance_control_mode", 0)
+        if mode > 0:
+            top_left = (self.settings.get("hud_width") - 3, self.settings.get("hud_height") - 6)
+            bottom_left = (self.settings.get("hud_width") - 3, self.settings.get("hud_height") + 6)
+            self.message_sender.create_button(60 , top_left[0] , top_left[1] +6,
+                                              3, 2, "^7PDC", pyinsim.ISB_DARK)
+            # create buttons for each PDC sensor
+            for i, distance in enumerate(self.pdc_data.values()):
+                if i < 3:  # Front sensors (0, 1, 2)
+                    # Green button (furthest distance)
+                    if distance >= 1:
+                        self.message_sender.create_button(41 + i, top_left[0] + i, top_left[1],
+                                                          1, 2, "^2o", pyinsim.ISB_DARK)
+                    else:
+                        self.message_sender.remove_button(41 + i)
 
-                # Yellow button (medium distance)
-                if distance >= 2:
-                    self.message_sender.create_button(44 + i, top_left[0] + i, top_left[1] + 2,
-                                                      1, 2, "^3o", pyinsim.ISB_DARK)
-                else:
-                    self.message_sender.remove_button(44 + i)
+                    # Yellow button (medium distance)
+                    if distance >= 2:
+                        self.message_sender.create_button(44 + i, top_left[0] + i, top_left[1] + 2,
+                                                          1, 2, "^3o", pyinsim.ISB_DARK)
+                    else:
+                        self.message_sender.remove_button(44 + i)
 
-                # Red button (closest distance)
-                if distance >= 3:
-                    self.message_sender.create_button(47 + i, top_left[0] + i, top_left[1] + 4,
-                                                      1, 2, "^1o", pyinsim.ISB_DARK)
-                else:
-                    self.message_sender.remove_button(47 + i)
+                    # Red button (closest distance)
+                    if distance >= 3:
+                        self.message_sender.create_button(47 + i, top_left[0] + i, top_left[1] + 4,
+                                                          1, 2, "^1o", pyinsim.ISB_DARK)
+                    else:
+                        self.message_sender.remove_button(47 + i)
 
-            else:  # Rear sensors (3, 4, 5)
-                x = i - 3  # Correct offset for rear sensors
+                else:  # Rear sensors (3, 4, 5)
+                    x = i - 3  # Correct offset for rear sensors
 
-                # Green button (furthest distance) - bottom position for rear
-                if distance >= 1:
-                    self.message_sender.create_button(51 + x, bottom_left[0] + x, bottom_left[1],
-                                                      1, 2, "^2o", pyinsim.ISB_DARK)
-                else:
-                    self.message_sender.remove_button(51 + x)
+                    # Green button (furthest distance) - bottom position for rear
+                    if distance >= 1:
+                        self.message_sender.create_button(51 + x, bottom_left[0] + x, bottom_left[1],
+                                                          1, 2, "^2o", pyinsim.ISB_DARK)
+                    else:
+                        self.message_sender.remove_button(51 + x)
 
-                # Yellow button (medium distance)
-                if distance >= 2:
-                    self.message_sender.create_button(54 + x, bottom_left[0] + x, bottom_left[1] - 2,
-                                                      1, 2, "^3o", pyinsim.ISB_DARK)
-                else:
-                    self.message_sender.remove_button(54 + x)
+                    # Yellow button (medium distance)
+                    if distance >= 2:
+                        self.message_sender.create_button(54 + x, bottom_left[0] + x, bottom_left[1] - 2,
+                                                          1, 2, "^3o", pyinsim.ISB_DARK)
+                    else:
+                        self.message_sender.remove_button(54 + x)
 
-                # Red button (closest distance) - top position for rear
-                if distance >= 3:
-                    self.message_sender.create_button(57 + x, bottom_left[0] + x, bottom_left[1] - 4,
-                                                      1, 2, "^1o", pyinsim.ISB_DARK)
-                else:
-                    self.message_sender.remove_button(57 + x)
-        self.pdc_beeper.beep()
+                    # Red button (closest distance) - top position for rear
+                    if distance >= 3:
+                        self.message_sender.create_button(57 + x, bottom_left[0] + x, bottom_left[1] - 4,
+                                                          1, 2, "^1o", pyinsim.ISB_DARK)
+                    else:
+                        self.message_sender.remove_button(57 + x)
+        if mode == 2:
+            self.pdc_beeper.beep()
+
 
 
     def _state_change(self, data):

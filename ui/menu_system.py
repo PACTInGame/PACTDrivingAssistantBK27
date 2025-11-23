@@ -181,6 +181,7 @@ class MenuSystem:
                     self.settings.set('park_distance_control_mode', 2)
                 else:
                     self.settings.set('park_distance_control_mode', 0)
+                    self.ui_manager.remove_pdc_display()
                 self.open_parking_menu()
             elif button_id == 23:
                 current = self.settings.get('parking_emergency_brake')
@@ -188,9 +189,16 @@ class MenuSystem:
                 self.open_parking_menu()
             elif button_id == 24:  # Change Park Distance Control Mode
                 current = self.settings.get('park_distance_control_mode')
-                new_value = (current + 1) % 3
+                new_value = (current + 1)
+                if new_value > 2:
+                    new_value = 1
+
                 self.settings.set('park_distance_control_mode', new_value)
                 self.open_parking_menu()
+                if new_value == 0:
+                    print("Removing PDC display")
+                    self.ui_manager.remove_pdc_display()
+
 
         if self.current_menu not in ['none', 'main']:
             if button_id == 40:

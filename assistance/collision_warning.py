@@ -1,10 +1,4 @@
-import math
 from typing import Dict, Any
-
-import shapely
-from shapely.geometry.point import Point
-from shapely.geometry.polygon import Polygon
-
 from assistance import park_distance_control
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
@@ -46,16 +40,20 @@ class ForwardCollisionWarning(AssistanceSystem):
         (x4, y4) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, 85 * 65536, ang4)
         self.own_rectangle = [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
         max_needed_deceleration = 0
+        cw_dist = self.settings.get("collision_warning_distance")
+        factors = [7.5, 3.0, 2.0] if cw_dist == 0 else [7.5, 5.0, 2.5] if cw_dist == 1 else [7.5, 6.5, 5.5]
+
+
         for vehicle in vehicles.values():
             if self._is_vehicle_ahead(vehicle):
                 needed_braking = self._calculate_needed_braking(own_vehicle, vehicle)  # Nötiges Bremsen in m/s^2
                 max_needed_deceleration = max(max_needed_deceleration, needed_braking)
                 if needed_braking != float('inf'):
-                    if needed_braking > 7.5 or (needed_braking > 0 and self.current_warning_level > 2):
+                    if needed_braking > factors[0] or (needed_braking > 0 and self.current_warning_level > 2):
                         warn = 3
-                    elif needed_braking > 5 or (needed_braking > 0 and self.current_warning_level > 1):
+                    elif needed_braking > factors[1] or (needed_braking > 0 and self.current_warning_level > 1):
                         warn = 2
-                    elif -needed_braking < own_vehicle.data.acceleration and needed_braking > 2:
+                    elif -needed_braking < own_vehicle.data.acceleration and needed_braking > factors[2]:
                         warn = 1
                     else:
                         warn = 0
