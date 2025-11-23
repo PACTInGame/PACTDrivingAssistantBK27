@@ -17,6 +17,7 @@ class SettingsManager:
             'automatic_emergency_brake': 2,  # 0 = Off, 1 = Warn, 2 = Warn & Brake
             'auto_hold': True,
             'adaptive_lights': True,
+            'own_control_mode': 0,  # 0 = Mouse, 1 = Keyboard, 2 = Joystick
 
             'park_distance_control': True,
             'parking_emergency_brake': True,
@@ -33,7 +34,9 @@ class SettingsManager:
             'user_handbrake_key': "q",
             'user_shift_up_key': "s",
             'user_shift_down_key': "x",
+            'user_clutch_key': "c",
             'user_ignition_key': "i",
+            'user_brake_key': "down",
 
             'user_axis_steering': 8,
             'user_axis_throttle': 9,

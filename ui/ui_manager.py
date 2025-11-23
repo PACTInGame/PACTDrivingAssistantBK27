@@ -97,6 +97,7 @@ class UIManager:
 
     def _update_notifications(self, data):
         self.notifications.append(data['notification'])
+        print(self.notifications)
 
     def show_notifications(self):
         x = self.settings.get("hud_width")

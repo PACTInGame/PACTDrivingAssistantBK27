@@ -26,7 +26,6 @@ class ControllerEmulator(AssistanceSystem):
     def _update_controls(self, data):
         control_mode = data.get('control_mode', 0)
         self.controller_type = control_mode
-        print("Controller type updated to:", self.controller_type)
 
     def _update_decel_value(self, data):
         self._wanted_deceleration = data['deceleration']
@@ -57,7 +56,6 @@ class ControllerEmulator(AssistanceSystem):
                 if not self.emulating_input:
                     self.emulating_input = True
                     self.event_bus.emit('send_lfs_command', {'command': f"/axis {self.settings.get('vjoy_axis_1')} brake"})
-                #print("Pressing wheel brake")
                 self.wheel_driver.press_wheel_brake(brake_pressure)
 
             elif brake_pressure < 0.5 and self.emulating_input:

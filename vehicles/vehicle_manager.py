@@ -59,6 +59,7 @@ class VehicleManager:
                     if changed:
                         self.event_bus.emit('player_name_changed', {"player_name": self.own_vehicle.data.pname,
                                                                     "control_mode": self.own_vehicle.data.control_mode})
+
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
             if (self.own_vehicle.data.player_id != 0 and
                     self.own_vehicle.data.player_id in self.vehicles and
