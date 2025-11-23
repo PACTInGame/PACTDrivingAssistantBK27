@@ -70,5 +70,7 @@ class Vehicle:
 
     def update_model_and_driver(self, cname: str, pname: str):
         """Aktualisiert Modell- und Fahrerdaten"""
+        changed = self.data.cname != cname or self.data.pname != pname
         self.data.cname = cname
         self.data.pname = pname
+        return changed

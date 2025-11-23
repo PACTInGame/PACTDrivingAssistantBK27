@@ -53,8 +53,10 @@ class VehicleManager:
             else:
                 if self.players:
 
-                    self.own_vehicle.update_model_and_driver(self.players.get(player_id).get("CName", "Unknown"),
+                    changed = self.own_vehicle.update_model_and_driver(self.players.get(player_id).get("CName", "Unknown"),
                                                              self.players.get(player_id).get("PName", "Unknown"))
+                    if changed:
+                        self.event_bus.emit('player_name_changed', {"player_name": self.own_vehicle.data.pname})
 
 
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)

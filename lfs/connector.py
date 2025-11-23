@@ -23,8 +23,19 @@ class LFSConnector:
         self._setup_handlers()
         self.event_bus.subscribe("send_light_command", self.send_light_command)
         self.event_bus.subscribe("request_axm_update", self._request_axm_update)
+        self.event_bus.subscribe("siren_state_changed", self._siren_state_changed)
 
 
+
+    def _siren_state_changed(self, data):
+        siren = data['siren_active']
+        siren_config =  (pyinsim.LCS_SET_SIREN, pyinsim.LCS_Mask_Siren)
+
+
+        set_flag, mask_flag = siren_config
+        UVal = set_flag | (mask_flag if siren else 0)
+
+        self.insim.send(pyinsim.ISP_SMALL, SubT=pyinsim.SMALL_LCS, UVal=UVal)
 
     def _request_axm_update(self, data):
         """Fordert ein AXM-Layout-Update an"""

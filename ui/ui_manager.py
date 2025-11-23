@@ -19,6 +19,7 @@ class UIManager:
     # 20-40: Menü-Buttons
     # 41-60: PDC-Anzeige
     # 61: Notifications
+    # 62-63: Siren UI
 
     def __init__(self, event_bus: EventBus, message_sender: MessageSender, settings: SettingsManager):
         self.event_bus = event_bus
@@ -33,6 +34,8 @@ class UIManager:
         self.collision_warning_level = 0
         self.collision_warning_color = pyinsim.ISB_DARK
         self.hud_enabled = True # TODO get from settings
+        self.siren_active = False
+        self.strobe_active = False
 
 
         # Event-Handler
@@ -43,6 +46,8 @@ class UIManager:
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
         self.event_bus.subscribe("notification", self._update_notifications)
         self.event_bus.subscribe("send_lfs_command", self._handle_lfs_command)
+        self.event_bus.subscribe("show_siren_ui", self._show_siren_ui)
+        self.event_bus.subscribe("button_clicked", self._handle_button_click)
         #self.event_bus.subscribe("decel_debug", self._decel_debug)
         #self.event_bus.subscribe("dist_debug", self._dist_debug)
 
@@ -52,6 +57,30 @@ class UIManager:
         self.gear = 'N'
         self.redline = 0
         self.pdc_beeper = PDCBeepController(self.event_bus)
+
+
+    def _handle_button_click(self, data):
+        btc = data
+        button_id = btc.ClickID
+        if button_id == 62:
+            self.siren_active = not self.siren_active
+            self._show_siren_ui({'ui': True})
+        elif button_id == 63:
+            self.strobe_active = not self.strobe_active
+            self._show_siren_ui({'ui': True})
+
+
+    def _show_siren_ui(self, data):
+        ui = data['ui']
+        if ui:
+            siren_text = "^7Siren" if not self.siren_active else "^4Siren"
+            strobe_text = "^7Strobe" if not self.strobe_active else "^4Strobe"
+            print(siren_text)
+            self.message_sender.create_button(62, self.settings.get("hud_width"), self.settings.get("hud_height") - 5, 6, 5, siren_text, pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+            self.message_sender.create_button(63, self.settings.get("hud_width")+6, self.settings.get("hud_height") - 5, 7, 5, strobe_text,
+                                              pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+        else:
+            self.message_sender.remove_button(62)
 
     def _decel_debug(self, data):
         decel = data['deceleration']
@@ -93,8 +122,8 @@ class UIManager:
             self.message_sender.remove_button(i)
 
     def _show_pdc_display(self):
-        top_left = (self.settings.get("hud_width") - 6, self.settings.get("hud_height") - 6)
-        bottom_left = (self.settings.get("hud_width") - 6, self.settings.get("hud_height") + 6)
+        top_left = (self.settings.get("hud_width") - 3, self.settings.get("hud_height") - 6)
+        bottom_left = (self.settings.get("hud_width") - 3, self.settings.get("hud_height") + 6)
         self.message_sender.create_button(60 , top_left[0] , top_left[1] +6,
                                           3, 2, "^7PDC", pyinsim.ISB_DARK)
         # create buttons for each PDC sensor
@@ -152,6 +181,8 @@ class UIManager:
         if not self.on_track:
             for i in range(0, 239):
                 self.message_sender.remove_button(i)
+            self.siren_active = False
+            self.strobe_active = False
             self.redline = 0
             self.current_menu = None
             self.message_sender.create_button(1, 0, 180, 25, 5,
@@ -195,6 +226,7 @@ class UIManager:
                 self._show_pdc_display()
 
             self.show_notifications()
+
 
 
         elif self.on_track:
