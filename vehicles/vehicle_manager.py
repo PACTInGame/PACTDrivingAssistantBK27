@@ -45,20 +45,20 @@ class VehicleManager:
                 )
 
                 if self.players:
-
                     vehicle.update_model_and_driver(
                         self.players.get(player_id).get("CName", "Unknown"),
-                        self.players.get(player_id).get("PName", "Unknown")
+                        self.players.get(player_id).get("PName", "Unknown"),
+                        self.players.get(player_id).get("ControlMode", 0)
                     )
             else:
                 if self.players:
-
-                    changed = self.own_vehicle.update_model_and_driver(self.players.get(player_id).get("CName", "Unknown"),
-                                                             self.players.get(player_id).get("PName", "Unknown"))
+                    changed = self.own_vehicle.update_model_and_driver(
+                        self.players.get(player_id).get("CName", "Unknown"),
+                        self.players.get(player_id).get("PName", "Unknown"),
+                        self.players.get(player_id).get("ControlMode", 0))
                     if changed:
-                        self.event_bus.emit('player_name_changed', {"player_name": self.own_vehicle.data.pname})
-
-
+                        self.event_bus.emit('player_name_changed', {"player_name": self.own_vehicle.data.pname,
+                                                                    "control_mode": self.own_vehicle.data.control_mode})
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
             if (self.own_vehicle.data.player_id != 0 and
                     self.own_vehicle.data.player_id in self.vehicles and
@@ -72,31 +72,39 @@ class VehicleManager:
                     data.Speed / 91.02  # Convert to km/h
                 )
 
-        if self.received_cars_count == len(self.players): # Received all cars for this frame
+        if self.received_cars_count == len(self.players):  # Received all cars for this frame
             if self.own_vehicle.data.player_id != 0:
                 for vehicle in self.vehicles.values():
-                        vehicle.update_distance_to_player(
-                            self.own_vehicle.data.x,
-                            self.own_vehicle.data.y,
-                            self.own_vehicle.data.z
-                        )
-                        vehicle.update_angle_to_player(
-                            self.own_vehicle.data.x,
-                            self.own_vehicle.data.y,
-                            self.own_vehicle.data.heading
-                        )
+                    vehicle.update_distance_to_player(
+                        self.own_vehicle.data.x,
+                        self.own_vehicle.data.y,
+                        self.own_vehicle.data.z
+                    )
+                    vehicle.update_angle_to_player(
+                        self.own_vehicle.data.x,
+                        self.own_vehicle.data.y,
+                        self.own_vehicle.data.heading
+                    )
             # Emit Event für andere Komponenten
 
             self.event_bus.emit('vehicles_updated', self.vehicles)
 
         self.time_since_last_update = time.perf_counter()
 
+    def _get_control_mode(self, flags):
+        if len(flags) >= 11 and flags[-11] == 1:
+            return 0  # mouse
+        elif (len(flags) >= 12 and flags[-12] == 1) or (len(flags) >= 13 and flags[-13] == 1):
+            return 1  # keyboard
+        else:
+            return 2  # wheel
 
     def _handle_player_joined(self, npl_packet):
         """Verarbeitet neue Spieler"""
         player_info = {
             "PName": npl_packet.PName,
             "CName": npl_packet.CName,
+            "ControlMode": self._get_control_mode([int(i) for i in bin(npl_packet.Flags)[2:]])
         }
         self.players[npl_packet.PLID] = player_info
         self.event_bus.emit('player_data_updated', self.players)

@@ -19,6 +19,7 @@ class VehicleData:
     acceleration: float = 0.0
     cname = "Unknown"
     pname = "Unknown"
+    control_mode = 0
 
 
 class Vehicle:
@@ -68,9 +69,10 @@ class Vehicle:
         angle = (consider_dir + 180.0) % 360.0
         self.data.angle_to_player = angle
 
-    def update_model_and_driver(self, cname: str, pname: str):
+    def update_model_and_driver(self, cname: str, pname: str, control_mode: int) -> bool:
         """Aktualisiert Modell- und Fahrerdaten"""
-        changed = self.data.cname != cname or self.data.pname != pname
+        changed = self.data.cname != cname or self.data.pname != pname or self.data.control_mode != control_mode
         self.data.cname = cname
         self.data.pname = pname
+        self.data.control_mode = control_mode
         return changed

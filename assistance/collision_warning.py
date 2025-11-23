@@ -59,9 +59,7 @@ class ForwardCollisionWarning(AssistanceSystem):
                         warn = 0
                     if warn > warning_level:
                         warning_level = warn
-        self.event_bus.emit('decel_debug', {
-            'deceleration': max_needed_deceleration,
-        })
+
         if warning_level > 2:
             self.event_bus.emit('needed_deceleration_update', {
                 'deceleration': max_needed_deceleration,

@@ -15,12 +15,18 @@ class ControllerEmulator(AssistanceSystem):
         super().__init__("controller_emulator", event_bus, settings)
         self.event_bus = event_bus
         self.event_bus.subscribe('needed_deceleration_update', self._update_decel_value)
+        self.event_bus.subscribe('player_name_changed', self._update_controls)
+
         self._wanted_deceleration = 0
-        self.controller_type = 2 # TODO fetch controller type from lfs # 0= keyboard, 1=mouse, 2=wheel
+        self.controller_type = 0
         self.emulating_input = False
         if self.controller_type == 2:
             self.wheel_driver = WheelController(event_bus, settings)
 
+    def _update_controls(self, data):
+        control_mode = data.get('control_mode', 0)
+        self.controller_type = control_mode
+        print("Controller type updated to:", self.controller_type)
 
     def _update_decel_value(self, data):
         self._wanted_deceleration = data['deceleration']
@@ -45,7 +51,7 @@ class ControllerEmulator(AssistanceSystem):
             brake_pressure = 0.0
         if self._wanted_deceleration <= 0:
             brake_pressure = 0.0
-        #print("Final brake pressure:", brake_pressure)
+
         if self.controller_type == 2:
             if brake_pressure > 0.5:
                 if not self.emulating_input:
