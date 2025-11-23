@@ -36,8 +36,8 @@ class VehicleManager:
                 # Erstelle Fahrzeug falls nicht vorhanden
                 if player_id not in self.vehicles:
                     self.vehicles[player_id] = Vehicle(player_id)
-
                 vehicle = self.vehicles[player_id]
+
                 vehicle.update_position(
                     data.X, data.Y, data.Z,
                     data.Heading, data.Direction,
@@ -45,10 +45,15 @@ class VehicleManager:
                 )
 
                 if self.players:
+
                     vehicle.update_model_and_driver(
                         self.players.get(player_id).get("CName", "Unknown"),
                         self.players.get(player_id).get("PName", "Unknown")
                     )
+            else:
+                self.own_vehicle.update_model_and_driver(self.players.get(player_id).get("CName", "Unknown"),
+                                                         self.players.get(player_id).get("PName", "Unknown"))
+
 
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
             if (self.own_vehicle.data.player_id != 0 and

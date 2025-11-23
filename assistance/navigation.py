@@ -136,7 +136,7 @@ class NavigationSystem(AssistanceSystem):
         super().__init__("sat_nav", event_bus, settings)
 
         # State
-        self.sat_nav_active = True  # Default to active to allow processing
+        self.sat_nav_active = False  # Default to active to allow processing
         self.current_track = "BL1"
         self.map_loaded = False
 
@@ -456,7 +456,7 @@ class NavigationSystem(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """navigation processing"""
-        if not self.is_enabled():
+        if not self.is_enabled() or not self.sat_nav_active:
             return {'sat_nav_active': False}
 
         # 1. Init Map

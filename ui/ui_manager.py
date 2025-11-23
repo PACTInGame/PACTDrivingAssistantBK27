@@ -43,15 +43,16 @@ class UIManager:
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
         self.event_bus.subscribe("notification", self._update_notifications)
         self.event_bus.subscribe("send_lfs_command", self._handle_lfs_command)
-        self.event_bus.subscribe("decel_debug", self._decel_debug)
-        self.event_bus.subscribe("dist_debug", self._dist_debug)
+        #self.event_bus.subscribe("decel_debug", self._decel_debug)
+        #self.event_bus.subscribe("dist_debug", self._dist_debug)
 
 
         self.speed = 0
         self.rpm = 0
         self.gear = 'N'
         self.redline = 0
-        self.pdc_beeper = PDCBeepController()
+        self.pdc_beeper = PDCBeepController(self.event_bus)
+
     def _decel_debug(self, data):
         decel = data['deceleration']
         self.message_sender.create_button(100, self.settings.get("hud_width"), self.settings.get("hud_height") - 10,
@@ -143,8 +144,7 @@ class UIManager:
                                                       1, 2, "^1o", pyinsim.ISB_DARK)
                 else:
                     self.message_sender.remove_button(57 + x)
-
-        self.pdc_beeper.update_beep(self.pdc_data)
+        self.pdc_beeper.beep()
 
 
     def _state_change(self, data):

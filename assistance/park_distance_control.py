@@ -14,7 +14,7 @@ from vehicles.vehicle import Vehicle
 def get_vehicle_size(cname) -> tuple:
     # TODO qmight be wrong way for pdc
     car_sizes = {
-        b'UF1': (3.1, 1.6),
+        b'UF1': (2.95, 1.5),
         b'XFG': (3.7, 1.7),
         b'XRG': (4.5, 1.8),
         b'LX4': (3.6, 1.7),
@@ -98,7 +98,9 @@ def get_object_size(index: int) -> tuple:
     return object_sizes.get(index, (0.5, 0.5))  # Standardgröße falls Index nicht gefunden wird
 
 def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
-    vehicle_size = get_vehicle_size(own_vehicle.data.cname)
+    vehicle_size_def = get_vehicle_size(own_vehicle.data.cname)
+    print("Vehicle size for PDC:", own_vehicle.data.cname)
+    vehicle_size = (vehicle_size_def[1], vehicle_size_def[0])  # switch
     angle_of_car = (own_vehicle.data.heading + 16384) / 182.05
 
     perpendicular_angle = angle_of_car + 90
@@ -113,8 +115,8 @@ def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
     (rear_middle_x, rear_middle_y) = calc_polygon_points(own_vehicle.data.x, own_vehicle.data.y, -vehicle_size[1] / 2 * 65536, angle_of_car)
     (rear_right_x, rear_right_y) = calc_polygon_points(rear_left_x, rear_left_y, -vehicle_size[0] * 65536, perpendicular_angle)
 
-    pdc_sensor_angle = 30
-    sensor_distances = [0.6 * 65536, 1.4 * 65536, 2.8 * 65536]
+    pdc_sensor_angle = 25
+    sensor_distances = [0.1 * 65536, 1.4 * 65536, 2.8 * 65536]
 
     # Polygone für die sensoren ausgehend von den Punkten erstellen
     outer_sensors = []
@@ -156,7 +158,6 @@ def create_rectangle_for_object(x: float, y: float, index: int, heading: float) 
     x = x * 4096 # TODO check if correct for 65536 scale
     y = y * 4096
     height, width = get_object_size(index)
-    print("Heading:", heading)
     angle_of_obj = (heading * 360 / 256 + 90) % 360
 
     ang_perp = angle_of_obj + 90
@@ -260,7 +261,7 @@ class ParkDistanceControl(AssistanceSystem):
         self._update_axm_track_boundaries_and_save(axm)
         #self._update_axm_track_boundaries(axm)
         self.load_rectangles_from_json(filename='park_distance_control_rectangles_ax.json')
-        self.park_grid.plot_grid()
+        #self.park_grid.plot_grid()
         print("statistics: ", self.park_grid.get_statistics())
         self.last_axm_update = current_time
 

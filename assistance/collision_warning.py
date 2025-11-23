@@ -26,7 +26,7 @@ class ForwardCollisionWarning(AssistanceSystem):
         """Prüft auf Kollisionsgefahr voraus"""
         warning_level = 0
         reversing = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
-        if not self.is_enabled() or own_vehicle.data.speed < 0 or reversing:
+        if not self.is_enabled() or own_vehicle.data.speed < 10 or reversing:
             if warning_level != self.current_warning_level:
                 self.event_bus.emit('needed_deceleration_update', {
                     'deceleration': 0,
