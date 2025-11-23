@@ -22,9 +22,13 @@ class LFSConnector:
         self._packet_handlers: Dict[int, Callable] = {}
         self._setup_handlers()
         self.event_bus.subscribe("send_light_command", self.send_light_command)
+        self.event_bus.subscribe("request_axm_update", self._request_axm_update)
 
 
 
+    def _request_axm_update(self, data):
+        """Fordert ein AXM-Layout-Update an"""
+        self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
 
     def _setup_handlers(self):
         """Registriert Standard-Packet-Handler und startet listener"""

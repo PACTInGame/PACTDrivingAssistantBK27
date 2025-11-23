@@ -50,7 +50,6 @@ class PDCBeepController:
 
         if max_distance in self.BEEP_PATTERNS:
             pattern = self.BEEP_PATTERNS[max_distance]
-            print((pattern["beep_duration"]+pattern["pause_duration"])/1000.0)
             if current_time - self.time_last_beep >= (pattern["beep_duration"] + pattern["pause_duration"]) / 1000.0:
                 self.time_last_beep = time.perf_counter()
                 threading.Thread(target=self._play_beep, args=[frequency, max_distance]).start()

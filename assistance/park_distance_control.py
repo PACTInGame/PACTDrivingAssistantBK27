@@ -1,4 +1,5 @@
 import math
+import os
 import time
 from typing import Dict, Any
 
@@ -33,14 +34,8 @@ def get_vehicle_size(cname) -> tuple:
     return car_sizes.get(cname, (4.5, 1.8))  # Standardgröße falls Index nicht gefunden wird
 def get_object_size(index: int) -> tuple:
     """Gibt die Größe des Objekts basierend auf dem Index zurück"""
-    # Hier sollten die tatsächlichen Größen der Objekte definiert werden
-    # TODO andere Indizes und Größen hinzufügen
-    print("Index:", index)
     object_sizes = {
-        48: (0.5, 0.5),
-        49: (0.5, 0.5),
-        50: (0.5, 0.5),
-        51: (0.5, 0.5),
+        40: (0.7, 0.4),
         52: (0.75, 0.75),
         53: (0.75, 0.75),
         54: (0.75, 0.75),
@@ -73,6 +68,8 @@ def get_object_size(index: int) -> tuple:
         89: (0.3, 1.4),
         90: (0.3, 1.4),
         91: (0.3, 1.4),
+        92: (0.3, 0.8),
+        93: (0.3, 1.0),
         96: (3.8, 0.3),
         97: (10.1, 0.3),
         98: (16.6, 0.3),
@@ -80,15 +77,24 @@ def get_object_size(index: int) -> tuple:
         105: (1.3, 0.3),
         106: (1.3, 0.3),
         112: (1.0, 6.0),
-        113: (1.0, 6.0),
+        124: (4.1, 1.95),
+        125: (5.4, 2),
+        126: (5.4, 2),
+        127: (6.7, 2.3),
         136: (0.2, 0.2),
         137: (0.2, 0.2),
         138: (0.2, 0.2),
         139: (0.2, 0.2),
+        140: (5.8, 5.8),
         144: (0.75, 1.75),
+        145: (1.3, 1.3),
+        146: (0.65, 0.65),
+        147: (0.2, 2.5),
         148: (0.2, 2.5),
         160: (0.7, 0.7),
         161: (0.7, 0.7),
+        164: (0.3, 4.8),
+        165: (0.3, 4.8),
         168: (1.3, 1.3),
         169: (1.3, 1.3),
 
@@ -99,7 +105,6 @@ def get_object_size(index: int) -> tuple:
 
 def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
     vehicle_size_def = get_vehicle_size(own_vehicle.data.cname)
-    print("Vehicle size for PDC:", own_vehicle.data.cname)
     vehicle_size = (vehicle_size_def[1], vehicle_size_def[0])  # switch
     angle_of_car = (own_vehicle.data.heading + 16384) / 182.05
 
@@ -157,7 +162,13 @@ def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
 def create_rectangle_for_object(x: float, y: float, index: int, heading: float) -> list:
     x = x * 4096 # TODO check if correct for 65536 scale
     y = y * 4096
-    height, width = get_object_size(index)
+    no_hitbox_objects = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 128, 129, 130, 131, 132, 149, 150, 151,
+                         172, 173, 174, 175, 176, 177, 178, 179, 184, 185, 186, 252, 253,
+                         254, 255]  # Objects without hitbox
+    if index not in no_hitbox_objects:
+        height, width = get_object_size(index)
+    else:
+        return [-1]
     angle_of_obj = (heading * 360 / 256 + 90) % 360
 
     ang_perp = angle_of_obj + 90
@@ -239,13 +250,13 @@ class ParkDistanceControl(AssistanceSystem):
         self.last_exec = time.perf_counter()
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
         self.event_bus.subscribe('layout_received', self._update_axm)
-        self.last_axm_update = time.perf_counter()
         self.track = "ax"
-        self.object_id = 10000
 
-    def load_rectangles_from_json(self, filename: str) -> list:
+    def load_rectangles_from_json(self, filename: str):
         """Lädt Rechtecke aus einer JSON-Datei"""
         import json
+        if not os.path.exists(filename):
+            return
         with open(filename, 'r') as f:
             rectangles = json.load(f)
         for i, rect in enumerate(rectangles):
@@ -253,17 +264,21 @@ class ParkDistanceControl(AssistanceSystem):
 
     def _update_axm(self, axm):
         """Aktualisiert die AXM-Daten"""
-        current_time = time.perf_counter()
-        print(current_time - self.last_axm_update)
-        if current_time - self.last_axm_update > 5:
+        # TODO if object is deleted that doesnt work yet
+        print("AXM:", axm.PMOAction)
+        if axm.PMOAction == pyinsim.PMO_ADD_OBJECTS or axm.PMOAction == pyinsim.PMO_TINY_AXM:
+            print("Updating AXM objects...")
+            self._update_axm_track_boundaries(axm)
+        elif axm.PMOAction == pyinsim.PMO_DEL_OBJECTS:
+            for o in axm.Info:
+                index = int(str(o.Index) + str(abs(o.X)) + str(abs(o.Y)) + str(abs(o.Zbyte)))
+                self.park_grid.remove_object(index)
+        elif axm.PMOAction == pyinsim.PMO_CLEAR_ALL:
             self.park_grid.clear()
-            self.object_id = 10000
-        self._update_axm_track_boundaries_and_save(axm)
-        #self._update_axm_track_boundaries(axm)
+            self.event_bus.emit("request_axm_update", {})
+
         self.load_rectangles_from_json(filename='park_distance_control_rectangles_ax.json')
-        #self.park_grid.plot_grid()
-        print("statistics: ", self.park_grid.get_statistics())
-        self.last_axm_update = current_time
+        self.park_grid.plot_grid()
 
 
     def _update_axm_track_boundaries_and_save(self, axm):
@@ -274,18 +289,20 @@ class ParkDistanceControl(AssistanceSystem):
                 rects.append(create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading))
             elif object.Index == 136: # Post Green
                 rects.append(create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading))
-        print(len(rects))
         save_rectangles_as_json(rects, 'park_distance_control_rectangles_ax.json')
 
     def _update_axm_track_boundaries(self, axm):
         """Aktualisiert die AXM-Daten"""
         rects = []
         for object in axm.Info:
-                rects.append(create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading))
-
-        for i, rect in enumerate(rects):
-            self.park_grid.insert_object(self.object_id, [rect[0], rect[1], rect[2], rect[3]], is_static=True)
-            self.object_id += 1
+            rect = create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading)
+            if rect[0] != -1:
+                index = int(str(object.Index) + str(abs(object.X)) + str(abs(object.Y)) + str(abs(object.Zbyte)))
+                rects.append([rect, index])
+        print(f"Inserting {len(rects)} AXM objects into spatial grid...")
+        for i, rectangle in enumerate(rects):
+            rect = rectangle[0]
+            self.park_grid.insert_object(rectangle[1], [rect[0], rect[1], rect[2], rect[3]], is_static=True)
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[int, int]:
         """Prüft auf Fahrzeuge im toten Winkel"""
