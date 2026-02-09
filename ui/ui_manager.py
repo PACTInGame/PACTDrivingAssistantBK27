@@ -80,6 +80,8 @@ class UIManager:
                                               pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
         else:
             self.message_sender.remove_button(62)
+            self.message_sender.remove_button(63)
+
 
     def _decel_debug(self, data):
         decel = data['deceleration']

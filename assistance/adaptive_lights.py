@@ -35,16 +35,18 @@ class LightAssists(AssistanceSystem):
         self.strobe_actions = {
             0: {"light": 2, "on": True},
             1: {"light": 5, "on": True},
-            2: {"light": 8, "on": True},
+            2: {"light": 7, "on": True},
             3: {"light": 1, "on": True},
             4: {"light": 5, "on": False},
-            5: {"light": 3, "on": True},
-            6: {"light": 2, "on": True},
-            7: {"light": 8, "on": False},
-            8: {"light": 4, "on": True},
-            9: {"light": 1, "on": True},
-            10: {"light": 3, "on": False},
-            11: {"light": 4, "on": False}
+            5: {"light": 7, "on": False},
+            6: {"light": 3, "on": True},
+            7: {"light": 2, "on": True},
+            8: {"light": 6, "on": True},
+            9: {"light": 4, "on": True},
+            10: {"light": 1, "on": True},
+            11: {"light": 6, "on": False},
+            12: {"light": 3, "on": False},
+            13: {"light": 4, "on": False}
 
 
         }
@@ -135,16 +137,16 @@ class LightAssists(AssistanceSystem):
                 if self._is_vehicle_visible(vehicle):
                     any_vehicle_visible = True
                     break
-            # TODO seems to not work anymore!
             if any_vehicle_visible:
                 self.event_bus.emit("send_light_command", {"light": 1, "on": True})
             else:
                 self.event_bus.emit("send_light_command", {"light": 2, "on": True})
         # --- Sirenen-Management ---
+        print(self.is_siren_enabled_role)
         if self.is_siren_enabled_role:
             if self.strobe_active:
                 self.strobe_pattern += 1
-                if self.strobe_pattern > 11 :
+                if self.strobe_pattern > 13 :
                     self.strobe_pattern = 0
                 light = self.strobe_actions[self.strobe_pattern]
                 self.event_bus.emit("send_light_command", light)

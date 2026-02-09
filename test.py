@@ -11,8 +11,8 @@ def handle_layout(insim, axm):
         z = object.Zbyte / 4
         # Coordinates in Meters:
         objects.append((index, x, y, z))
-    print(objects)
-    if len(objects) >= 560:
+    print(len(objects))
+    if len(objects) >= 103:
         gen = MapGenerator(objects)
         gen.process()
         gen.save_to_json()

@@ -45,20 +45,26 @@ class VehicleManager:
                 )
 
                 if self.players:
-                    vehicle.update_model_and_driver(
-                        self.players.get(player_id).get("CName", "Unknown"),
-                        self.players.get(player_id).get("PName", "Unknown"),
-                        self.players.get(player_id).get("ControlMode", 0)
-                    )
+                    player_info = self.players.get(player_id)
+                    if player_info:
+                        vehicle.update_model_and_driver(
+                            player_info.get("CName", "Unknown"),
+                            player_info.get("PName", "Unknown"),
+                            player_info.get("ControlMode", 0)
+                        )
+
             else:
                 if self.players:
-                    changed = self.own_vehicle.update_model_and_driver(
-                        self.players.get(player_id).get("CName", "Unknown"),
-                        self.players.get(player_id).get("PName", "Unknown"),
-                        self.players.get(player_id).get("ControlMode", 0))
-                    if changed:
-                        self.event_bus.emit('player_name_changed', {"player_name": self.own_vehicle.data.pname,
-                                                                    "control_mode": self.own_vehicle.data.control_mode})
+                    player_info = self.players.get(player_id)
+                    if player_info:
+                        changed = self.own_vehicle.update_model_and_driver(
+                            player_info.get("CName", "Unknown"),
+                            player_info.get("PName", "Unknown"),
+                            player_info.get("ControlMode", 0)
+                        )
+                        if changed:
+                            self.event_bus.emit('player_name_changed', {"player_name": self.own_vehicle.data.pname,
+                                                                        "control_mode": self.own_vehicle.data.control_mode})
 
             # if vehicle with own player id is in list, delete it (should not happen, but can happen in first frame)
             if (self.own_vehicle.data.player_id != 0 and

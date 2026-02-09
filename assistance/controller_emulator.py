@@ -20,8 +20,8 @@ class ControllerEmulator(AssistanceSystem):
         self._wanted_deceleration = 0
         self.controller_type = 0
         self.emulating_input = False
-        if self.controller_type == 2:
-            self.wheel_driver = WheelController(event_bus, settings)
+
+        self.wheel_driver = WheelController(event_bus, settings)
 
     def _update_controls(self, data):
         control_mode = data.get('control_mode', 0)

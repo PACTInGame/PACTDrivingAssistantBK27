@@ -6,6 +6,7 @@ from assistance.base_system import AssistanceSystem
 from assistance.blind_spot_warning import BlindSpotWarning
 from assistance.collision_warning import ForwardCollisionWarning
 from assistance.controller_emulator import ControllerEmulator
+from assistance.gearbox import Gearbox
 from assistance.navigation import NavigationSystem
 from assistance.park_distance_control import ParkDistanceControl
 from core.event_bus import EventBus
@@ -42,6 +43,7 @@ class AssistanceManager:
         self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
         self.systems['controller_emulator'] = ControllerEmulator(self.event_bus, self.settings)
         self.systems['sat_nav'] = NavigationSystem(self.event_bus, self.settings)
+        self.systems['gearbox'] = Gearbox(self.event_bus, self.settings)
 
 
 
