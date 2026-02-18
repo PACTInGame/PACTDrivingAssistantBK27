@@ -24,6 +24,7 @@ class LightAssists(AssistanceSystem):
         self.high_beam_assist = True
         self.adaptive_brake_light_timer = time.perf_counter()
         self.is_siren_enabled_role = False
+        self.copassist_enabled = False
         self.event_bus.subscribe("player_name_changed", self._on_player_name_changed)
         self.event_bus.subscribe("button_clicked", self._handle_button_click)
         self.event_bus.subscribe("state_data", self._handle_state_change)
@@ -57,7 +58,7 @@ class LightAssists(AssistanceSystem):
         if new_on_track != self.on_track:
             if new_on_track:
                 pn = self.player_name.lower()
-                if '[cop]' in pn or '[tow]' in pn or '[res]' in pn:
+                if ('[cop]' in pn or '[tow]' in pn or '[res]' in pn) and self.settings.get('cop_assistance'):
                     self.is_siren_enabled_role = True
                     self.event_bus.emit("show_siren_ui", {"ui": True})
                 else:
@@ -83,11 +84,10 @@ class LightAssists(AssistanceSystem):
                 self.disable_siren()
 
     def _on_player_name_changed(self, data):
-
         player_name = data.get('player_name', '')
         player_name = str(player_name)
         self.player_name = player_name
-        if '[cop]' in player_name.lower() or '[tow]' in player_name.lower() or '[res]' in player_name.lower():
+        if ('[cop]' in player_name.lower() or '[tow]' in player_name.lower() or '[res]' in player_name.lower()) and self.settings.get('cop_assistance'):
             self.is_siren_enabled_role = True
             self.event_bus.emit("show_siren_ui", {"ui": True})
         else:
@@ -145,7 +145,7 @@ class LightAssists(AssistanceSystem):
                 self.event_bus.emit("send_light_command", {"light": 2, "on": True})
 
         # --- Sirenen-Management ---
-        if self.is_siren_enabled_role:
+        if self.is_siren_enabled_role and self.settings.get('cop_assistance'):
             if self.strobe_active:
                 self.strobe_pattern += 1
                 if self.strobe_pattern > 13 :
@@ -153,6 +153,14 @@ class LightAssists(AssistanceSystem):
                 light = self.strobe_actions[self.strobe_pattern]
                 self.event_bus.emit("send_light_command", light)
 
+        if self.copassist_enabled != self.settings.get('cop_assistance'):
+            self.copassist_enabled = self.settings.get('cop_assistance')
+
+            if self.copassist_enabled:
+                self.event_bus.emit("show_siren_ui", {"ui": True})
+            else:
+                self.event_bus.emit("show_siren_ui", {"ui": False})
+            print(f"Cop Assistance {'enabled' if self.copassist_enabled else 'disabled'}")
 
         return {
             'adaptive_lights': True
