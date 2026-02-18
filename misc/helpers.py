@@ -8,7 +8,6 @@ def is_lfs_running():
         try:
             if proc.name() == "LFS.exe":
                 print("LFS.exe seems to be running. Starting!\n\n")
-
                 return True
 
         except psutil.AccessDenied:

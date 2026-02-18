@@ -6,6 +6,7 @@ from assistance.manager import AssistanceManager
 from core.connection_test import LfsConnectionTest
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from core.setup_wizard import run_setup_if_needed
 from core.thread_manager import ThreadManager, ScheduledTask
 from lfs.connector import LFSConnector
 from lfs.message_sender import MessageSender
@@ -20,6 +21,9 @@ class LFSAssistantApp:
     """Hauptanwendung - orchestriert alle Komponenten"""
 
     def __init__(self):
+        # --- First-time setup (blocks until wizard is closed) ---
+        run_setup_if_needed()
+
         # Core-Komponenten
         self.event_bus = EventBus()
         self.settings = SettingsManager()
@@ -112,7 +116,6 @@ class LFSAssistantApp:
 
         except KeyboardInterrupt:
             print("Shutting down...")
-            # TODO Axis cleanup needed
         except Exception as e:
             print(f"Error: {e}")
         finally:
