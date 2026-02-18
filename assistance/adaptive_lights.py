@@ -19,7 +19,7 @@ class LightAssists(AssistanceSystem):
     """Adaptive Lichtfunktionen"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
-        super().__init__("light_assist", event_bus, settings)
+        super().__init__("adaptive_lights", event_bus, settings)
         self.indi_on = False
         self.high_beam_assist = True
         self.adaptive_brake_light_timer = time.perf_counter()
@@ -105,9 +105,10 @@ class LightAssists(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Adaptive-Licht-Logik"""
+        print(self.is_enabled())
         if not self.is_enabled():
             return {'adaptive_lights': False}
-        adaptive_lights = False
+
         # --- Adaptive Bremslichter ---
         if not self.strobe_active:
             reverse = (own_vehicle.data.heading - own_vehicle.data.direction) > 10000 or (own_vehicle.data.heading - own_vehicle.data.direction) < -10000
@@ -128,8 +129,9 @@ class LightAssists(AssistanceSystem):
                     self.event_bus.emit("send_light_command", {"light": 8, "on": False})
             else:
                 adaptive_lights = True
+
         # --- Lichtautomatik ---
-        if self.high_beam_assist and not self.strobe_active:
+        if self.settings.get('high_beam_assist') and not self.strobe_active:
             if not own_vehicle.low_beam_light and not own_vehicle.full_beam_light:
                 self.event_bus.emit("send_light_command", {"light": 1, "on": True})
             any_vehicle_visible = False
@@ -153,7 +155,7 @@ class LightAssists(AssistanceSystem):
 
 
         return {
-            'adaptive_lights': adaptive_lights
+            'adaptive_lights': True
         }
 
     def _is_vehicle_visible(self, other_vehicle: Vehicle) -> bool:

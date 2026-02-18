@@ -17,6 +17,7 @@ class SettingsManager:
             'automatic_emergency_brake': 2,  # 0 = Off, 1 = Warn, 2 = Warn & Brake
             'auto_hold': True,
             'adaptive_lights': True,
+            'high_beam_assist': True,
             'own_control_mode': 0,  # 0 = Mouse, 1 = Keyboard, 2 = Joystick
 
             'park_distance_control': True,
@@ -30,6 +31,7 @@ class SettingsManager:
             'assistance_refresh_rate': 100,
             'hud_height': 119,
             'hud_width': 90,
+            'hud_active': True,
 
             'user_handbrake_key': "q",
             'user_shift_up_key': "s",
@@ -43,6 +45,8 @@ class SettingsManager:
             'user_axis_brake': 12,
             'user_axis_clutch': 13,
             'vjoy_axis_1': 15,
+
+            'cop_assistance': True,
 
         }
         self.load()

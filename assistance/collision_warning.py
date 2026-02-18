@@ -166,3 +166,5 @@ class ForwardCollisionWarning(AssistanceSystem):
             req_accel = -(v_own ** 2) / (2 * d_total)
 
         return abs(req_accel)
+
+# TODO no automatic braking for now

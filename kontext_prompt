@@ -142,7 +142,8 @@ Insgesamt sollen folgende Funktionalitäten funktionieren:
 - Ein Automatikgetriebe (noch nicht fertig)
 - Menü (als UI für Einstellungen / Funktionen etc. mit Steuerung für alle Funktionen, in verschiedenen Sprachen) (nicht fertig)
 - Notbremseingriffe bei Frontkollisionswarnung und Querverkehrswarnung (nicht fertig - funktioniert derzeit nur mit Lenkrad/Controller, nicht mit Tastatursteuerung. Muss generell nochmal überarbeitet werden)
-- KI-Verkehr auf den Maps, die Städte abbilden (noch nicht fertig).
+- KI-Verkehr auf den Maps, die Städte abbilden (noch nicht fertig)
+- Assistenzsysteme für Cops (das ist für Online-Server relevant) (noch nicht alles implementiert)
 - viele weitere Kleinigkeiten und coole extras, diese liste ist nicht ganz vollständig.
 
 Dabei ist das ganze wie folgt umgesetzt:
@@ -152,7 +153,7 @@ Hier werden auch alle weiteren Komponenten initialisiert. Dann werden alle Assis
 Alle relevanten Einstellungen werden im settings_manager verwaltet. Wenn Einstellungen durch den Nutzer verändert werden, sollten diese auch hier synchronisiert werden. Das Ganze wird dann als "settings.json" gespeichert.
 
 Der Code ist möglichst modular gestaltet und ich habe versucht als Schnittstelle immer nur den Eventbus zu verwenden. Da es sich hierbei um eine große Anwendung handelt, ist es immer enorm wichtig, alle Abhängigkeiten und Wechselwirkungen zu bedenken. Alle Code-Änderungen sollten weiterhin perfekt modular gehalten werden, und sauber geschrieben sein. 
-Wie oben bereits erwähnt, sind nicht alle Funktionen bereits fertig implementiert. Lege den Fokus aber nur auf die Komponenten, die für die aktuelle Änderung relevant sind.
+Wie oben bereits erwähnt, sind nicht alle Funktionen bereits fertig implementiert. Lege den Fokus aber nur auf die Komponenten, die für die aktuelle Änderung relevant sind. Wenn dir etwas in anderen Dateien auffällt, gib immer beschied!
 
 
 

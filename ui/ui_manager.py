@@ -33,7 +33,7 @@ class UIManager:
         self.notification_time = time.perf_counter()
         self.collision_warning_level = 0
         self.collision_warning_color = pyinsim.ISB_DARK
-        self.hud_enabled = True # TODO get from settings
+        self.hud_enabled = False
         self.siren_active = False
         self.strobe_active = False
 
@@ -204,7 +204,7 @@ class UIManager:
 
     def update_hud(self):
         """Aktualisiert das Head-Up Display"""
-        if self.hud_enabled and self.on_track:
+        if self.settings.get('hud_active') and self.on_track:
             speed_text = f"{self.speed} km/h" if self.settings.get(
                 "unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
             rpm_text = f"{self.rpm} rpm" if self.rpm < self.redline - 1 else f"^1{self.rpm} rpm"
