@@ -2,6 +2,7 @@ from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 try:
     from misc.vjoy import vj, setJoy
+    raise ImportError("VJOY MODULE NOT FOUND. VJOY IS MANDATORY FOR AUTO-BRAKE WITH CONTROLLER.")
 except ImportError:
     print("ERROR LOADING VJOY. VJOY IS MANDATORY FOR AUTO-BRAKE WITH CONTROLLER.")
 

@@ -105,7 +105,6 @@ class LightAssists(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Adaptive-Licht-Logik"""
-        print(self.is_enabled())
         if not self.is_enabled():
             return {'adaptive_lights': False}
 
@@ -144,7 +143,6 @@ class LightAssists(AssistanceSystem):
             else:
                 self.event_bus.emit("send_light_command", {"light": 2, "on": True})
         # --- Sirenen-Management ---
-        print(self.is_siren_enabled_role)
         if self.is_siren_enabled_role:
             if self.strobe_active:
                 self.strobe_pattern += 1
