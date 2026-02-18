@@ -13,6 +13,31 @@ from pathlib import Path
 class Gearbox(AssistanceSystem):
     """Automatic Gearbox"""
 
+    # ─── Shift Tuning Constants ───────────────────────────────────────
+    # Upshift point = idle + rpm_range * (UPSHIFT_BASE + UPSHIFT_THROTTLE_SCALE * throttle)
+    #   Low throttle:  ~50% of rpm range
+    #   Full throttle: ~92% of rpm range
+    UPSHIFT_BASE = 0.50
+    UPSHIFT_THROTTLE_SCALE = 0.42
+
+    # Downshift point = idle + rpm_range * (DOWNSHIFT_BASE + DOWNSHIFT_THROTTLE_SCALE * throttle)
+    #   Low throttle:  ~15% of rpm range
+    #   Full throttle: ~35% of rpm range
+    DOWNSHIFT_BASE = 0.15
+    DOWNSHIFT_THROTTLE_SCALE = 0.20
+
+    # Cooldown times (seconds)
+    COOLDOWN_AFTER_UPSHIFT = 1.5    # before a downshift is allowed
+    COOLDOWN_AFTER_DOWNSHIFT = 0.8  # before an upshift is allowed
+    COOLDOWN_SAME_DIRECTION = 0.4   # before another shift in the same direction
+
+    # Throttle smoothing
+    THROTTLE_HISTORY_SIZE = 5
+
+    # Minimum throttle to consider upshifting
+    MIN_THROTTLE_FOR_UPSHIFT = 0.05
+    # ──────────────────────────────────────────────────────────────────
+
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("automatic_gearbox", event_bus, settings)
         self.gearbox_active = False
@@ -30,6 +55,7 @@ class Gearbox(AssistanceSystem):
         self.ignition_key = self.settings.get('user_ignition_key')
         self.last_throttle_values = []
         self.time_since_last_gear_change = time.perf_counter()
+        self.last_shift_direction = None  # 'up', 'down', or None
 
         # Listen for calibration request from menu
         self.event_bus.subscribe('gearbox_calibrate', self._on_calibration_requested)
@@ -47,20 +73,17 @@ class Gearbox(AssistanceSystem):
         calibration_file = Path("data/gearbox_calibrations.json")
         calibration_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Lade bestehende Daten oder erstelle leeres Dict
         calibrations = {}
         if calibration_file.exists():
             with open(calibration_file, 'r', encoding='utf-8') as f:
                 calibrations = json.load(f)
 
-        # Speichere Kalibrierung für aktuelles Fahrzeug
         calibrations[cname] = {
             'redline': self.redline,
             'idle': self.idle,
             'max_gears': self.max_gears
         }
 
-        # Schreibe zurück in Datei
         with open(calibration_file, 'w', encoding='utf-8') as f:
             json.dump(calibrations, f, indent=4, ensure_ascii=False)
 
@@ -77,7 +100,6 @@ class Gearbox(AssistanceSystem):
             with open(calibration_file, 'r', encoding='utf-8') as f:
                 calibrations = json.load(f)
 
-            # Lade Kalibrierung für aktuelles Fahrzeug, falls vorhanden
             if cname in calibrations:
                 car_data = calibrations[cname]
                 self.redline = car_data.get('redline', 6500)
@@ -88,7 +110,7 @@ class Gearbox(AssistanceSystem):
                 self.idle = 0
                 self.max_gears = 0
         except (json.JSONDecodeError, KeyError):
-            pass  # Bei Fehler Standard-Werte beibehalten
+            pass
 
     def _start_calibration(self):
         """Startet die Kalibrierung"""
@@ -109,12 +131,108 @@ class Gearbox(AssistanceSystem):
             msg += f' - {reason}'
         self.event_bus.emit("notification", {'notification': f'^1{msg}'})
 
+    def _get_smoothed_throttle(self, raw_throttle: float) -> float:
+        """Glättet den Gaspedalwert über die letzten N Werte"""
+        self.last_throttle_values.append(raw_throttle)
+        if len(self.last_throttle_values) > self.THROTTLE_HISTORY_SIZE:
+            self.last_throttle_values.pop(0)
+        return sum(self.last_throttle_values) / len(self.last_throttle_values)
+
+    def _can_shift(self, direction: str) -> bool:
+        """
+        Prüft ob ein Schaltvorgang erlaubt ist, basierend auf
+        richtungsabhängigen Cooldowns.
+
+        Nach einem Hochschalten ist ein Runterschalten erst nach
+        COOLDOWN_AFTER_UPSHIFT erlaubt (verhindert Gear Hunting).
+        """
+        elapsed = time.perf_counter() - self.time_since_last_gear_change
+
+        if self.last_shift_direction is None:
+            return elapsed > self.COOLDOWN_SAME_DIRECTION
+
+        # Gleiche Richtung wie letzter Schaltvorgang → kurzer Cooldown
+        if direction == self.last_shift_direction:
+            return elapsed > self.COOLDOWN_SAME_DIRECTION
+
+        # Gegenrichtung → längerer Cooldown gegen Hunting
+        if direction == 'down' and self.last_shift_direction == 'up':
+            return elapsed > self.COOLDOWN_AFTER_UPSHIFT
+        if direction == 'up' and self.last_shift_direction == 'down':
+            return elapsed > self.COOLDOWN_AFTER_DOWNSHIFT
+
+        return elapsed > self.COOLDOWN_SAME_DIRECTION
+
+    def _execute_shift(self, direction: str):
+        """Führt den Schaltvorgang aus und aktualisiert Tracking"""
+        shift_key = self.shift_up_key if direction == 'up' else self.shift_down_key
+        pyautogui.keyDown(self.clutch_key)
+        pyautogui.keyDown(shift_key)
+        pyautogui.keyUp(shift_key)
+        pyautogui.keyUp(self.clutch_key)
+        self.time_since_last_gear_change = time.perf_counter()
+        self.last_shift_direction = direction
+
+    def _process_shifting(self, own_vehicle: OwnVehicle):
+        """
+        Hauptlogik für das Schalten mit Hysterese.
+
+        Die Upshift-Schwelle liegt deutlich höher als die Downshift-Schwelle.
+        Dadurch entsteht eine "tote Zone" in der Mitte, in der kein
+        Schaltvorgang ausgelöst wird. Das verhindert Gear Hunting:
+
+            idle ─────[downshift]────────────[upshift]───── redline
+                          ↑                      ↑
+                     niedrig (15-35%)       hoch (50-92%)
+                     je nach Throttle       je nach Throttle
+
+        Zusätzlich sorgen richtungsabhängige Cooldowns dafür, dass nach
+        einem Hochschalten nicht sofort zurückgeschaltet wird.
+        """
+        current_gear = own_vehicle.gear
+        current_rpm = own_vehicle.rpm
+        current_brake = own_vehicle.brake
+        throttle = self._get_smoothed_throttle(own_vehicle.throttle)
+
+        rpm_range = self.redline - self.idle
+        if rpm_range <= 0:
+            return
+
+        # ── Upshift-Schwelle (gaspedalabhängig) ──
+        # Vollgas → schalte spät (nahe Redline)
+        # Wenig Gas → schalte früh (Komfort-Modus)
+        upshift_rpm = self.idle + rpm_range * (
+            self.UPSHIFT_BASE + self.UPSHIFT_THROTTLE_SCALE * throttle
+        )
+
+        # ── Downshift-Schwelle (gaspedalabhängig, deutlich tiefer) ──
+        # Die große Lücke zwischen Upshift und Downshift ist der
+        # Kern der Anti-Hunting-Strategie
+        downshift_rpm = self.idle + rpm_range * (
+            self.DOWNSHIFT_BASE + self.DOWNSHIFT_THROTTLE_SCALE * throttle
+        )
+
+        # ── Hochschalten ──
+        if (current_gear >= 2                           # mindestens im 1. Vorwärtsgang
+                and current_gear < self.max_gears       # nicht über den höchsten Gang
+                and throttle > self.MIN_THROTTLE_FOR_UPSHIFT
+                and current_rpm > upshift_rpm
+                and self._can_shift('up')):
+            self._execute_shift('up')
+
+        # ── Runterschalten ──
+        elif (current_gear > 2                          # nicht tiefer als 1. Gang
+                and current_rpm < downshift_rpm
+                and (throttle > 0.05 or current_brake > 0.05)
+                and self._can_shift('down')):
+            self._execute_shift('down')
+
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Auto-Gearbox-Logik"""
         if not self.is_enabled():
             return {'auto_gearbox_active': False}
 
-        # Kalibrierung laden wenn das Fahrzeug wechselt (ohne automatisch zu kalibrieren)
+        # Kalibrierung laden wenn das Fahrzeug wechselt
         if self.car != own_vehicle.data.cname:
             if not self.calibrating:
                 self.load_calibrations_for_cars(own_vehicle.data.cname)
@@ -162,38 +280,8 @@ class Gearbox(AssistanceSystem):
                 self.event_bus.emit("notification", {'notification': f'Reset possible in menu!'})
                 self.car = own_vehicle.data.cname
         else:
-            if time.perf_counter() - self.time_since_last_gear_change > 0.5:
-
-                current_gear = own_vehicle.gear
-
-                current_accelerator_pedal = own_vehicle.throttle
-                self.last_throttle_values.append(current_accelerator_pedal)
-                if len(self.last_throttle_values) > 3:
-                    self.last_throttle_values.pop(0)
-                average_throttle = sum(self.last_throttle_values) / len(self.last_throttle_values)
-                current_accelerator_pedal = average_throttle
-                current_brake_pedal = own_vehicle.brake
-                upper_bound = max(0.3, min(current_accelerator_pedal + 0.05, 0.95))
-                lower_bound = min(0.55, max(current_accelerator_pedal - 0.25, 0.15))
-                current_rpm = own_vehicle.rpm
-                size_of_gear_area = (self.redline - self.idle)
-
-                if current_gear < self.max_gears and current_accelerator_pedal > 0.3:
-                    if current_rpm > self.idle + size_of_gear_area * upper_bound:
-                        # Shift up
-                        pyautogui.keyDown(self.clutch_key)
-                        pyautogui.keyDown(self.shift_up_key)
-                        pyautogui.keyUp(self.shift_up_key)
-                        pyautogui.keyUp(self.clutch_key)
-                        self.time_since_last_gear_change = time.perf_counter()
-
-                if current_gear > 2 and (current_accelerator_pedal > 0.1 or current_brake_pedal > 0.05):
-                    if current_rpm < self.idle + size_of_gear_area * lower_bound:
-                        # Shift down
-                        pyautogui.keyDown(self.clutch_key)
-                        pyautogui.keyDown(self.shift_down_key)
-                        pyautogui.keyUp(self.shift_down_key)
-                        pyautogui.keyUp(self.clutch_key)
-                        self.time_since_last_gear_change = time.perf_counter()
+            # Nur schalten wenn kalibriert
+            if self.redline > 0 and self.idle > 0 and self.max_gears > 0:
+                self._process_shifting(own_vehicle)
 
         return {'auto_gearbox_active': True}
