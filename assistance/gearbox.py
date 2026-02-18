@@ -17,6 +17,7 @@ class Gearbox(AssistanceSystem):
         super().__init__("automatic_gearbox", event_bus, settings)
         self.gearbox_active = False
         self.calibrating = False
+        self.calibration_requested = False
         self.redline = 0
         self.idle = 0
         self.max_gears = 0
@@ -29,7 +30,14 @@ class Gearbox(AssistanceSystem):
         self.ignition_key = self.settings.get('user_ignition_key')
         self.last_throttle_values = []
         self.time_since_last_gear_change = time.perf_counter()
+
+        # Listen for calibration request from menu
+        self.event_bus.subscribe('gearbox_calibrate', self._on_calibration_requested)
         # TODO listen for gear key changes
+
+    def _on_calibration_requested(self, data=None):
+        """Wird vom Menü über den Event-Bus ausgelöst"""
+        self.calibration_requested = True
 
     def save_calibrations_for_cars(self, cname):
         """Speichert Kalibrierungen pro Autos"""
@@ -82,26 +90,51 @@ class Gearbox(AssistanceSystem):
         except (json.JSONDecodeError, KeyError):
             pass  # Bei Fehler Standard-Werte beibehalten
 
+    def _start_calibration(self):
+        """Startet die Kalibrierung"""
+        self.calibrating = True
+        self.calibration_step = 0
+        self.time_in_step = time.perf_counter()
+        self.event_bus.emit("notification", {'notification': 'Gearbox Calibration Started'})
+        self.event_bus.emit("notification", {'notification': '^1Keep the rpm at idle!'})
+        self.event_bus.emit("notification", {'notification': '^1Recording idle rpm!'})
+
+    def _abort_calibration(self, reason=""):
+        """Bricht die Kalibrierung ab"""
+        self.calibrating = False
+        self.calibration_step = 0
+        self.calibration_requested = False
+        msg = 'Gearbox Calibration Aborted'
+        if reason:
+            msg += f' - {reason}'
+        self.event_bus.emit("notification", {'notification': f'^1{msg}'})
+
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Auto-Gearbox-Logik"""
         if not self.is_enabled():
             return {'auto_gearbox_active': False}
 
-        if not self.calibrating and self.redline == 0 and self.idle == 0 and self.max_gears == 0:
-            self.load_calibrations_for_cars(own_vehicle.data.cname)
-            if self.redline != 0:
-                self.car = own_vehicle.data.cname
-
+        # Kalibrierung laden wenn das Fahrzeug wechselt (ohne automatisch zu kalibrieren)
         if self.car != own_vehicle.data.cname:
             if not self.calibrating:
-                self.calibrating = True
-                self.calibration_step = 0
-                self.event_bus.emit("notification", {'notification': 'Gearbox Calibration Started'})
-                self.event_bus.emit("notification", {'notification': '^1Keep the rpm at idle!'})
-                self.event_bus.emit("notification", {'notification': '^1Recording idle rpm!'})
-                self.time_in_step = time.perf_counter()
+                self.load_calibrations_for_cars(own_vehicle.data.cname)
+                self.car = own_vehicle.data.cname
+
+        # Kalibrierung über Menü angefragt
+        if self.calibration_requested and not self.calibrating:
+            self.calibration_requested = False
+            if own_vehicle.data.speed > 1:
+                self.event_bus.emit("notification",
+                                   {'notification': '^1Vehicle must be stationary to calibrate!'})
+            else:
+                self._start_calibration()
 
         if self.calibrating:
+            # Geschwindigkeits-Check während der Kalibrierung
+            if own_vehicle.data.speed > 1:
+                self._abort_calibration("Vehicle moved during calibration!")
+                return {'auto_gearbox_active': True}
+
             if self.calibration_step == 0 and time.perf_counter() - self.time_in_step > 12:
                 self.idle = round(own_vehicle.rpm)
                 self.event_bus.emit("notification", {'notification': f'Idle RPM set to {self.idle}'})
@@ -110,7 +143,6 @@ class Gearbox(AssistanceSystem):
                 self.event_bus.emit("notification", {'notification': f'^1Rev it to the redline!'})
                 self.event_bus.emit("notification", {'notification': '^1Recording redline!'})
 
-
             elif self.calibration_step == 1 and time.perf_counter() - self.time_in_step > 12:
                 self.redline = round(own_vehicle.rpm)
                 self.event_bus.emit("notification", {'notification': f'Redline RPM set to {self.redline}'})
@@ -118,7 +150,6 @@ class Gearbox(AssistanceSystem):
                 self.time_in_step = time.perf_counter()
                 self.event_bus.emit("notification", {'notification': f'^1Shift into the highest gear!'})
                 self.event_bus.emit("notification", {'notification': '^1Recording highest gear!'})
-
 
             elif self.calibration_step == 2 and time.perf_counter() - self.time_in_step > 12:
                 self.max_gears = own_vehicle.gear
@@ -129,7 +160,6 @@ class Gearbox(AssistanceSystem):
                 self.event_bus.emit("notification", {
                     'notification': f'Idle: {self.idle}, Redline: {self.redline}, Gears: {self.max_gears - 1}'})
                 self.event_bus.emit("notification", {'notification': f'Reset possible in menu!'})
-                self.calibrating = False
                 self.car = own_vehicle.data.cname
         else:
             if time.perf_counter() - self.time_since_last_gear_change > 0.5:
@@ -158,7 +188,7 @@ class Gearbox(AssistanceSystem):
                         self.time_since_last_gear_change = time.perf_counter()
 
                 if current_gear > 2 and (current_accelerator_pedal > 0.1 or current_brake_pedal > 0.05):
-                    if current_rpm < self.idle + size_of_gear_area * lower_bound :
+                    if current_rpm < self.idle + size_of_gear_area * lower_bound:
                         # Shift down
                         pyautogui.keyDown(self.clutch_key)
                         pyautogui.keyDown(self.shift_down_key)

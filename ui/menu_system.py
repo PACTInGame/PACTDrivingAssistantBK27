@@ -93,10 +93,6 @@ class MenuSystem:
         distance = self.settings.get('collision_warning_distance')
         distance_text = "^2Early" if distance == 0 else "^3Medium" if distance == 1 else "^1Late"
 
-        # AEB is commented out for now — not offered until all control modes are supported
-        # aeb = self.settings.get('automatic_emergency_brake')
-        # aeb_text = "^3Warn only" if aeb == 1 else "^2Warn & Brake" if aeb == 2 else "^1Off"
-
         buttons = [
             (21, 0, 70, 25, 5, self.translator.get("Driving Settings", self.set_language),
              pyinsim.ISB_LIGHT),
@@ -110,17 +106,14 @@ class MenuSystem:
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (26, 0, 90, 25, 5, agb + self.translator.get("Automatic Gearbox", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
+            (30, 25, 90, 15, 5, self.translator.get("Calibrate", self.set_language),
+             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (27, 0, 95, 25, 5, ah + self.translator.get("Auto Hold", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (28, 0, 100, 25, 5, al + self.translator.get("Adaptive Lights", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (29, 0, 105, 25, 5, hba + self.translator.get("High Beam Assist", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            # AEB commented out:
-            # (30, 0, 110, 25, 5, self.translator.get("Autom. Braking", self.set_language),
-            #  pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            # (31, 25, 110, 15, 5, aeb_text,
-            #  pyinsim.ISB_LIGHT | pyinsim.ISB_CLICK),
             (40, 0, 110, 25, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
@@ -406,11 +399,11 @@ class MenuSystem:
                 current = self.settings.get('high_beam_assist')
                 self.settings.set('high_beam_assist', not current)
                 self.open_driving_menu()
-            # AEB commented out:
-            # elif button_id == 29:
-            #     current = self.settings.get('automatic_emergency_brake')
-            #     self.settings.set('automatic_emergency_brake', (current + 1) % 3)
-            #     self.open_driving_menu()
+            elif button_id == 30:  # Calibrate Gearbox
+                self.ui_manager.event_bus.emit('gearbox_calibrate', {})
+                self.ui_manager.event_bus.emit(
+                    "notification", {'notification': '^3Gearbox calibration requested...'})
+                self.close_menu()
 
         # ── Parking Menu ──
         elif self.current_menu == 'parking':
