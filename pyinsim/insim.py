@@ -9,10 +9,8 @@
 import struct
 import math
 
-
-INSIM_VERSION = 8
+INSIM_VERSION = 10
 MAX_PLAYERS = 40
-
 
 # Enum for packet types
 ISP_NONE = 0
@@ -80,11 +78,6 @@ ISP_TTC = 61
 ISP_SLC = 62
 ISP_CSC = 63
 ISP_CIM = 64
-ISP_MAL = 65
-ISP_PLH = 66
-ISP_IPB = 67
-ISP_AIC = 68
-ISP_AII = 69
 
 # Relay packets.
 IRP_ARQ = 250
@@ -132,17 +125,14 @@ SMALL_STP = 5
 SMALL_RTP = 6
 SMALL_NLI = 7
 SMALL_ALC = 8
-SMALL_LCS = 9 #switches
-SMALL_LCL = 10 #lights
-SMALL_AII = 11  # get local AI info
-
+SMALL_LCS = 9  #switches
+SMALL_LCL = 10  #lights
 
 # Fourth byte of IS_TTC
 TTC_NONE = 0
 TTC_SEL = 1
 TTC_SEL_START = 2
 TTC_SEL_STOP = 3
-
 
 # Bit flags for ISI Flags
 ISF_RES_0 = 1
@@ -244,7 +234,7 @@ ISS_SHIFTU_NO_OPT = 64
 ISS_SHOW_2D = 128
 ISS_FRONT_END = 256
 ISS_MULTI = 512
-ISS_MPSPEEDUP =    1024
+ISS_MPSPEEDUP = 1024
 ISS_WINDOWED = 2048
 ISS_SOUND_MUTE = 4096
 ISS_VIEW_OVERRIDE = 8192
@@ -409,79 +399,42 @@ LFS_ROMANIAN = 36
 
 # Autocross Objects
 AXO_START_LIGHTS = 149
-MARSH_IS_CP = 252       # insim checkpoint
-MARSH_IS_AREA = 253     # insim circle
-MARSH_MARSHALL = 254    # restricted area
-MARSH_ROUTE	= 255       # route checker
+MARSH_IS_CP = 252  # insim checkpoint
+MARSH_IS_AREA = 253  # insim circle
+MARSH_MARSHALL = 254  # restricted area
+MARSH_ROUTE = 255  # route checker
 
 # SMALL_LCS Flags
-LCS_SET_SIGNALS = 1		# bit 0
-LCS_SET_FLASH = 2		# bit 1
-LCS_SET_HEADLIGHTS = 4	# bit 2
-LCS_SET_HORN = 8		# bit 3
-LCS_SET_SIREN = 0x10	# bit 4
+LCS_SET_SIGNALS = 1  # bit 0
+LCS_SET_FLASH = 2  # bit 1
+LCS_SET_HEADLIGHTS = 4  # bit 2
+LCS_SET_HORN = 8  # bit 3
+LCS_SET_SIREN = 0x10  # bit 4
 
-LCS_Mask_Signals = 0x0300       # bits  8-9   (Switches & 0x0300) - Signal    (0 off / 1 left / 2 right / 3 hazard)
-LCS_Mask_Flash = 0x0400         # bit   10    (Switches & 0x0400) - Flash
-LCS_Mask_Headlights = 0x0800    # bit	11    (Switches & 0x0800) - Headlights
-LCS_Mask_Horn = 0x070000        # bits  16-18 (Switches & 0x070000) - Horn    (0 off / 1 to 5 horn type)
-LCS_Mask_Siren = 0x300000       # bits  20-21 (Switches & 0x300000) - Siren   (0 off / 1 fast / 2 slow)
+LCS_Mask_Signals = 0x0300  # bits  8-9   (Switches & 0x0300) - Signal    (0 off / 1 left / 2 right / 3 hazard)
+LCS_Mask_Flash = 0x0400  # bit   10    (Switches & 0x0400) - Flash
+LCS_Mask_Headlights = 0x0800  # bit	11    (Switches & 0x0800) - Headlights
+LCS_Mask_Horn = 0x070000  # bits  16-18 (Switches & 0x070000) - Horn    (0 off / 1 to 5 horn type)
+LCS_Mask_Siren = 0x300000  # bits  20-21 (Switches & 0x300000) - Siren   (0 off / 1 fast / 2 slow)
 
 # SMALL_LCL Flags
-LCL_SET_SIGNALS = 1		# bit 0
-LCL_SPARE_2 = 2		# bit 1
-LCL_SET_LIGHTS = 4	# bit 2
-LCL_SPARE_8 = 8		# bit 3
-LCL_SET_FOG_REAR = 0x10	# bit 4
-LCL_SET_FOG_FRONT = 0x20	# bit 5
-LCL_SET_EXTRA = 0x40		# bit 6
+LCL_SET_SIGNALS = 1  # bit 0
+LCL_SPARE_2 = 2  # bit 1
+LCL_SET_LIGHTS = 4  # bit 2
+LCL_SPARE_8 = 8  # bit 3
+LCL_SET_FOG_REAR = 0x10  # bit 4
+LCL_SET_FOG_FRONT = 0x20  # bit 5
+LCL_SET_EXTRA = 0x40  # bit 6
 
-LCL_Mask_Signals = 0x00030000       # bits  16-17 (0 off / 1 left / 2 right / 3 hazard)
+LCL_Mask_Signals = 0x00030000  # bits  16-17 (0 off / 1 left / 2 right / 3 hazard)
 LCL_Mask_Right = 0x00020000
 LCL_Mask_Left = 0x00010000
-LCL_Mask_HighBeam = 0x000C0000        # bits  18-19 (0 off / 1 side / 2 low / 3 high)
+LCL_Mask_HighBeam = 0x000C0000  # bits  18-19 (0 off / 1 side / 2 low / 3 high)
 LCL_Mask_LowBeam = 0x00080000
 LCL_Mask_SideLight = 0x00040000
-LCL_Mask_FogRear = 0x00100000       # bit   20    (0 off / 1 on)
-LCL_Mask_FogFront = 0x00200000      # bit   21    (0 off / 1 on)
-LCL_Mask_Extra = 0x00400000         # bit   22    (0 off / 1 on)
-
-
-# AI Control Input Values
-CS_MSX = 0              # steer: 1 hard left / 32768 centre / 65535 hard right
-CS_THROTTLE = 1         # 0 to 65535
-CS_BRAKE = 2            # 0 to 65535
-CS_CHUP = 3             # hold shift up lever
-CS_CHDN = 4             # hold shift down lever
-CS_IGNITION = 5         # toggle
-CS_EXTRALIGHT = 6       # toggle
-CS_HEADLIGHTS = 7       # 1:off / 2:side / 3:low / 4:high
-CS_SIREN = 8            # hold siren - 1:fast / 2:slow
-CS_HORN = 9             # hold horn - 1 to 5
-CS_FLASH = 10           # hold flash - 1:on
-CS_CLUTCH = 11          # 0 to 65535
-CS_HANDBRAKE = 12       # 0 to 65535
-CS_INDICATORS = 13      # 1: cancel / 2: left / 3: right / 4: hazard
-CS_GEAR = 14            # for shifter (leave at 255 for sequential control)
-CS_LOOK = 15            # 0: none / 4: left / 5: left+ / 6: right / 7: right+
-CS_PITSPEED = 16        # toggle
-CS_TCDISABLE = 17       # toggle
-CS_FOGREAR = 18         # toggle
-CS_FOGFRONT = 19        # toggle
-
-# Special AI Control values
-CS_SEND_AI_INFO = 240
-CS_REPEAT_AI_INFO = 241
-CS_SET_HELP_FLAGS = 253
-CS_RESET_INPUTS = 254
-CS_STOP_CONTROL = 255
-
-# AI Flags
-AIFLAGS_IGNITION = 1    # detect if engine running
-AIFLAGS_CHUP = 4        # upshift lever currently held
-AIFLAGS_CHDN = 8        # downshift lever currently held
-
-AIC_MAX_INPUTS = 20
+LCL_Mask_FogRear = 0x00100000  # bit   20    (0 off / 1 on)
+LCL_Mask_FogFront = 0x00200000  # bit   21    (0 off / 1 on)
+LCL_Mask_Extra = 0x00400000  # bit   22    (0 off / 1 on)
 
 
 def _eat_null_chars(str_):
@@ -493,6 +446,7 @@ class IS_ISI(object):
 
     """
     pack_s = struct.Struct('4B2HBcH15sx15sx')
+
     def __init__(self, ReqI=0, UDPPort=0, Flags=0, Prefix=b'\x00', Interval=0, Admin=b'', IName=b'pyinsim'):
         """Create a new IS_ISI packet.
 
@@ -506,7 +460,7 @@ class IS_ISI(object):
             IName    : A short name for your program
 
         """
-        self.Size = 44
+        self.Size = 11
         self.Type = ISP_ISI
         self.ReqI = ReqI
         self.Zero = 0
@@ -517,25 +471,32 @@ class IS_ISI(object):
         self.Interval = Interval
         self.Admin = Admin
         self.IName = IName
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.UDPPort, self.Flags, self.InSimVer, self.Prefix, self.Interval, self.Admin, self.IName)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.UDPPort, self.Flags, self.InSimVer,
+                                self.Prefix, self.Interval, self.Admin, self.IName)
+
 
 class IS_VER(object):
     """VERsion.
 
     """
     pack_s = struct.Struct('4B7sx5sxBB')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.Version, self.Product, self.InSimVer, self.Spare = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.Version, self.Product, self.InSimVer, self.Spare = self.pack_s.unpack(
+            data)
         self.Product = _eat_null_chars(self.Product)
         self.Version = _eat_null_chars(self.Version)
         return self
+
 
 class IS_TINY(object):
     """General purpose packet.
 
     """
     pack_s = struct.Struct('4B')
+
     def __init__(self, ReqI=0, SubT=TINY_NONE):
         """Initialise a new IS_TINY packet.
 
@@ -544,21 +505,25 @@ class IS_TINY(object):
             SubT : subtype from ``TINY_*`` enumeration (e.g. ``TINY_REN``)
 
         """
-        self.Size = 4
+        self.Size = 1
         self.Type = ISP_TINY
         self.ReqI = ReqI
         self.SubT = SubT
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.SubT)
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.SubT = self.pack_s.unpack(data)
         return self
+
 
 class IS_SMALL(object):
     """General purpose packet.
 
     """
     pack_s = struct.Struct('4BI')
+
     def __init__(self, ReqI=0, SubT=SMALL_NONE, UVal=0):
         """Initialise a new IS_SMALL packet.
 
@@ -568,31 +533,36 @@ class IS_SMALL(object):
             UVal : value (e.g. for ``SMALL_SSP`` this would be the OutSim packet rate)
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_SMALL
         self.ReqI = ReqI
         self.SubT = SubT
         self.UVal = UVal
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.SubT, self.UVal)
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.SubT, self.UVal = self.pack_s.unpack(data)
         return self
+
 
 class IS_TTC(object):
     """General purpose 8 byte packet (Target To Connection)
 
     """
     pack_s = struct.Struct('8B')
+
     def __init__(self, ReqI=0, SubT=TTC_NONE, UCID=0, B1=0, B2=0, B3=0):
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_TTC
         self.ReqI = ReqI
-        self.SubT = SubT    # From TTC_*
-        self.UCID = UCID    # connection's unique id (0 = local)
-        self.B1 = B1        # B1, B2, B3 may be used in various ways depending on SubT
+        self.SubT = SubT  # From TTC_*
+        self.UCID = UCID  # connection's unique id (0 = local)
+        self.B1 = B1  # B1, B2, B3 may be used in various ways depending on SubT
         self.B2 = B2
         self.B3 = B3
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.SubT, self.UCID, self.B1, self.B2, self.B3)
 
@@ -603,16 +573,20 @@ class IS_STA(object):
 
     """
     pack_s = struct.Struct('4BfH10B5sx2B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.ReplaySpeed, self.Flags, self.InGameCam, self.ViewPLID, self.NumP, self.NumConns, self.NumFinished, self.RaceInProg, self.QualMins, self.RaceLaps, self.Spare2, self.Spare3, self.Track, self.Weather, self.Wind = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.ReplaySpeed, self.Flags, self.InGameCam, self.ViewPLID, self.NumP, self.NumConns, self.NumFinished, self.RaceInProg, self.QualMins, self.RaceLaps, self.Spare2, self.Spare3, self.Track, self.Weather, self.Wind = self.pack_s.unpack(
+            data)
         self.Track = _eat_null_chars(self.Track)
         return self
+
 
 class IS_SCH(object):
     """Single CHaracter
 
     """
     pack_s = struct.Struct('4Bc3B')
+
     def __init__(self, ReqI=0, CharB=b'\x00', Flags=0):
         """Initialise a new IS_SCH packet.
 
@@ -622,7 +596,7 @@ class IS_SCH(object):
             Flags : bit 0 : SHIFT / bit 1 : CTRL
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_SCH
         self.ReqI = ReqI
         self.Zero = 0
@@ -630,8 +604,11 @@ class IS_SCH(object):
         self.Flags = Flags
         self.Spare2 = 0
         self.Spare3 = 0
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.CharB, self.Flags, self.Spare2, self.Spare3)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.CharB, self.Flags, self.Spare2,
+                                self.Spare3)
+
 
 class IS_SFP(object):
     """State Flags Pack. Send this packet to set the game state. Other states
@@ -639,6 +616,7 @@ class IS_SFP(object):
 
     """
     pack_s = struct.Struct('4BH2B')
+
     def __init__(self, ReqI=0, Flag=0, OffOn=0):
         """Initialise a new IS_SFP packet.
 
@@ -648,21 +626,24 @@ class IS_SFP(object):
             OffOn : 0 = off / 1 = on
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_SFP
         self.ReqI = ReqI
         self.Zero = 0
         self.Flag = Flag
         self.OffOn = OffOn
         self.Sp3 = 0
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Flag, self.OffOn, self.Sp3)
+
 
 class IS_SCC(object):
     """Set Car Camera - Simplified camera packet (not SHIFT+U mode)
 
     """
     pack_s = struct.Struct('8B')
+
     def __init__(self, ReqI=0, ViewPLID=0, InGameCam=0):
         """Initialise a new IS_SCC packet.
 
@@ -672,7 +653,7 @@ class IS_SCC(object):
             InGameCam : InGameCam (as reported in StatePack)
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_SCC
         self.ReqI = ReqI
         self.Zero = 0
@@ -680,15 +661,19 @@ class IS_SCC(object):
         self.InGameCam = InGameCam
         self.Sp2 = 0
         self.Sp3 = 0
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.ViewPLID, self.InGameCam, self.Sp2, self.Sp3)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.ViewPLID, self.InGameCam, self.Sp2,
+                                self.Sp3)
+
 
 class IS_CPP(object):
     """Cam Pos Pack - Full camera packet (in car or SHIFT+U mode)
 
     """
     pack_s = struct.Struct('4B3i3H2Bf2H')
-    def __init__(self, ReqI=0, Pos=[0,0,0], H=0, P=0, R=0, ViewPLID=0, InGameCam=0, FOV=0.0, Time=0, Flags=0):
+
+    def __init__(self, ReqI=0, Pos=[0, 0, 0], H=0, P=0, R=0, ViewPLID=0, InGameCam=0, FOV=0.0, Time=0, Flags=0):
         """Initialise a new IS_CPP packet.
 
         Args:
@@ -704,7 +689,7 @@ class IS_CPP(object):
             Flags     : state flags from ``ISS_*``
 
         """
-        self.Size = 32
+        self.Size = 8
         self.Type = ISP_CPP
         self.ReqI = ReqI
         self.Zero = 0
@@ -717,11 +702,17 @@ class IS_CPP(object):
         self.FOV = FOV
         self.Time = Time
         self.Flags = Flags
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Pos[0], self.Pos[1], self.Pos[2], self.H, self.P, self.R, self.ViewPLID, self.InGameCam, self.FOV, self.Time, self.Flags)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Pos[0], self.Pos[1], self.Pos[2],
+                                self.H, self.P, self.R, self.ViewPLID, self.InGameCam, self.FOV, self.Time, self.Flags)
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.Pos[0], self.Pos[1], self.Pos[2], self.H, self.P, self.R, self.ViewPLID, self.InGameCam, self.FOV, self.Time, self.Flags = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.Pos[0], self.Pos[1], self.Pos[
+            2], self.H, self.P, self.R, self.ViewPLID, self.InGameCam, self.FOV, self.Time, self.Flags = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_ISM(object):
     """InSim Multi
@@ -730,38 +721,51 @@ class IS_ISM(object):
 
     """
     pack_s = struct.Struct('8B31sx')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.Host, self.Sp1, self.Sp2, self.Sp3, self.HName = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.Host, self.Sp1, self.Sp2, self.Sp3, self.HName = self.pack_s.unpack(
+            data)
         self.HName = _eat_null_chars(self.HName)
         return self
+
 
 class IS_MSO(object):
     """MSg Out - system messages and user messages
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.PLID, self.UserType, self.TextStart = self.pack_s.unpack(data[:8])
+        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.PLID, self.UserType, self.TextStart = self.pack_s.unpack(
+            data[:8])
+        self.Size = self.Size * 4
         self.Msg = struct.unpack('%dsx' % int(self.Size - 9), data[8:])[0]
         self.Msg = _eat_null_chars(self.Msg)
         return self
+
 
 class IS_III(object):
     """InsIm Info - /i message from user to host's InSim
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.PLID, self.Sp2, self.Sp3 = self.pack_s.unpack(data[:8])
+        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.PLID, self.Sp2, self.Sp3 = self.pack_s.unpack(
+            data[:8])
+        self.Size = self.Size * 4
+
         self.Msg = struct.unpack('%dsx' % self.Size - 9, data[8:])
         self.Msg = _eat_null_chars(self.Msg)
         return self
+
 
 class IS_MST(object):
     """MSg Type - send to LFS to type message or command
 
     """
     pack_s = struct.Struct('4B63sx')
+
     def __init__(self, ReqI=0, Msg=b''):
         """Initialise a new IS_MST packet.
 
@@ -770,19 +774,22 @@ class IS_MST(object):
             Msg  : message (64 characters)
 
         """
-        self.Size = 68
+        self.Size = 17
         self.Type = ISP_MST
         self.ReqI = ReqI
         self.Zero = 0
         self.Msg = Msg
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Msg)
+
 
 class IS_MTC(object):
     """Msg To Connection - hosts only - send to a connection or a player
 
     """
     pack_s = struct.Struct('8B')
+
     def __init__(self, ReqI=0, Sound=0, UCID=0, PLID=0, Msg=b''):
         """Initialise a new IS_MTC packet.
 
@@ -794,7 +801,7 @@ class IS_MTC(object):
             Msg  : Message (128 characters)
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_MTC
         self.ReqI = ReqI
         self.Sound = Sound
@@ -803,15 +810,19 @@ class IS_MTC(object):
         self.Sp2 = 0
         self.Sp3 = 0
         self.Msg = Msg
+
     def pack(self):
         TEXT_SIZE = len(self.Msg) + (4 - (len(self.Msg) % 4))
-        return self.pack_s.pack(self.Size + TEXT_SIZE, self.Type, self.ReqI, self.Sound, self.UCID, self.PLID, self.Sp2, self.Sp3) + struct.pack('%ds' % TEXT_SIZE, self.Msg)
+        return self.pack_s.pack(self.Size + TEXT_SIZE, self.Type, self.ReqI, self.Sound, self.UCID, self.PLID, self.Sp2,
+                                self.Sp3) + struct.pack('%ds' % TEXT_SIZE, self.Msg)
+
 
 class IS_MOD(object):
     """MODe : send to LFS to change screen mode
 
     """
     pack_s = struct.Struct('4B4i')
+
     def __init__(self, ReqI=0, Bits16=0, RR=0, Width=0, Height=0):
         """Initialise a new IS_MOD packet.
 
@@ -823,7 +834,7 @@ class IS_MOD(object):
             Height : 0 means go to window
 
         """
-        self.Size = 20
+        self.Size = 5
         self.Type = ISP_MOD
         self.ReqI = ReqI
         self.Zero = 0
@@ -831,82 +842,102 @@ class IS_MOD(object):
         self.RR = RR
         self.Width = Width
         self.Height = Height
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Bits16, self.RR, self.Width, self.Height)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Bits16, self.RR, self.Width,
+                                self.Height)
+
 
 class IS_VTN(object):
     """VoTe Notify
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Action, self.Spare2, self.Spare3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Action, self.Spare2, self.Spare3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_RST(object):
     """Race STart
 
     """
     pack_s = struct.Struct('8B5sx2B6H')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.RaceLaps, self.QualMins, self.NumP, self.Timing, self.Track, self.Weather, self.Wind, self.Flags, self.NumNodes, self.Finish, self.Split1, self.Split2, self.Split3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.RaceLaps, self.QualMins, self.NumP, self.Timing, self.Track, self.Weather, self.Wind, self.Flags, self.NumNodes, self.Finish, self.Split1, self.Split2, self.Split3 = self.pack_s.unpack(
+            data)
         self.Track = _eat_null_chars(self.Track)
         return self
+
 
 class IS_NCN(object):
     """New ConN
 
     """
     pack_s = struct.Struct('4B23sx23sx4B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.UCID, self.UName, self.PName, self.Admin, self.Total, self.Flags, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.UCID, self.UName, self.PName, self.Admin, self.Total, self.Flags, self.Sp3 = self.pack_s.unpack(
+            data)
         self.UName = _eat_null_chars(self.UName)
         self.PName = _eat_null_chars(self.PName)
         return self
+
 
 class IS_NCI(object):
     """New Connection Info
 
     """
     pack_s = struct.Struct('8B2I')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.UCID, self.Language, self.Sp1, self.Sp2, self.Sp3, self.UserID, self.IPAddress = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.UCID, self.Language, self.Sp1, self.Sp2, self.Sp3, self.UserID, self.IPAddress = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_SLC(object):
     """SeLected Car - sent when a connection selects a car (empty if no car)
 
     """
     pack_s = struct.Struct('4B4s')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.UCID, self.CName = self.pack_s.unpack(data)
         self.CName = _eat_null_chars(self.CName)
         return self
+
 
 class IS_CIM(object):
     """Conn Interface Mode
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.UCID, self.Mode, self.SubMode, self.SelType, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.UCID, self.Mode, self.SubMode, self.SelType, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
 
+
 # Mode identifiers
-CIM_NORMAL = 0          # not in a special mode
+CIM_NORMAL = 0  # not in a special mode
 CIM_OPTIONS = 1
 CIM_HOST_OPTIONS = 2
 CIM_GARAGE = 3
 CIM_CAR_SELECT = 4
 CIM_TRACK_SELECT = 5
-CIM_SHIFTU = 6          # free view mode
+CIM_SHIFTU = 6  # free view mode
 
 # Submode identifiers for CIM_NORMAL
 NRM_NORMAL = 0
-NRM_WHEEL_TEMPS = 1         # F9
-NRM_WHEEL_DAMAGE = 2        # F10
-NRM_LIVE_SETTINGS = 3       # F11
-NRM_PIT_INSTRUCTIONS = 4    # F12
+NRM_WHEEL_TEMPS = 1  # F9
+NRM_WHEEL_DAMAGE = 2  # F10
+NRM_LIVE_SETTINGS = 3  # F11
+NRM_PIT_INSTRUCTIONS = 4  # F12
 
 # SubMode identifiers for CIM_GARAGE
 GRG_INFO = 0
@@ -920,174 +951,221 @@ GRG_AERO = 7
 GRG_PASS = 8
 
 # SubMode identifiers for CIM_SHIFTU
-FVM_PLAIN = 0   # no buttons displayed
-FVM_BUTTONS = 1 # buttons displayed (not editing)
-FVM_EDIT = 2    # edit mode
+FVM_PLAIN = 0  # no buttons displayed
+FVM_BUTTONS = 1  # buttons displayed (not editing)
+FVM_EDIT = 2  # edit mode
+
 
 class IS_CNL(object):
     """ConN Leave
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.UCID, self.Reason, self.Total, self.Sp2, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.UCID, self.Reason, self.Total, self.Sp2, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_CPR(object):
     """Conn Player Rename
 
     """
     pack_s = struct.Struct('4B23sx7sx')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.UCID, self.PName, self.Plate = self.pack_s.unpack(data)
         self.PName = _eat_null_chars(self.PName)
         #self.Plate = _eat_null_chars(self.Plate) # No trailing zero on Plate.
         return self
 
+
 class IS_NPL(object):
     """New PLayer joining race (if PLID already exists, then leaving pits)
 
     """
     pack_s = struct.Struct('6BH23sx8s3sx15sx8Bi4B')
+
     def unpack(self, data):
-        self.Tyres = [0,0,0,0]
-        self.Size, self.Type, self.ReqI, self.PLID, self.UCID, self.PType, self.Flags, self.PName, self.Plate, self.CName, self.SName, self.Tyres[0], self.Tyres[1], self.Tyres[2], self.Tyres[3], self.H_Mass, self.H_TRes, self.Model, self.Pass, self.Spare, self.SetF, self.NumP, self.Sp2, self.Sp3 = self.pack_s.unpack(data)
+        self.Tyres = [0, 0, 0, 0]
+        self.Size, self.Type, self.ReqI, self.PLID, self.UCID, self.PType, self.Flags, self.PName, self.Plate, self.CName, self.SName, \
+            self.Tyres[0], self.Tyres[1], self.Tyres[2], self.Tyres[
+            3], self.H_Mass, self.H_TRes, self.Model, self.Pass, self.Spare, self.SetF, self.NumP, self.Sp2, self.Sp3 = self.pack_s.unpack(
+            data)
         self.PName = _eat_null_chars(self.PName)
         #self.Plate = _eat_null_chars(self.Plate) # No trailing zero
         self.CName = _eat_null_chars(self.CName)
         self.SName = _eat_null_chars(self.SName)
         return self
 
+
 class IS_PLP(object):
     """PLayer Pits (go to settings - stays in player list)
 
     """
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID = self.pack_s.unpack(data)
         return self
+
 
 class IS_PLL(object):
     """PLayer Leave race (spectate - removed from player list)
 
     """
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID = self.pack_s.unpack(data)
         return self
+
 
 class IS_LAP(object):
     """LAP time
 
     """
     pack_s = struct.Struct('4B2I2H4B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.LTime, self.ETime, self.LapsDone, self.Flags, self.Sp0, self.Penalty, self.NumStops, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.LTime, self.ETime, self.LapsDone, self.Flags, self.Sp0, self.Penalty, self.NumStops, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_SPX(object):
     """SPlit X time
 
     """
     pack_s = struct.Struct('4B2I4B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.STime, self.ETime, self.Split, self.Penalty, self.NumStops, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.STime, self.ETime, self.Split, self.Penalty, self.NumStops, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_PIT(object):
     """PIT stop (stop at pit garage)
 
     """
     pack_s = struct.Struct('4B2H8B2I')
+
     def unpack(self, data):
         self.Tyres = [0, 0, 0, 0]
-        self.Size, self.Type, self.ReqI, self.PLID, self.LapsDone, self.Flags, self.Sp0, self.Penalty, self.NumStops, self.Sp3, self.Tyres[0], self.Tyres[1], self.Tyres[2], self.Tyres[3], self.Work, self.Spare = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.LapsDone, self.Flags, self.Sp0, self.Penalty, self.NumStops, self.Sp3, \
+            self.Tyres[0], self.Tyres[1], self.Tyres[2], self.Tyres[3], self.Work, self.Spare = self.pack_s.unpack(data)
         return self
+
 
 class IS_PSF(object):
     """Pit Stop Finished
 
     """
     pack_s = struct.Struct('4B2I')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID, self.STime, self.Spare = self.pack_s.unpack(data)
         return self
+
 
 class IS_PLA(object):
     """Pit LAne
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID, self.Fact, self.Sp1, self.Sp2, self.Sp3 = self.pack_s.unpack(data)
         return self
+
 
 class IS_CCH(object):
     """Camera CHange
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID, self.Camera, self.Sp1, self.Sp2, self.Sp3 = self.pack_s.unpack(data)
         return self
+
 
 class IS_PEN(object):
     """PENalty (given or cleared)
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.OldPen, self.NewPen, self.Reason, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.OldPen, self.NewPen, self.Reason, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_TOC(object):
     """Take Over Car
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.OldUCID, self.NewUCID, self.Sp2, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.OldUCID, self.NewUCID, self.Sp2, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_FLG(object):
     """FLaG (yellow or blue flag changed)
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.OffOn, self.Flag, self.CarBehind, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.OffOn, self.Flag, self.CarBehind, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_PFL(object):
     """Player FLags (help flags changed)
 
     """
     pack_s = struct.Struct('4B2H')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID, self.Flags, self.Spare = self.pack_s.unpack(data)
         return self
+
 
 class IS_FIN(object):
     """FINished race notification (not a final result - use :class:`IS_RES`)
 
     """
     pack_s = struct.Struct('4B2I4B2H')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.TTime, self.BTime, self.SpA, self.NumStops, self.Confirm, self.SpB, self.LapsDone, self.Flags = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.TTime, self.BTime, self.SpA, self.NumStops, self.Confirm, self.SpB, self.LapsDone, self.Flags = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_RES(object):
     """RESult (qualify or confirmed finish)
 
     """
     pack_s = struct.Struct('4B23sx23sx7sx3sx2I4B2H2BH')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.UName, self.PName, self.Plate, self.CName, self.TTime, self.BTime, self.SpA, self.NumStops, self.Confirm, self.SpB, self.LapsDone, self.Flags, self.ResultNum, self.NumRes, self.PSeconds = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.UName, self.PName, self.Plate, self.CName, self.TTime, self.BTime, self.SpA, self.NumStops, self.Confirm, self.SpB, self.LapsDone, self.Flags, self.ResultNum, self.NumRes, self.PSeconds = self.pack_s.unpack(
+            data)
         self.UName = _eat_null_chars(self.UName)
         self.PName = _eat_null_chars(self.PName)
-        self.Plate = _eat_null_chars(self.Plate) # No trailing zero
+        self.Plate = _eat_null_chars(self.Plate)  # No trailing zero
         self.CName = _eat_null_chars(self.CName)
         return self
+
 
 class IS_REO(object):
     """REOrder (when race restarts after qualifying). The NumP value
@@ -1095,6 +1173,7 @@ class IS_REO(object):
 
     """
     pack_s = struct.Struct('4B')
+
     def __init__(self, ReqI=0, PLID=[]):
         """Initialise a new IS_REO packet.
 
@@ -1103,68 +1182,81 @@ class IS_REO(object):
             PLID : all PLIDs in new order
 
         """
-        self.Size = 4 + MAX_PLAYERS
+        self.Size = 1 + MAX_PLAYERS
         self.Type = ISP_REO
         self.ReqI = ReqI
         self.NumP = len(PLID)
         self.PLID = PLID
+
     def pack(self):
         plid = ''.join([chr(p) for p in self.PLID]).ljust(MAX_PLAYERS, '\x00')
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, len(self.PLID)) + plid
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.NumP = self.pack_s.unpack(data[:4])
-        self.PLID = [ord(data[4+i]) for i in range(self.NumP)]
+        self.PLID = [ord(data[4 + i]) for i in range(self.NumP)]
         return self
+
 
 class IS_NLP(object):
     """Node and Lap Packet - variable size
 
     """
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.NumP = self.pack_s.unpack(data[:4])
         data = data[4:]
         self.Info = [NodeLap(data, i) for i in range(0, self.NumP * 6, 6)]
         return self
 
+
 class NodeLap(object):
     """Car info in 6 bytes - there is an array of these in the :class:`IS_NLP`
 
     """
     pack_s = struct.Struct('2H2B')
+
     def __init__(self, data, index):
         """Initialise a new NodeLap sub-packet.
 
         """
-        self.Node, self.Lap, self.PLID, self.Position = self.pack_s.unpack(data[index:index+6])
+        self.Node, self.Lap, self.PLID, self.Position = self.pack_s.unpack(data[index:index + 6])
+
 
 class IS_MCI(object):
     """Multi Car Info - if more than 8 in race then more than one of these is sent
 
     """
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.NumC = self.pack_s.unpack(data[:4])
         data = data[4:]
         self.Info = [CompCar(data, i) for i in range(0, self.NumC * 28, 28)]
         return self
 
+
 class CompCar(object):
     """Car info in 28 bytes - there is an array of these in the :class:`IS_MCI`
 
     """
     pack_s = struct.Struct('2H4B3i3Hh')
+
     def __init__(self, data, index):
         """Initialise a new CompCar sub-packet.
 
         """
-        self.Node, self.Lap, self.PLID, self.Position, self.Info, self.Sp3, self.X, self.Y, self.Z, self.Speed, self.Direction, self.Heading, self.AngVel = self.pack_s.unpack(data[index:index+28])
+        self.Node, self.Lap, self.PLID, self.Position, self.Info, self.Sp3, self.X, self.Y, self.Z, self.Speed, self.Direction, self.Heading, self.AngVel = self.pack_s.unpack(
+            data[index:index + 28])
+
 
 class IS_MSX(object):
     """MSg eXtended - like ``IS_MST`` but longer (not for commands)
 
     """
     pack_s = struct.Struct('4B95sx')
+
     def __init__(self, ReqI=0, Msg=b''):
         """Initialise a new IS_MSX packet.
 
@@ -1173,19 +1265,22 @@ class IS_MSX(object):
             Msg  : last byte must be zero
 
         """
-        self.Size = 100
+        self.Size = 25
         self.Type = ISP_MSX
         self.ReqI = ReqI
         self.Zero = 0
         self.Msg = Msg
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.Msg)
+
 
 class IS_MSL(object):
     """MSg Local - message to appear on local computer only
 
     """
     pack_s = struct.Struct('4B127sx')
+
     def __init__(self, ReqI=0, Sound=0, Msg=b''):
         """Initialise a new IS_MSL packet.
 
@@ -1195,28 +1290,33 @@ class IS_MSL(object):
             Msg   : Message
 
         """
-        self.Size = 132
+        self.Size = 33
         self.Type = ISP_MSL
         self.ReqI = ReqI
         self.Sound = Sound
         self.Msg = Msg
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Sound, self.Msg)
+
 
 class IS_CRS(object):
     """Car ReSet
 
     """
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID = self.pack_s.unpack(data)
         return self
+
 
 class IS_BFN(object):
     """Button FunctioN - delete buttons / receive button requests
 
     """
     pack_s = struct.Struct('8B')
+
     def __init__(self, ReqI=0, SubT=0, UCID=0, ClickID=0, MaxClick=0, Inst=0):
         """Initialise a new IS_BFN packet.
 
@@ -1229,7 +1329,7 @@ class IS_BFN(object):
             Inst     : used internally by InSim
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_BFN
         self.ReqI = ReqI
         self.SubT = SubT
@@ -1237,36 +1337,47 @@ class IS_BFN(object):
         self.ClickID = ClickID
         self.MaxClick = MaxClick
         self.Inst = Inst
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.SubT, self.UCID, self.ClickID, self.MaxClick, self.Inst)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.SubT, self.UCID, self.ClickID, self.MaxClick,
+                                self.Inst)
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.SubT, self.UCID, self.ClickID, self.MaxClick, self.Inst = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.SubT, self.UCID, self.ClickID, self.MaxClick, self.Inst = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_AXI(object):
     """AutoX Info
 
     """
     pack_s = struct.Struct('6BH31sx')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.AXStart, self.NumCP, self.NumO, self.LName = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.AXStart, self.NumCP, self.NumO, self.LName = self.pack_s.unpack(
+            data)
         self.LName = _eat_null_chars(self.LName)
         return self
+
 
 class IS_AXO(object):
     """AutoX Object
 
     """
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.PLID = self.pack_s.unpack(data)
         return self
+
 
 class IS_BTN(object):
     """BuTtoN - button header - followed by 0 to 240 characters
 
     """
     pack_s = struct.Struct('12B')
+
     def __init__(self, ReqI=0, UCID=0, ClickID=0, Inst=0, BStyle=0, TypeIn=0, L=0, T=0, W=0, H=0, Text=b''):
         """Initialise a new IS_BTN packet.
 
@@ -1284,7 +1395,7 @@ class IS_BTN(object):
             Text    : 0 to 240 characters of text
 
         """
-        self.Size = 12
+        self.Size = 3
         self.Type = ISP_BTN
         self.ReqI = ReqI
         self.UCID = UCID
@@ -1297,34 +1408,46 @@ class IS_BTN(object):
         self.W = W
         self.H = H
         self.Text = Text
+
     def pack(self):
         TEXT_SIZE = int(math.ceil(len(self.Text) / 4.0)) * 4
-        return self.pack_s.pack(self.Size + TEXT_SIZE, self.Type, self.ReqI, self.UCID, self.ClickID, self.Inst, self.BStyle, self.TypeIn, self.L, self.T, self.W, self.H) + struct.pack('%ds' % TEXT_SIZE, self.Text)
+        total_size = self.Size + (TEXT_SIZE // 4)  # self.Size is already /4, add text size /4
+        return self.pack_s.pack(total_size, self.Type, self.ReqI, self.UCID, self.ClickID, self.Inst,
+                                self.BStyle, self.TypeIn, self.L, self.T, self.W, self.H) + struct.pack(
+            '%ds' % TEXT_SIZE, self.Text)
+
 
 class IS_BTC(object):
     """BuTton Click - sent back when user clicks a button
 
     """
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.UCID, self.ClickID, self.Inst, self.CFlags, self.Sp3 = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.UCID, self.ClickID, self.Inst, self.CFlags, self.Sp3 = self.pack_s.unpack(
+            data)
         return self
+
 
 class IS_BTT(object):
     """BuTton Type - sent back when user types into a text entry button
 
     """
     pack_s = struct.Struct('8B95sx')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.UCID, self.ClickID, self.Inst, self.TypeIn, self.Sp3, self.Text = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.UCID, self.ClickID, self.Inst, self.TypeIn, self.Sp3, self.Text = self.pack_s.unpack(
+            data)
         self.Text = _eat_null_chars(self.Text)
         return self
+
 
 class IS_RIP(object):
     """Replay Information Packet
 
     """
     pack_s = struct.Struct('8B2H63sx')
+
     def __init__(self, ReqI=0, Error=0, MPR=0, Paused=0, Options=0, CTime=0, TTime=0, RName=b''):
         """Initialise a new IS_RIP packet.
 
@@ -1339,7 +1462,7 @@ class IS_RIP(object):
             RName   : zero or replay name: last byte must be zero
 
         """
-        self.Size = 76
+        self.Size = 19
         self.Type = ISP_RIP
         self.ReqI = ReqI
         self.Error = Error
@@ -1350,18 +1473,24 @@ class IS_RIP(object):
         self.CTime = CTime
         self.TTime = TTime
         self.RName = RName
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Error, self.MPR, self.Paused, self.Options, self.Sp3, self.CTime, self.TTime, self.RName)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Error, self.MPR, self.Paused, self.Options,
+                                self.Sp3, self.CTime, self.TTime, self.RName)
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Error, self.MPR, self.Paused, self.Options, self.Sp3, self.CTime, self.TTime, self.RName = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Error, self.MPR, self.Paused, self.Options, self.Sp3, self.CTime, self.TTime, self.RName = self.pack_s.unpack(
+            data)
         self.RName = _eat_null_chars(self.RName)
         return self
+
 
 class IS_SSH(object):
     """ScreenSHot
 
     """
     pack_s = struct.Struct('8B31sx')
+
     def __init__(self, ReqI=0, Error=0, BMP=b''):
         """Initialise a new IS_SSH packet.
 
@@ -1371,7 +1500,7 @@ class IS_SSH(object):
             BMP   : name of screenshot file: last byte must be zero
 
         """
-        self.Size = 40
+        self.Size = 10
         self.Type = ISP_SSH
         self.ReqI = ReqI
         self.Error = Error
@@ -1380,31 +1509,41 @@ class IS_SSH(object):
         self.Sp2 = 0
         self.Sp3 = 0
         self.BMP = BMP
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Error, self.Sp0, self.Sp1, self.Sp2, self.Sp3, self.BMP)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Error, self.Sp0, self.Sp1, self.Sp2, self.Sp3,
+                                self.BMP)
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Error, self.Sp0, self.Sp1, self.Sp2, self.Sp3, self.BMP = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Error, self.Sp0, self.Sp1, self.Sp2, self.Sp3, self.BMP = self.pack_s.unpack(
+            data)
         self.BMP = _eat_null_chars(self.BMP)
         return self
+
 
 class CarContact(object):
     """Info about one car in a contact - two of these in the IS_CON
 
     """
     pack_s = struct.Struct('3Bb6b2B2h')
+
     def __init__(self, data):
-        self.PLID, self.Info, self.Sp2, self.Steer, self.ThrBrk, self.CluHan, self.GearSp, self.Speed, self.Direction, self.Heading, self.AccelF, self.AccelR, self.X, self.Y = self.pack_s.unpack(data)
+        self.PLID, self.Info, self.Sp2, self.Steer, self.ThrBrk, self.CluHan, self.GearSp, self.Speed, self.Direction, self.Heading, self.AccelF, self.AccelR, self.X, self.Y = self.pack_s.unpack(
+            data)
+
 
 class IS_CON(object):
     """CONtact - between two cars (A and B are sorted by PLID)
 
     """
     pack_s = struct.Struct('4B2H')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.Zero, self.SpClose, self.Time = self.pack_s.unpack(data[:8])
         self.A = CarContact(data[8:24])
         self.B = CarContact(data[24:])
         return self
+
 
 class CarContOBJ(object):
     def __init__(self):
@@ -1415,53 +1554,77 @@ class CarContOBJ(object):
         self.X = 0
         self.Y = 0
 
+
 OBH_LAYOUT = 1
 OBH_CAN_MOVE = 2
 OBH_WAS_MOVING = 4
 OBH_ON_SPOT = 8
 
+
 class IS_OBH(object):
-    pack_s = struct.Struct('4B2H4B2h2h4B')
+    # Old: '4B2H4B2h2h4B'
+    # New: Size(B) Type(B) ReqI(B) PLID(B) SpClose(H) SpW(H) Time(I) + CarContOBJ fields + X(h) Y(h) Zbyte(B) Sp1(B) Index(B) OBHFlags(B)
+    pack_s = struct.Struct('4B2HI4B2h2h4B')  # Changed 2H to HI (added SpW as H, Time is now I instead of in CarContOBJ)
+
     def unpack(self, data):
         self.C = CarContOBJ()
-        self.Size, self.Type, self.ReqI, self.PLID, self.SpClose, self.Time, self.C.Direction, self.C.Heading, self.C.Speed, self.C.Zbyte, self.C.X, self.C.Y, self.X, self.Y, self.Zbyte, self.Sp1, self.Index, self.OBHFlags = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.SpClose, self.SpW, self.Time, \
+        self.C.Direction, self.C.Heading, self.C.Speed, self.C.Zbyte, \
+        self.C.X, self.C.Y, \
+        self.X, self.Y, self.Zbyte, self.Sp1, self.Index, self.OBHFlags = self.pack_s.unpack(data)
         return self
 
+
 class IS_HLV(object):
-    pack_s = struct.Struct('6BH4B2h')
+    # Old: '6BH4B2h'
+    # New: Size(B) Type(B) ReqI(B) PLID(B) HLVC(B) Sp1(B) SpW(H) Time(I) + CarContOBJ fields
+    pack_s = struct.Struct('6BHI4B2h')  # Added SpW(H), Time changed from H to I
+
     def unpack(self, data):
         self.C = CarContOBJ()
-        self.Size, self.Type, self.ReqI, self.PLID, self.HLVC, self.Sp1, self.Time, self.C.Direction, self.C.Heading, self.C.Speed, self.C.Zbyte, self.C.X, self.C.Y = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.HLVC, self.Sp1, self.SpW, self.Time, \
+        self.C.Direction, self.C.Heading, self.C.Speed, self.C.Zbyte, \
+        self.C.X, self.C.Y = self.pack_s.unpack(data)
         return self
+
 
 class IS_UCO(object):
     pack_s = struct.Struct('8BI4B2h')
+
     def unpack(self, data):
-        self.C = CarContOBJ() # 4B2h
-        self.Size, self.Type, self.ReqI, self.PLID, self.Sp0, self.UCOAction, self.Sp2, self.Sp3, self.Time, self.C.Direction, self.C.Heading, self.C.Speed, self.C.Sp2, self.C.X, self.C.Y = self.pack_s.unpack(data[:20])
+        self.C = CarContOBJ()  # 4B2h
+        self.Size, self.Type, self.ReqI, self.PLID, self.Sp0, self.UCOAction, self.Sp2, self.Sp3, self.Time, self.C.Direction, self.C.Heading, self.C.Speed, self.C.Sp2, self.C.X, self.C.Y = self.pack_s.unpack(
+            data[:20])
         self.Info = ObjectInfo(data[20:], 0)
         return self
+
 
 UCO_CIRCLE_ENTER = 0
 UCO_CIRCLE_LEAVE = 1
 UCO_CP_FWD = 2
 UCO_CP_REV = 3
 
+
 class IS_CSC(object):
     pack_s = struct.Struct('8BI4B2h')
+
     def unpack(self, data):
-        self.C = CarContOBJ() # 4B2h
-        self.Size, self.Type, self.ReqI, self.PLID, self.Sp0, self.CSCAction, self.Sp2, self.Sp3, self.Time, self.C.Direction, self.C.Heading, self.C.Speed, self.C.Sp2, self.C.X, self.C.Y = self.pack_s.unpack(data)
+        self.C = CarContOBJ()  # 4B2h
+        self.Size, self.Type, self.ReqI, self.PLID, self.Sp0, self.CSCAction, self.Sp2, self.Sp3, self.Time, self.C.Direction, self.C.Heading, self.C.Speed, self.C.Sp2, self.C.X, self.C.Y = self.pack_s.unpack(
+            data)
         return self
+
 
 CSC_STOP = 0
 CSC_START = 1
+
 
 class IS_OCO(object):
     """ Object COntrol
 
     """
     pack_s = struct.Struct('8B')
+
     def __init__(self, OCOAction=0, Index=0, Identifier=0, Data=0):
         """ Initialise a new IS_OCO packet
         Args:
@@ -1481,7 +1644,7 @@ class IS_OCO(object):
                         bit 3 (8) : green
 
         """
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_OCO
         self.ReqI = 0
         self.Zero = 0
@@ -1489,27 +1652,34 @@ class IS_OCO(object):
         self.Index = Index
         self.Identifier = Identifier
         self.Data = Data
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.OCOAction, self.Index, self.Identifier, self.Data)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.OCOAction, self.Index, self.Identifier,
+                                self.Data)
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.OCOAction, self.Index, self.Identifier, self.Data = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.Zero, self.OCOAction, self.Index, self.Identifier, self.Data = self.pack_s.unpack(
+            data)
         return self
 
-OCO_ZERO = 0            # reserved
+
+OCO_ZERO = 0  # reserved
 OCO_1 = 1
 OCO_2 = 2
 OCO_3 = 3
-OCO_LIGHTS_RESET = 4    # give up control of all lights
-OCO_LIGHTS_SET = 5      # use Data byte to set the bulbs
-OCO_LIGHTS_UNSET = 6    # give up control of the specified lights
+OCO_LIGHTS_RESET = 4  # give up control of all lights
+OCO_LIGHTS_SET = 5  # use Data byte to set the bulbs
+OCO_LIGHTS_UNSET = 6  # give up control of the specified lights
 
-OCO_INDEX_MAIN = 240    # special value to override the main start light system
+OCO_INDEX_MAIN = 240  # special value to override the main start light system
 
 
 class ObjectInfo(object):
     pack_s = struct.Struct('2h4B')
+
     def __init__(self, data, index):
-        self.X, self.Y, self.Zbyte, self.Flags, self.Index, self.Heading = self.pack_s.unpack(data[index:index+8])
+        self.X, self.Y, self.Zbyte, self.Flags, self.Index, self.Heading = self.pack_s.unpack(data[index:index + 8])
+
 
 # PMOAction
 PMO_LOADING_FILE = 0
@@ -1528,10 +1698,12 @@ PMO_MOVE_MODIFY = 2
 PMO_SELECTION_REAL = 4
 PMO_AVOID_CHECK = 8
 
+
 class IS_AXM(object):
     pack_s = struct.Struct('8B')
+
     def __init__(self, ReqI=0, NumO=0, UCID=0, PMOAction=0, PMOFlags=0, Sp3=0, Info=[]):
-        self.Size = 8
+        self.Size = 2
         self.Type = ISP_OCO
         self.ReqI = ReqI
         self.NumO = NumO
@@ -1540,24 +1712,32 @@ class IS_AXM(object):
         self.PMOFlags = PMOFlags
         self.Sp3 = Sp3
         self.Info = Info
+
     def pack(self):
-        data = self.pack_s.pack(self.Size + (self.NumO * 8), self.Type, self.ReqI, self.NumO, self.UCID, self.PMOAction, self.PMOFlags, self.Sp3)
+        data = self.pack_s.pack(self.Size + (self.NumO * 8), self.Type, self.ReqI, self.NumO, self.UCID, self.PMOAction,
+                                self.PMOFlags, self.Sp3)
         for i in range(self.NumO):
             data = data + self.Info[i].pack()
         return data
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.NumO, self.UCID, self.PMOAction, self.PMOFlags, self.Sp3 = self.pack_s.unpack(data[:8])
+        self.Size, self.Type, self.ReqI, self.NumO, self.UCID, self.PMOAction, self.PMOFlags, self.Sp3 = self.pack_s.unpack(
+            data[:8])
         data = data[8:]
         self.Info = [ObjectInfo(data, i) for i in range(0, self.NumO * 8, 8)]
         return self
 
+
 class IS_ACR(object):
     pack_s = struct.Struct('8B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Admin, self.Result, self.Sp3 = self.pack_s.unpack(data[:8])
+        self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Admin, self.Result, self.Sp3 = self.pack_s.unpack(
+            data[:8])
         self.Text = struct.unpack('%dsx' % (self.Size - 9), data[8:])[0]
         self.Text = _eat_null_chars(self.Text)
         return self
+
 
 CAR_NONE = 0
 CAR_XFG = 1
@@ -1582,10 +1762,12 @@ CAR_BF1 = 0x40000
 CAR_FBM = 0x80000
 CAR_ALL = 0xffffffff
 
+
 class IS_PLC(object):
     pack_s = struct.Struct('8BI')
+
     def __init__(self, UCID=0, Cars=CAR_NONE):
-        self.Size = 12
+        self.Size = 3
         self.Type = ISP_PLC
         self.ReqI = 0
         self.Zero = 0
@@ -1594,8 +1776,11 @@ class IS_PLC(object):
         self.Sp2 = 0
         self.Sp3 = 0
         self.Cars = Cars
+
     def pack(self):
-        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Sp1, self.Sp2, self.Sp3, self.Cars)
+        return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Sp1, self.Sp2, self.Sp3,
+                                self.Cars)
+
 
 JRR_REJECT = 0
 JRR_SPAWN = 1
@@ -1606,226 +1791,279 @@ JRR_RESET_NO_REPAIR = 5
 JRR_6 = 6
 JRR_7 = 7
 
+
 class IS_JRR(object):
     pack_s = struct.Struct('8B2h4B')
+
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.PLID, self.UCID, self.JRRAction, self.Sp2, self.Sp3, self.X, self.Y, self.Zbyte, self.Flags, self.Index, self.Heading = self.pack_s.unpack(data)
+        self.Size, self.Type, self.ReqI, self.PLID, self.UCID, self.JRRAction, self.Sp2, self.Sp3, self.X, self.Y, self.Zbyte, self.Flags, self.Index, self.Heading = self.pack_s.unpack(
+            data)
         return self
+
 
 class CarHCP(object):
     pack_s = struct.Struct('2B')
+
     def __init__(self, H_Mass=0, H_TRes=0):
         self.H_Mass = H_Mass
         self.H_TRes = H_TRes
+
     def pack(self):
         return self.pack_s.pack(self.H_Mass, self.H_TRes)
 
+
 class IS_HCP(object):
     pack_s = struct.Struct('4B')
+
     def __init__(self, ReqI=0, Zero=0, Info=[]):
-        self.Size = 68
+        self.Size = 17
         self.Type = ISP_HCP
         self.ReqI = ReqI
         self.Zero = Zero
         self.Info = Info
+
     def pack(self):
         data = self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero)
         return data + ''.join([info.pack() for info in self.Info])
+
 
 # InSim Relay
 
 # Host flags
 HOS_SPECPASS = 1
 HOS_LICENSED = 2
-HOS_S1       = 4
-HOS_S2       = 8
-HOS_FIRST    = 64
-HOS_LAST     = 128
+HOS_S1 = 4
+HOS_S2 = 8
+HOS_FIRST = 64
+HOS_LAST = 128
 
-IR_ERR_PACKET   = 1
-IR_ERR_PACKET2  = 2
+IR_ERR_PACKET = 1
+IR_ERR_PACKET2 = 2
 IR_ERR_HOSTNAME = 3
-IR_ERR_ADMIN    = 4
-IR_ERR_SPEC     = 5
-IR_ERR_NOSPEC   = 6
+IR_ERR_ADMIN = 4
+IR_ERR_SPEC = 5
+IR_ERR_NOSPEC = 6
+
 
 class IR_HLR(object):
     pack_s = struct.Struct('4B')
+
     def __init__(self, ReqI=0):
-        self.Size = 4
+        self.Size = 1
         self.Type = IRP_HLR
         self.ReqI = ReqI
         self.Sp0 = 0
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Sp0)
 
+
 class IR_HOS(object):
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.NumHosts = self.pack_s.unpack(data[:4])
         data = data[4:]
         self.Info = [HInfo(data, i) for i in range(0, self.NumHosts * 40, 40)]
         return self
 
+
 class HInfo(object):
     pack_s = struct.Struct('31sx5sx2B')
+
     def __init__(self, data, index):
-        self.HName, self.Track, self.Flags, self.NumConns = self.pack_s.unpack(data[index:index+40])
+        self.HName, self.Track, self.Flags, self.NumConns = self.pack_s.unpack(data[index:index + 40])
         self.HName = _eat_null_chars(self.HName)
         self.Track = _eat_null_chars(self.Track)
 
+
 class IR_SEL(object):
     pack_s = struct.Struct('4B31sx15sx15sx')
+
     def __init__(self, ReqI=0, HName=b'', Admin=b'', Spec=b''):
-        self.Size = 68
+        self.Size = 17
         self.Type = IRP_SEL
         self.ReqI = ReqI
         self.Zero = 0
         self.HName = HName
         self.Admin = Admin
         self.Spec = Spec
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Zero, self.HName, self.Admin, self.Spec)
 
+
 class IR_ARQ(object):
     pack_s = struct.Struct('4B')
+
     def __init__(self, ReqI=0):
-        self.Size = 4
+        self.Size = 1
         self.Type = IRP_ARQ
         self.ReqI = ReqI
         self.Sp0 = 0
+
     def pack(self):
         return self.pack_s.pack(self.Size, self.Type, self.ReqI, self.Sp0)
 
+
 class IR_ARP(object):
     pack_s = struct.Struct('4B')
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.Admin = self.pack_s.unpack(data)
         return self
 
+
 class IR_ERR(object):
     pack_s = struct.Struct('4B'
-)
+                           )
+
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.ErrNo = self.pack_s.unpack(data)
         return self
 
 
-class AIInputVal(object):
-    """Sub-packet for IS_AIC. Defines a single input control."""
-    pack_s = struct.Struct('2BH')
-
-    def __init__(self, Input=0, Time=0, Value=0):
-        """
-        Args:
-            Input : Select input value to set (CS_* constants)
-            Time  : Time to hold (optional, hundredths of a second)
-            Value : Value to set (e.g. 0-65535 for throttle)
-        """
-        self.Input = Input
-        self.Time = Time
-        self.Value = Value
-
-    def pack(self):
-        return self.pack_s.pack(self.Input, self.Time, self.Value)
-
-
-class IS_AIC(object):
-    """AI Control - Instruction to control the AI."""
-    pack_s = struct.Struct('4B')  # Header only
-
-    def __init__(self, ReqI=0, PLID=0, Inputs=None):
-        """
-        Args:
-            ReqI   : Optional - returned in any immediate response
-            PLID   : Unique ID of AI driver to control
-            Inputs : List of AIInputVal objects (Max 20)
-        """
-        self.Type = ISP_AIC
-        self.ReqI = ReqI
-        self.PLID = PLID
-        self.Inputs = Inputs if Inputs is not None else []
-
-    def pack(self):
-        # Limit inputs to AIC_MAX_INPUTS (20)
-        if len(self.Inputs) > AIC_MAX_INPUTS:
-            raise ValueError(f"IS_AIC: Too many inputs. Max is {AIC_MAX_INPUTS}")
-
-        # Size = 4 bytes header + (number of inputs * 4 bytes)
-        self.Size = 4 + (len(self.Inputs) * 4)
-
-        data = self.pack_s.pack(self.Size, self.Type, self.ReqI, self.PLID)
-
-        for inp in self.Inputs:
-            data += inp.pack()
-
-        return data
-
-
-class IS_AII(object):
-    """AI Info - Info about AI car.
-    Received after sending CS_SEND_AI_INFO or CS_REPEAT_AI_INFO.
-    """
-    # 4B (Header) + 12f3i (OSMain) + 4B (Flags/Gear/Sp) + 3f (RPM/Sp) + 4I (Lights/Sp)
-    pack_s = struct.Struct('4B12f3i4B3f4I')
-
-    def unpack(self, data):
-        # Unpack all fields into a flat tuple first
-        unpacked = self.pack_s.unpack(data)
-
-        self.Size = unpacked[0]
-        self.Type = unpacked[1]
-        self.ReqI = unpacked[2]
-        self.PLID = unpacked[3]
-
-        # OSMain Data (Indices 4 to 18)
-        self.OSData = OutSimPack()  # Re-using existing class structure for convenience
-        # Note: IS_AII OSData does not have Time or ID, just physics
-        self.OSData.AngVel = [unpacked[4], unpacked[5], unpacked[6]]
-        self.OSData.Heading = unpacked[7]
-        self.OSData.Pitch = unpacked[8]
-        self.OSData.Roll = unpacked[9]
-        self.OSData.Accel = [unpacked[10], unpacked[11], unpacked[12]]
-        self.OSData.Vel = [unpacked[13], unpacked[14], unpacked[15]]
-        self.OSData.Pos = [unpacked[16], unpacked[17], unpacked[18]]
-
-        # Remaining Data
-        self.Flags = unpacked[19]
-        self.Gear = unpacked[20]
-        self.Sp2 = unpacked[21]
-        self.Sp3 = unpacked[22]
-
-        self.RPM = unpacked[23]
-        self.SpF0 = unpacked[24]
-        self.SpF1 = unpacked[25]
-
-        self.ShowLights = unpacked[26]
-        self.SPU1 = unpacked[27]
-        self.SPU2 = unpacked[28]
-        self.SPU3 = unpacked[29]
-
-        return self
-
-
-
-
 class OutSimPack(object):
-    pack_s = struct.Struct('I12f3i')
+    # Struct formats
+    header_s = struct.Struct('<4s')      # OSO_HEADER: 4 chars
+    id_s = struct.Struct('<i')           # OSO_ID: 1 int
+    time_s = struct.Struct('<I')         # OSO_TIME: 1 unsigned int
+    main_s = struct.Struct('<3f3f3f3f3i')  # OSO_MAIN: AngVel(3f) Heading/Pitch/Roll(3f) Accel(3f) Vel(3f) Pos(3i)
+    inputs_s = struct.Struct('<5f')      # OSO_INPUTS: Throttle, Brake, InputSteer, Clutch, Handbrake
+    drive_s = struct.Struct('<4B2f')     # OSO_DRIVE: Gear, Sp1, Sp2, Sp3, EngineAngVel, MaxTorqueAtVel
+    distance_s = struct.Struct('<2f')    # OSO_DISTANCE: CurrentLapDist, IndexedDistance
+    wheel_s = struct.Struct('<7f4B2f')   # OSO_WHEELS: 7 floats + 4 bytes + 2 floats = 40 bytes
+    extra1_s = struct.Struct('<2f')      # OSO_EXTRA_1: SteerTorque, Spare
+
+    # OutSim Opts flags
+    OSO_HEADER   = 0x001
+    OSO_ID       = 0x002
+    OSO_TIME     = 0x004
+    OSO_MAIN     = 0x008
+    OSO_INPUTS   = 0x010
+    OSO_DRIVE    = 0x020
+    OSO_DISTANCE = 0x040
+    OSO_WHEELS   = 0x080
+    OSO_EXTRA_1  = 0x100
+
     def __init__(self):
+        self.Header = b''
+        self.ID = 0
         self.Time = 0
-        self.AngVel = [0.0, 0.0, 0.0]
+        self.AngVel = (0.0, 0.0, 0.0)
         self.Heading = 0.0
         self.Pitch = 0.0
         self.Roll = 0.0
-        self.Accel = [0.0, 0.0, 0.0]
-        self.Vel = [0.0, 0.0, 0.0]
-        self.Pos = [0, 0, 0]
-        self.ID = 0
-    def unpack(self, data):
-        self.Time, self.AngVel[0], self.AngVel[1], self.AngVel[2], self.Heading, self.Pitch, self.Roll, self.Accel[0], self.Accel[1], self.Accel[2], self.Vel[0], self.Vel[1], self.Vel[2], self.Pos[0], self.Pos[1], self.Pos[2] = self.pack_s.unpack(data[:64])
-        if len(data) == 68:
-            self.ID = struct.unpack('i', data[64:])
+        self.Accel = (0.0, 0.0, 0.0)
+        self.Vel = (0.0, 0.0, 0.0)
+        self.Pos = (0, 0, 0)
+        self.Inputs = (0.0, 0.0, 0.0, 0.0, 0.0)
+        self.Gear = 0
+        self.EngineAngVel = 0.0
+        self.MaxTorqueAtVel = 0.0
+        self.CurrentLapDist = 0.0
+        self.IndexedDistance = 0.0
+        self.Wheels = []
+        self.SteerTorque = 0.0
+        self.Spare = 0.0
+
+    def unpack(self, data, os_opts=0x1ff):
+        """Unpack OutSim data based on OutSim Opts flags.
+
+        Args:
+            data: Raw bytes received from OutSim UDP socket
+            os_opts: OutSim Opts value from cfg.txt (hex), default 0x1ff (all fields)
+        """
+        size = len(data)
+        offset = 0
+
+        # Debug: uncomment to verify packet size
+        # print(f"OutSim packet size: {size}")
+
+        if os_opts & self.OSO_HEADER:
+            if offset + self.header_s.size > size:
+                return self
+            self.Header = self.header_s.unpack_from(data, offset)[0]
+            offset += self.header_s.size
+
+        if os_opts & self.OSO_ID:
+            if offset + self.id_s.size > size:
+                return self
+            self.ID = self.id_s.unpack_from(data, offset)[0]
+            offset += self.id_s.size
+
+        if os_opts & self.OSO_TIME:
+            if offset + self.time_s.size > size:
+                return self
+            self.Time = self.time_s.unpack_from(data, offset)[0]
+            offset += self.time_s.size
+
+        if os_opts & self.OSO_MAIN:
+            if offset + self.main_s.size > size:
+                return self
+            d = self.main_s.unpack_from(data, offset)
+            self.AngVel = d[0:3]
+            self.Heading = d[3]
+            self.Pitch = d[4]
+            self.Roll = d[5]
+            self.Accel = d[6:9]
+            self.Vel = d[9:12]
+            self.Pos = d[12:15]       # 3 ints (fixed point, 1m = 65536)
+            offset += self.main_s.size
+
+        if os_opts & self.OSO_INPUTS:
+            if offset + self.inputs_s.size > size:
+                return self
+            self.Inputs = self.inputs_s.unpack_from(data, offset)
+            offset += self.inputs_s.size
+
+        if os_opts & self.OSO_DRIVE:
+            if offset + self.drive_s.size > size:
+                return self
+            d = self.drive_s.unpack_from(data, offset)
+            self.Gear = d[0]
+            # d[1], d[2], d[3] are spare bytes
+            self.EngineAngVel = d[4]
+            self.MaxTorqueAtVel = d[5]
+            offset += self.drive_s.size
+
+        if os_opts & self.OSO_DISTANCE:
+            if offset + self.distance_s.size > size:
+                return self
+            self.CurrentLapDist, self.IndexedDistance = self.distance_s.unpack_from(data, offset)
+            offset += self.distance_s.size
+
+        self.Wheels = []
+        if os_opts & self.OSO_WHEELS:
+            for _ in range(4):
+                if offset + self.wheel_s.size > size:
+                    break
+                d = self.wheel_s.unpack_from(data, offset)
+                self.Wheels.append({
+                    'SuspDeflect':    d[0],
+                    'Steer':          d[1],
+                    'XForce':         d[2],
+                    'YForce':         d[3],
+                    'VerticalLoad':   d[4],
+                    'AngVel':         d[5],
+                    'LeanRelToRoad':  d[6],
+                    'AirTemp':        d[7],       # byte (0-255, degrees C)
+                    'SlipFraction':   d[8],       # byte (0-255)
+                    'Touching':       d[9],       # byte
+                    'Sp3':            d[10],      # byte spare
+                    'SlipRatio':      d[11],
+                    'TanSlipAngle':   d[12],
+                })
+                offset += self.wheel_s.size
+
+        if os_opts & self.OSO_EXTRA_1:
+            if offset + self.extra1_s.size > size:
+                return self
+            self.SteerTorque, self.Spare = self.extra1_s.unpack_from(data, offset)
+            offset += self.extra1_s.size
+
         return self
+
 
 # Bits for OutGaugePack Flags
 OG_SHIFT = 1
@@ -1856,8 +2094,10 @@ DL_NEUTRAL = 131072
 
 DLF_ENGINE_SEVERE = 0x10000000
 
+
 class OutGaugePack(object):
     pack_s = struct.Struct('I3sxH2B7f2I3f15sx15sx')
+
     def __init__(self):
         self.Time = 0
         self.Car = ''
@@ -1879,8 +2119,10 @@ class OutGaugePack(object):
         self.Display1 = ''
         self.Display2 = ''
         self.ID = 0
+
     def unpack(self, data):
-        self.Time, self.Car, self.Flags, self.Gear, self.PLID, self.Speed, self.RPM, self.Turbo, self.EngTemp,self.Fuel, self.OilPress, self.OilTemp, self.DashLights, self.ShowLights, self.Throttle, self.Brake, self.Clutch, self.Display1,self.Display2 = self.pack_s.unpack(data[:92])
+        self.Time, self.Car, self.Flags, self.Gear, self.PLID, self.Speed, self.RPM, self.Turbo, self.EngTemp, self.Fuel, self.OilPress, self.OilTemp, self.DashLights, self.ShowLights, self.Throttle, self.Brake, self.Clutch, self.Display1, self.Display2 = self.pack_s.unpack(
+            data[:92])
         self.Display1 = _eat_null_chars(self.Display1)
         self.Display2 = _eat_null_chars(self.Display2)
         if len(data) == 96:
