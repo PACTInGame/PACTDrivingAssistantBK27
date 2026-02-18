@@ -1,0 +1,161 @@
+Ich arbeite derzeit an einem großen Python Projekt. Dieses Projekt ist eine Erweiterung (Add-on) für das Computerspiel (Autorennspiel) "Live-for-Speed" (LFS). Für das bessere Verständnis zunächst Kontext und Infos zum Projekt:
+
+In dem Projekt benutze ich die von Live for Speed bereitgestellten Schnittstellen (InSim, OutGauge und OutSim) um Pakete aus dem Spiel zu empfangen (Spieldaten auslesen) und wieder Pakete an das Spiel zu senden (Nachrichten, Kommandos, oder auch Daten).
+Ich verwende die Bibliothek pyinsim in einer selbst weiterentwickeltern version (da sie etwas veraltet war), um mit Live for Speed zu kommunizieren.
+
+Die InSim Verbindung ist dabei für 99% der Pakete verantwortlich. OutGauge ist lediglich für einige wenige Signale mit hoher Abtastrate (bspw. RPM und Geschwindigkeit) relevant. OutSim kann für einige Zusatzsignale (vor allem G-Kräfte und Reifenkräfte) verwendet werden.
+
+Dabei funktionieren InSim Pakete in der Regel nach demselben Schema: 
+- Die InSim Verbindung muss hergestellt werden,
+- mit InSim.bind müssen die Pakete, die gewünscht sind angefragt / zu Funktionen zugeordnet werden.
+- Einige Pakete werden bei Veränderung gesendet (wenn sich der Paketinhalt ändert, bspw. wenn der Spieler vom Menü auf die Strecke wechselt). Andere Pakete können in einem bestimmten Zeitintervall gesendet werden (über Flags in der InSim Verbindung gesetzt, meist für Fahrzeugdaten). Die Dritte Art ein paket zu bekommen ist ein direkter Request, dass die Pakete einmal kommen sollen. Diese Daten müssen dann in eine Funktion mit Parametern (insim, <paketname>) geleitet werden. Dort kann dann die Logik verarbeitet werden.
+
+Beispiel für das Handlen von Spielern und Verbindungen (Verbindungen bei online-Spielen). Hier wird nur InSim verwendet:
+
+```
+import pyinsim
+
+# Store the connection and player lists in dictionaries.
+connections = {}
+players = {}
+
+
+def new_connection(insim, ncn):
+    # Add a new connection to the connections dict.
+    connections[ncn.UCID] = ncn
+    print ('New connection: %s' % ncn.UName)
+    
+    
+def connection_left(insim, cnl):
+    # Get connection from connections dict.
+    ncn = connections[cnl.UCID]
+    # Delete the connection from the dict.
+    del connections[cnl.UCID]
+    print ('Connection left: %s' % ncn.UName)
+
+
+# This function will also be called, when player leaves pit,
+# Not only, when joining the race.
+def new_player(insim, npl):
+    # Add the new player to the players dict.
+    players[npl.PLID] = npl
+    print ('New player: %s' % str(npl.PName))
+
+
+def player_left(insim, pll):
+    # Get player from the players dict.
+    npl = players[pll.PLID]
+    # Delete them from the dict.
+    del players[pll.PLID]
+    print('Player left: %s' % (npl.PName))
+
+
+# Init new InSim object.
+insim = pyinsim.insim(b'127.0.0.1', 29999, Admin=b'')
+
+# Bind events for the connection and player packets.
+insim.bind(pyinsim.ISP_NCN, new_connection)
+insim.bind(pyinsim.ISP_CNL, connection_left)
+insim.bind(pyinsim.ISP_NPL, new_player)
+insim.bind(pyinsim.ISP_PLL, player_left)
+
+# Request for LFS to send all connections and players.
+insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_NCN)
+insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_NPL)
+
+# Start pyinsim.
+pyinsim.run()
+```
+
+
+Die gesamte UI in Live for Speed funktioniert mithilfe von Buttons. Auch diese können über InSim gesendet werden. ISP_BTN sendet Buttons, ISP_BFN löscht diese wieder (Identifiziert mittels ClickID).
+Es gibt verschiedene Styles: 
+- ISB_LIGHT für hellen Hintergrund,
+- ISB_DARK für dunklen Hintergrund,
+- ISB_LMB für durchsichtigen Hintergrund,
+- ISB_CLICK (kann mittels "|" zusätzlich als BStyle gesetzt werden, wenn der Button clickbar sein soll. Beim click wird über das Paket IS_BTC dann ein Button-Click event mit entsprechender ClickID gesendet.
+
+Die Positionen auf dem Bildschirm werden von 0-200 gerechnet. 0 ist ganz oben links, 200 wäre unten rechts. T = Position vertikal, L = Position horizontal, W= breite, H= höhe.
+Der Text kann mit prefix verschiedene Farben haben:
+- "^0" = schwarz,
+- "^1" = rot,
+- "^2" = grün,
+- "^3" = gelb,
+- "^4" = blau,
+- "^5" = magenta,
+- "^6" = cyan,
+- "^7" = weiß.
+Beispiel (Skript schickt 5 nicht Klickbare buttons untereinander in verschiedenen Styles):
+
+```
+import pyinsim
+
+# Init new InSim object.
+insim = pyinsim.insim(b'127.0.0.1', 29999, Admin=b'')
+
+# Send BTN packets with the message 'Hello, InSim!' to the game.
+insim.send(pyinsim.ISP_BTN, ReqI=255, ClickID=1, BStyle=pyinsim.ISB_LIGHT, T=119, L=90, W=20, H=10,
+           Text=b"Hello, Insim")
+
+insim.send(pyinsim.ISP_BTN, ReqI=255, ClickID=2, BStyle=pyinsim.ISB_LIGHT, T=129, L=90, W=20, H=10,
+           Text=b"^1Hello, Red Insim")
+
+insim.send(pyinsim.ISP_BTN, ReqI=255, ClickID=3, BStyle=pyinsim.ISB_LIGHT, T=139, L=90, W=20, H=10,
+           Text=b"^4Hello, Blue Insim")
+
+insim.send(pyinsim.ISP_BTN, ReqI=255, ClickID=4, BStyle=pyinsim.ISB_DARK, T=109, L=90, W=20, H=10,
+           Text=b"^7Hello, Dark Insim")
+
+insim.send(pyinsim.ISP_BTN, ReqI=255, ClickID=5, BStyle=pyinsim.ISB_LMB, T=99, L=90, W=30, H=10,
+           Text=b"^7Hello, Transparent Insim")
+
+# Start pyinsim.
+pyinsim.run()
+```
+
+Es gibt nahezu 100 verschiedene Pakete. Die wichtigsten sind:
+ISP_STA: Spiel-State, z.B. ob auf der Strecke, im Menü, etc,
+ISP_MCI: Multi Car Info, alle Fahrzeugdaten. ACHTUNG: Es kann nur eine bestimmte Anzahl an Fahrzeugen pro Paket kommen. Daher: Wenn viele Fahrzeuge auf der Strecke sind, kann es sein, das pro Request mehrere Pakete kommen. Bsp: alle 100ms requested, dann kommen alle 100 MS bis zu 10 Pakete an, bis die Daten von allen Fahrzeugen gesendet wurden,
+ISP_NPL: New Player im Spiel,
+ISP_PPL: Player Left (spieler verlässt das Spiel),
+ISP_BTC: Button Click (Spieler hat einen Button geklickt),
+ISP_BTN: Button als UI an Live for Speed schicken,
+ISP_BFN: Button aus der UI löschen,
+ISP_AXM: Autocross Modified (Layout wurde geändert - Objekte auf der Strecke angepasst). Auch hier Achtung, es kommen häufig mehrere Pakete bis das gesamte Layout da ist,
+ISP_TINY: Kleines Paket, um andere Pakete anzufragen, wird an LFS gesendet.
+ISP_SMALL: Kann Daten an LFS schicken, bspw. pyinsim.SMALL_LCL für "Light Control" um die Lichter des Fahrzeugs anzupassen.
+ISP_AIC: AI-Control, um die Computergegner manuell zu steuern (für KI-Verkehr irgendwann nötig).
+
+Alle diese Pakete beinhalten natürlich viele Daten.
+
+Nun konkret zum vorliegenden Projekt:
+Das Projekt ist ein Add-On, bei dem Fahrerassistenz und einige andere Erweiterungsfunktionen zu Live For Speed hinzugefügt werden sollen. Vieles davon ist bereits implementiert. Hier eine Liste, die erstmal nur zur Übersicht dient:
+
+Insgesamt sollen folgende Funktionalitäten funktionieren:
+- Frontkollisionswarnung (implementiert)
+- Tote Winkel Warnung (implementiert)
+- Automatisches Ziehen der Handbremse im Stand (Auto-Hold) (implementiert)
+- Adaptive Lichtfunktionen (Warnblinker bei Vollbremsung, Fernlicht bei Nacht wenn kein Verkehr vor einem ist, etc.) (implementiert)
+- Head-Up-Display (implementiert)
+- Park-Distance-Control (Hindernis-Anzeige beim Parken, andere Fahrzeug und Hindernisse auf der Strecke) (implementiert, aber verbesserungspotenzial)
+- Querverkehrswarnung (noch nicht fertig)
+- Ein Automatikgetriebe (noch nicht fertig)
+- Menü (als UI für Einstellungen / Funktionen etc. mit Steuerung für alle Funktionen, in verschiedenen Sprachen) (nicht fertig)
+- Notbremseingriffe bei Frontkollisionswarnung und Querverkehrswarnung (nicht fertig - funktioniert derzeit nur mit Lenkrad/Controller, nicht mit Tastatursteuerung. Muss generell nochmal überarbeitet werden)
+- KI-Verkehr auf den Maps, die Städte abbilden (noch nicht fertig).
+- viele weitere Kleinigkeiten und coole extras, diese liste ist nicht ganz vollständig.
+
+Dabei ist das ganze wie folgt umgesetzt:
+Eine Hauptanwendung initialisiert die Verbindungen mit Live For Speed sowie einen Event-Bus. Über diesen Event bus können Daten von den einzelnen Komponenten subscribed und gesendet (emit) werden. 
+Hier werden auch alle weiteren Komponenten initialisiert. Dann werden alle Assistenzsysteme als Threads gescheduled und deren Methode "process" wird alle 100 MS ausgeführt. Die UI Threads werden alle 50 MS ausgeführt.
+
+Alle relevanten Einstellungen werden im settings_manager verwaltet. Wenn Einstellungen durch den Nutzer verändert werden, sollten diese auch hier synchronisiert werden. Das Ganze wird dann als "settings.json" gespeichert.
+
+Der Code ist möglichst modular gestaltet und ich habe versucht als Schnittstelle immer nur den Eventbus zu verwenden. Da es sich hierbei um eine große Anwendung handelt, ist es immer enorm wichtig, alle Abhängigkeiten und Wechselwirkungen zu bedenken. Alle Code-Änderungen sollten weiterhin perfekt modular gehalten werden, und sauber geschrieben sein. 
+Wie oben bereits erwähnt, sind nicht alle Funktionen bereits fertig implementiert. Lege den Fokus aber nur auf die Komponenten, die für die aktuelle Änderung relevant sind.
+
+
+
+
+
+
