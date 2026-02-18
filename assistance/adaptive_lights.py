@@ -32,6 +32,7 @@ class LightAssists(AssistanceSystem):
         self.strobe_active = False
         self.siren_active = False
         self.strobe_pattern = 0
+        # TODO add to settings which lights to use (or 3 modes, all, indicators, and extras)
         self.strobe_actions = {
             0: {"light": 2, "on": True},
             1: {"light": 5, "on": True},
@@ -142,6 +143,7 @@ class LightAssists(AssistanceSystem):
                 self.event_bus.emit("send_light_command", {"light": 1, "on": True})
             else:
                 self.event_bus.emit("send_light_command", {"light": 2, "on": True})
+
         # --- Sirenen-Management ---
         if self.is_siren_enabled_role:
             if self.strobe_active:

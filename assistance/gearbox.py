@@ -145,8 +145,6 @@ class Gearbox(AssistanceSystem):
                 current_brake_pedal = own_vehicle.brake
                 upper_bound = max(0.3, min(current_accelerator_pedal + 0.05, 0.95))
                 lower_bound = min(0.55, max(current_accelerator_pedal - 0.25, 0.15))
-                print(f"Upper Bound: {upper_bound}, Lower Bound: {lower_bound}")
-                print(f"Current Accelerator: {current_accelerator_pedal}, Current Brake: {current_brake_pedal}")
                 current_rpm = own_vehicle.rpm
                 size_of_gear_area = (self.redline - self.idle)
 
