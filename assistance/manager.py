@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 
+from assistance.AI_Driver import AIDriver
 from assistance.adaptive_lights import LightAssists
 from assistance.auto_hold import AutoHold
 from assistance.base_system import AssistanceSystem
@@ -44,6 +45,7 @@ class AssistanceManager:
         #self.systems['controller_emulator'] = ControllerEmulator(self.event_bus, self.settings)
         self.systems['sat_nav'] = NavigationSystem(self.event_bus, self.settings)
         self.systems['gearbox'] = Gearbox(self.event_bus, self.settings)
+        self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
 
 
 
