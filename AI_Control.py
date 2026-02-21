@@ -159,7 +159,6 @@ class AICarController:
 
         # Analog controls
         if state.steer is not None:
-            print(f"Normalized Steering: {self._normalize_analog(state.steer, center_zero=True)}")
             inputs.append(pyinsim.AIInputVal(
                 Input=AIControl.STEER,
                 Value=self._normalize_analog(state.steer, center_zero=True)
@@ -302,7 +301,6 @@ class AICarController:
         """
         inputs = self._build_input_list(state)
         if inputs:
-            print("Inputs:", inputs)
             self.insim.send(pyinsim.ISP_AIC, PLID=plid, Inputs=inputs)
 
     def control_ai_raw(self, plid: int, controls: Dict[str, Any]) -> None:

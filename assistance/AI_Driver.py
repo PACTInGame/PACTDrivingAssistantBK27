@@ -171,13 +171,12 @@ def analyze_upcoming_track(route_points) -> Tuple[float, Tuple[float, float, flo
             angle_diff += 2 * math.pi
 
         segment_length = dist(tuple(p1), tuple(p2))
-
         if segment_length > 0:
             curvature = abs(angle_diff) / segment_length
             curvatures.append(curvature)
 
-    average_curvature = sum(curvatures) / len(curvatures) if curvatures else 0.0
 
+    average_curvature = sum(curvatures) / len(curvatures) if curvatures else 0.0
     if len(route_points) >= 3:
         target_point = (
             (route_points[1][0] + route_points[2][0]) / 2,
@@ -259,16 +258,24 @@ class AIDriver(AssistanceSystem):
         # Feedforward tuning parameters
         self.MAX_STEERING_ANGLE = 45.0   # ±degrees that map to full steering
         self.SPEED_GAIN = 3.0            # Proportional gain for speed error → throttle/brake
-        self.MAX_THROTTLE = 70.0         # Maximum throttle percentage
+        self.MAX_THROTTLE = 60.0         # Maximum throttle percentage
 
         # Speed parameters
         self.BASE_SPEED = 70.0           # Base speed in km/h on straight sections
-        self.MIN_SPEED = 10.0            # Minimum speed on tight curves
-        self.CURVATURE_THRESHOLD = 0.002  # Curvature above which to slow down
+        self.MIN_SPEED = 15.0            # Minimum speed on tight curves
+        self.CURVATURE_THRESHOLD = 0.01  # Curvature above which to slow down
+
+        # Collision avoidance parameters
+        self.CA_DETECTION_DISTANCE = 50.0   # Start reacting at this distance (meters)
+        self.CA_EMERGENCY_DISTANCE = 10.0   # Full brake below this distance (meters)
+        self.CA_MAX_SPEED_AT_LIMIT = 70.0   # Max allowed speed at CA_DETECTION_DISTANCE (km/h)
+        self.CA_CONE_HALF_ANGLE = 12.0      # Half-angle of forward detection cone (degrees)
 
         # Smoothing: each cycle, move 1/SMOOTHING_STEPS of the remaining distance
         # toward the target. Handles targets that change every cycle gracefully.
-        self.SMOOTHING_STEPS = 3.0
+        self.SMOOTHING_STEPS_THROTTLE = 4.0
+        self.SMOOTHING_STEPS_BRAKE = 2.0
+        self.SMOOTHING_STEPS_STEER = 2.0
         self._smoothed: Dict[int, Dict[str, float]] = {}  # vehicle_id → {throttle, brake, steer}
 
     def _on_ai_controller_initialized(self, ai_controller):
@@ -349,10 +356,11 @@ class AIDriver(AssistanceSystem):
         Returns:
             Target speed in km/h
         """
+        print(curvature)
         if curvature < self.CURVATURE_THRESHOLD:
             return self.BASE_SPEED
         else:
-            speed_reduction = (curvature - self.CURVATURE_THRESHOLD) * 1500.0
+            speed_reduction = (curvature - self.CURVATURE_THRESHOLD) * 1000.0
             return max(self.MIN_SPEED, self.BASE_SPEED - speed_reduction)
 
     # ─── AI Info monitoring ───────────────────────────────────────────
@@ -361,7 +369,7 @@ class AIDriver(AssistanceSystem):
         """Handle AI info packets – automatic gear shifting and stall recovery."""
         if self.ai_controller is None:
             return
-        if aii.RPM > 5000:
+        if aii.RPM > 4500:
             self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=True))
         if aii.RPM < 2000 and aii.Gear > 2:
             self.ai_controller.control_ai(aii.PLID, AIControlState(shift_down=True))
@@ -466,7 +474,7 @@ class AIDriver(AssistanceSystem):
             if route_data is None:
                 continue
 
-            self._drive_vehicle(vehicle_id, vehicle, route_data)
+            self._drive_vehicle(vehicle_id, vehicle, route_data, own_vehicle)
 
         return {'ai_active': True}
 
@@ -490,15 +498,81 @@ class AIDriver(AssistanceSystem):
             return raw_throttle, raw_brake, raw_steer
 
         s = self._smoothed[vehicle_id]
-        alpha = 1.0 / self.SMOOTHING_STEPS
+        alpha_throttle = 1.0 / self.SMOOTHING_STEPS_THROTTLE
+        alpha_steer = 1.0 / self.SMOOTHING_STEPS_STEER
+        alpha_brake = 1.0 / self.SMOOTHING_STEPS_BRAKE
 
-        s['throttle'] += (raw_throttle - s['throttle']) * alpha
-        s['brake'] += (raw_brake - s['brake']) * alpha
-        s['steer'] += (raw_steer - s['steer']) * alpha
+        s['throttle'] += (raw_throttle - s['throttle']) * alpha_throttle
+        s['brake'] += (raw_brake - s['brake']) * alpha_brake
+        s['steer'] += (raw_steer - s['steer']) * alpha_steer
 
         return s['throttle'], s['brake'], s['steer']
 
-    def _drive_vehicle(self, vehicle_id: int, vehicle: Vehicle, route_data: Dict[str, Any]):
+    # ─── Collision Avoidance ──────────────────────────────────────────
+
+    def _is_player_ahead_of_vehicle(self, vehicle: Vehicle,
+                                    own_vehicle: OwnVehicle) -> Tuple[bool, float]:
+        """
+        Check whether the player's own vehicle is directly ahead of an AI vehicle.
+
+        Uses the AI vehicle's heading to define a forward detection cone and checks
+        if the player falls within it.
+
+        Args:
+            vehicle: The AI vehicle
+            own_vehicle: The player's own vehicle
+
+        Returns:
+            Tuple of (is_ahead, distance_in_meters).
+            distance is always returned (even when is_ahead is False) for convenience.
+        """
+        # Distance between AI vehicle and player (in meters)
+        dx = (vehicle.data.x - own_vehicle.data.x) / 65536
+        dy = (vehicle.data.y - own_vehicle.data.y) / 65536
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        # Quick reject: too far away to matter
+        if distance > self.CA_DETECTION_DISTANCE:
+            return False, distance
+
+        # Angle from AI vehicle toward the player, relative to AI vehicle's heading
+        angle = calculate_angle(
+            vehicle.data.x, vehicle.data.y,
+            own_vehicle.data.x / 65536, own_vehicle.data.y / 65536,
+            vehicle.data.heading
+        )
+
+        # Check if angle falls inside the forward cone (centered on 0°)
+        in_cone = abs(angle) < self.CA_CONE_HALF_ANGLE
+        return in_cone, distance
+
+    def _calculate_following_speed(self, distance: float) -> float:
+        """
+        Calculate the maximum allowed speed based on distance to a vehicle ahead.
+
+        Linear interpolation between CA_DETECTION_DISTANCE (full speed) and
+        CA_EMERGENCY_DISTANCE (zero speed).  This method is intentionally simple
+        so it can later be replaced with a more sophisticated model (e.g. TTC-based).
+
+        Args:
+            distance: Distance to the vehicle ahead in meters.
+                      Expected range: [CA_EMERGENCY_DISTANCE, CA_DETECTION_DISTANCE]
+
+        Returns:
+            Maximum allowed speed in km/h (0.0 .. CA_MAX_SPEED_AT_LIMIT)
+        """
+        clamped = max(self.CA_EMERGENCY_DISTANCE,
+                      min(self.CA_DETECTION_DISTANCE, distance))
+
+        ratio = ((clamped - self.CA_EMERGENCY_DISTANCE)
+                 / (self.CA_DETECTION_DISTANCE - self.CA_EMERGENCY_DISTANCE))
+
+        return self.CA_MAX_SPEED_AT_LIMIT * ratio
+
+    # ─── Vehicle control ──────────────────────────────────────────────
+
+    def _drive_vehicle(self, vehicle_id: int, vehicle: Vehicle,
+                       route_data: Dict[str, Any], own_vehicle: OwnVehicle):
         """
         Execute one control step for a single vehicle along its route.
 
@@ -506,6 +580,7 @@ class AIDriver(AssistanceSystem):
             vehicle_id: Player ID of the vehicle
             vehicle: Vehicle object with current position/state
             route_data: Route dict with 'path' key
+            own_vehicle: The player's own vehicle (for collision avoidance)
         """
         if self.ai_controller is None:
             return
@@ -528,13 +603,28 @@ class AIDriver(AssistanceSystem):
 
         # ── Speed feedforward ──
         target_speed = self.calculate_target_speed(curvature)
+
+        # ── Collision avoidance override ──
+        is_ahead, player_distance = self._is_player_ahead_of_vehicle(vehicle, own_vehicle)
+        emergency_brake = False
+        if is_ahead:
+            if player_distance < self.CA_EMERGENCY_DISTANCE:
+                emergency_brake = True
+            else:
+                ca_speed_limit = self._calculate_following_speed(player_distance)
+                target_speed = min(target_speed, ca_speed_limit)
+
         current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
-        speed_error = target_speed - current_speed
 
-        raw_throttle, raw_brake = calculate_feedforward_throttle_brake(speed_error, gain=self.SPEED_GAIN)
-
-        # Cap throttle
-        raw_throttle = min(raw_throttle, self.MAX_THROTTLE)
+        if emergency_brake:
+            raw_throttle = 0.0
+            raw_brake = 100.0
+        else:
+            speed_error = target_speed - current_speed
+            raw_throttle, raw_brake = calculate_feedforward_throttle_brake(
+                speed_error, gain=self.SPEED_GAIN
+            )
+            raw_throttle = min(raw_throttle, self.MAX_THROTTLE)
 
         # ── Steering feedforward ──
         target_angle = calculate_angle(
