@@ -1,5 +1,5 @@
 import math
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 import json
 
 from AI_Control import AIControlState
@@ -236,23 +236,108 @@ def calculate_feedforward_throttle_brake(speed_error: float,
 class AIDriver(AssistanceSystem):
     """AI Driver – controls AI vehicles along predefined routes using feedforward control."""
 
+    # States for the AI traffic system
+    STATE_INACTIVE = 0
+    STATE_ACTIVE = 1
+    STATE_STOPPING = 2
+
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
-        super().__init__("AIDriver", event_bus, settings)
+        super().__init__("ai_traffic", event_bus, settings)
         self.routes = None
         self.ai_controller = None
+        self.state = self.STATE_INACTIVE
+        self.assigned_routes: Dict[int, int] = {}  # vehicle_id -> route_id
+        self.stop_counter = 0
+
+        # Stop phase: brake for this many process cycles before releasing control
+        self.STOP_BRAKE_CYCLES = 20  # 20 × 100ms = 2 seconds
+
         self.event_bus.subscribe("AI_Controller_initialized", self._on_ai_controller_initialized)
+        self.event_bus.subscribe("ai_traffic_start", self._on_start)
+        self.event_bus.subscribe("ai_traffic_stop", self._on_stop)
 
         # Feedforward tuning parameters
         self.MAX_STEERING_ANGLE = 45.0   # ±degrees that map to full steering
         self.SPEED_GAIN = 3.0            # Proportional gain for speed error → throttle/brake
+        self.MAX_THROTTLE = 70.0         # Maximum throttle percentage
 
         # Speed parameters
         self.BASE_SPEED = 70.0           # Base speed in km/h on straight sections
         self.MIN_SPEED = 10.0            # Minimum speed on tight curves
-        self.CURVATURE_THRESHOLD = 0.002 # Curvature above which to slow down
+        self.CURVATURE_THRESHOLD = 0.002  # Curvature above which to slow down
+
+        # Smoothing: each cycle, move 1/SMOOTHING_STEPS of the remaining distance
+        # toward the target. Handles targets that change every cycle gracefully.
+        self.SMOOTHING_STEPS = 3.0
+        self._smoothed: Dict[int, Dict[str, float]] = {}  # vehicle_id → {throttle, brake, steer}
 
     def _on_ai_controller_initialized(self, ai_controller):
         self.ai_controller = ai_controller
+
+    # ─── Start / Stop ─────────────────────────────────────────────────
+
+    def _on_start(self, data=None):
+        """Start AI traffic. Route assignment happens in the next process() call."""
+        if self.state != self.STATE_INACTIVE:
+            return
+        self._load_routes()
+        self.assigned_routes = {}
+        self._smoothed = {}
+        self.state = self.STATE_ACTIVE
+        self.event_bus.emit("ai_traffic_state_changed", {"active": True})
+        print("[AIDriver] AI traffic started.")
+
+    def _on_stop(self, data=None):
+        """Initiate stop sequence: brake all vehicles, then release control."""
+        if self.state != self.STATE_ACTIVE:
+            return
+        self.state = self.STATE_STOPPING
+        self.stop_counter = 0
+        self.event_bus.emit("ai_traffic_state_changed", {"active": False})
+        print("[AIDriver] AI traffic stopping – braking all vehicles...")
+
+    @property
+    def is_active(self) -> bool:
+        return self.state == self.STATE_ACTIVE
+
+    # ─── Route helpers ────────────────────────────────────────────────
+
+    def _load_routes(self):
+        """Load routes from file (once)."""
+        if self.routes is None:
+            routes_list = load_routes_from_file("track_data/track_data.json")
+            self.routes = {road['road_id']: road for road in routes_list}
+
+    def _find_closest_route(self, vehicle) -> Optional[int]:
+        """
+        Find the route whose path passes closest to the vehicle's current position.
+
+        Args:
+            vehicle: Vehicle object with position data
+
+        Returns:
+            route_id of the closest route, or None if no routes are loaded
+        """
+        if not self.routes:
+            return None
+
+        vx = vehicle.data.x / 65536
+        vy = vehicle.data.y / 65536
+        vz = vehicle.data.z / 65536
+
+        min_distance = float('inf')
+        closest_route_id = None
+
+        for road_id, road in self.routes.items():
+            for point in road.get('path', []):
+                d = dist((vx, vy, vz), tuple(point))
+                if d < min_distance:
+                    min_distance = d
+                    closest_route_id = road_id
+
+        return closest_route_id
+
+    # ─── Speed ────────────────────────────────────────────────────────
 
     def calculate_target_speed(self, curvature: float) -> float:
         """
@@ -262,7 +347,7 @@ class AIDriver(AssistanceSystem):
             curvature: Average curvature of upcoming section
 
         Returns:
-            Target speed
+            Target speed in km/h
         """
         if curvature < self.CURVATURE_THRESHOLD:
             return self.BASE_SPEED
@@ -270,108 +355,204 @@ class AIDriver(AssistanceSystem):
             speed_reduction = (curvature - self.CURVATURE_THRESHOLD) * 1500.0
             return max(self.MIN_SPEED, self.BASE_SPEED - speed_reduction)
 
+    # ─── AI Info monitoring ───────────────────────────────────────────
+
     def monitor_ai(self, aii):
+        """Handle AI info packets – automatic gear shifting and stall recovery."""
+        if self.ai_controller is None:
+            return
         if aii.RPM > 5000:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(
-                shift_up=True,
-            ))
+            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=True))
         if aii.RPM < 2000 and aii.Gear > 2:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(
-                shift_down=True,
-            ))
+            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_down=True))
         if aii.Gear < 1:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(
-                shift_up=True,
-            ))
+            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=True))
         if aii.RPM < 300:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(
-                ignition=True,
-            ))
-        print(f"AI Info for Vehicle {aii.PLID}: RPM={aii.RPM}, Gear={aii.Gear}")
+            self.ai_controller.control_ai(aii.PLID, AIControlState(ignition=True))
+
+    # ─── Main process loop ────────────────────────────────────────────
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
-        """Verarbeitet die AI-Driver-Logik"""
-        if self.routes is None:
-            self.routes = load_routes_from_file("StreetMapCreator/track_data.json")
-            self.routes = {road['road_id']: road for road in self.routes}
-        print("AI Driver Processing...")
+        """Main processing loop, called every 100 ms."""
 
-        # Initialize test vehicle with route 20
-        for vehicle_id in vehicles.keys():
-            if vehicle_id == list(vehicles.keys())[0]:
-                if vehicles.get(vehicle_id).current_route is None:
-                    vehicles.get(vehicle_id).current_route = 20
-                    self.ai_controller.bind_ai_info_handler(list(vehicles.keys())[0], self.monitor_ai)
-                    self.ai_controller.request_ai_info(list(vehicles.keys())[0], repeat_interval=100)
+        # ── Inactive: nothing to do ──
+        if self.state == self.STATE_INACTIVE:
+            return {'ai_active': False}
 
-        debug_angle = calculate_angle(own_vehicle.data.x, own_vehicle.data.y, 290.375, -139.9375,
-                                      own_vehicle.data.heading)
-        print(f"Debug Angle to Point (290.375, -139.9375): {debug_angle:.2f} degrees")
+        # ── Stopping phase: brake all vehicles, then release control ──
+        if self.state == self.STATE_STOPPING:
+            return self._process_stopping(vehicles)
 
-        # Process each vehicle that has a route assigned
-        for vehicle_id in vehicles.keys():
+        # ── Active: drive all assigned vehicles ──
+        return self._process_active(own_vehicle, vehicles)
+
+    def _process_stopping(self, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
+        """Send brake commands during stop phase, then release control."""
+        if self.ai_controller is None:
+            self._finalize_stop(vehicles)
+            return {'ai_active': False}
+
+        # Send full brake to every assigned vehicle
+        for vehicle_id in list(self.assigned_routes.keys()):
+            if vehicle_id in vehicles:
+                self.ai_controller.control_ai(vehicle_id, AIControlState(
+                    throttle=0,
+                    brake=100,
+                ))
+
+        self.stop_counter += 1
+
+        if self.stop_counter >= self.STOP_BRAKE_CYCLES:
+            self._finalize_stop(vehicles)
+            return {'ai_active': False}
+
+        return {'ai_active': True, 'stopping': True}
+
+    def _finalize_stop(self, vehicles: Dict[int, Vehicle]):
+        """Release AI control on all vehicles and clean up."""
+        if self.ai_controller is not None:
+            for vehicle_id in list(self.assigned_routes.keys()):
+                try:
+                    self.ai_controller.stop_ai_control(vehicle_id)
+                except Exception as e:
+                    print(f"[AIDriver] Error stopping control for vehicle {vehicle_id}: {e}")
+
+        # Reset route assignments on vehicle objects
+        for vehicle_id in list(self.assigned_routes.keys()):
             vehicle = vehicles.get(vehicle_id)
-            print(f"Processing Vehicle ID: {vehicle_id}, with {vehicle.data.player_id}")
-            # TODO current route to vehicle
-            if vehicle.current_route is not None:
-                route_points = self.routes[vehicle.current_route]
+            if vehicle is not None:
+                vehicle.current_route = None
 
-                # Get vehicle position (convert from game units)
-                vehicle_x = vehicle.data.x / 65536
-                vehicle_y = vehicle.data.y / 65536
-                vehicle_z = vehicle.data.z / 65536
+        self.assigned_routes.clear()
+        self._smoothed.clear()
+        self.state = self.STATE_INACTIVE
+        self.stop_counter = 0
+        print("[AIDriver] AI traffic fully stopped.")
 
-                # Find closest point and get upcoming points (50m or min 5 points)
-                closest_index = get_closest_index_on_route(
-                    vehicle_x, vehicle_y, vehicle_z, route_points
-                )
-                upcoming_points = get_next_points_for_distance(
-                    closest_index, route_points, min_distance=50.0, min_points=5
-                )
+    def _process_active(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
+        """Normal active processing: assign routes and drive vehicles."""
+        self._load_routes()
+        if not self.routes:
+            return {'ai_active': False}
 
-                # Analyze the upcoming track section
-                curvature, target_point = analyze_upcoming_track(upcoming_points)
-                print(f"Analyzing {len(upcoming_points)} points for curvature calculation")
+        # ── Assign routes to new (unassigned) vehicles ──
+        for vehicle_id, vehicle in vehicles.items():
+            if vehicle_id not in self.assigned_routes:
+                route_id = self._find_closest_route(vehicle)
+                if route_id is not None:
+                    self.assigned_routes[vehicle_id] = route_id
+                    vehicle.current_route = route_id
+                    print(f"[AIDriver] Vehicle {vehicle_id} assigned to route {route_id}")
 
-                # --- Speed feedforward ---
-                target_speed = self.calculate_target_speed(curvature)
-                current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
-                speed_error = target_speed - current_speed
+                    # Bind AI info handler and request periodic updates
+                    if self.ai_controller is not None:
+                        self.ai_controller.bind_ai_info_handler(vehicle_id, self.monitor_ai)
+                        self.ai_controller.request_ai_info(vehicle_id, repeat_interval=100)
 
-                throttle, brake = calculate_feedforward_throttle_brake(speed_error, gain=self.SPEED_GAIN)
+        # ── Remove vehicles that have left the track ──
+        departed = [vid for vid in self.assigned_routes if vid not in vehicles]
+        for vid in departed:
+            del self.assigned_routes[vid]
+            self._smoothed.pop(vid, None)
+            print(f"[AIDriver] Vehicle {vid} left – removed from AI traffic.")
 
-                print(f"Calculated Target Speed: {target_speed:.2f} km/h based on Curvature: {curvature:.4f}")
+        # ── Drive each assigned vehicle along its route ──
+        for vehicle_id, route_id in self.assigned_routes.items():
+            vehicle = vehicles.get(vehicle_id)
+            if vehicle is None:
+                continue
 
-                # --- Steering feedforward ---
-                print(f"Target Point: {target_point}")
-                print(f"Vehicle Position: ({vehicle_x:.2f}, {vehicle_y:.2f})")
-                print(f"Vehicle Heading: {vehicle.data.heading if hasattr(vehicle.data, 'heading') else 'N/A'}")
+            route_data = self.routes.get(route_id)
+            if route_data is None:
+                continue
 
-                target_angle = calculate_angle(
-                    vehicle.data.x, vehicle.data.y,
-                    target_point[0], target_point[1],
-                    vehicle.data.heading
-                )
-                print(f"Target Angle: {target_angle:.2f} degrees")
+            self._drive_vehicle(vehicle_id, vehicle, route_data)
 
-                steering = calculate_feedforward_steering(
-                    target_angle, max_steering_angle=self.MAX_STEERING_ANGLE
-                )
-                print(f"Calculated Steering: {steering:.2f}")
+        return {'ai_active': True}
 
-                # Send control commands to AI controller
-                if self.ai_controller is not None:
-                    self.ai_controller.control_ai(vehicle_id, AIControlState(
-                        throttle=int(throttle),
-                        brake=int(brake),
-                        steer=int(steering),
-                    ))
+    def _smooth(self, vehicle_id: int, raw_throttle: float,
+                raw_brake: float, raw_steer: float) -> Tuple[float, float, float]:
+        """
+        Apply first-order smoothing to control outputs.
+        Each cycle moves 1/SMOOTHING_STEPS toward the target.
+        Handles targets that change every cycle gracefully.
 
-                    print(f"Vehicle {vehicle_id}: Curvature={curvature:.4f}, Target={target_point}")
-                    print(
-                        f"  Speed: {current_speed:.1f} → {target_speed:.1f} | Throttle: {throttle:.0f}% | Brake: {brake:.0f}%")
-                    print(f"  Target Angle: {target_angle:.2f}° | Steer: {steering:.0f}")
+        Returns:
+            (smoothed_throttle, smoothed_brake, smoothed_steer)
+        """
+        if vehicle_id not in self._smoothed:
+            # First cycle: jump to target immediately
+            self._smoothed[vehicle_id] = {
+                'throttle': raw_throttle,
+                'brake': raw_brake,
+                'steer': raw_steer,
+            }
+            return raw_throttle, raw_brake, raw_steer
 
-        return {
-            'ai_active': True
-        }
+        s = self._smoothed[vehicle_id]
+        alpha = 1.0 / self.SMOOTHING_STEPS
+
+        s['throttle'] += (raw_throttle - s['throttle']) * alpha
+        s['brake'] += (raw_brake - s['brake']) * alpha
+        s['steer'] += (raw_steer - s['steer']) * alpha
+
+        return s['throttle'], s['brake'], s['steer']
+
+    def _drive_vehicle(self, vehicle_id: int, vehicle: Vehicle, route_data: Dict[str, Any]):
+        """
+        Execute one control step for a single vehicle along its route.
+
+        Args:
+            vehicle_id: Player ID of the vehicle
+            vehicle: Vehicle object with current position/state
+            route_data: Route dict with 'path' key
+        """
+        if self.ai_controller is None:
+            return
+
+        # Get vehicle position (convert from game units)
+        vehicle_x = vehicle.data.x / 65536
+        vehicle_y = vehicle.data.y / 65536
+        vehicle_z = vehicle.data.z / 65536
+
+        # Find closest point on route and get upcoming points
+        closest_index = get_closest_index_on_route(
+            vehicle_x, vehicle_y, vehicle_z, route_data
+        )
+        upcoming_points = get_next_points_for_distance(
+            closest_index, route_data, min_distance=50.0, min_points=5
+        )
+
+        # Analyze the upcoming track section
+        curvature, target_point = analyze_upcoming_track(upcoming_points)
+
+        # ── Speed feedforward ──
+        target_speed = self.calculate_target_speed(curvature)
+        current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
+        speed_error = target_speed - current_speed
+
+        raw_throttle, raw_brake = calculate_feedforward_throttle_brake(speed_error, gain=self.SPEED_GAIN)
+
+        # Cap throttle
+        raw_throttle = min(raw_throttle, self.MAX_THROTTLE)
+
+        # ── Steering feedforward ──
+        target_angle = calculate_angle(
+            vehicle.data.x, vehicle.data.y,
+            target_point[0], target_point[1],
+            vehicle.data.heading
+        )
+
+        raw_steer = calculate_feedforward_steering(
+            target_angle, max_steering_angle=self.MAX_STEERING_ANGLE
+        )
+
+        # ── Apply smoothing ──
+        throttle, brake, steering = self._smooth(vehicle_id, raw_throttle, raw_brake, raw_steer)
+
+        # ── Send control commands ──
+        self.ai_controller.control_ai(vehicle_id, AIControlState(
+            throttle=int(throttle),
+            brake=int(brake),
+            steer=int(steering),
+        ))

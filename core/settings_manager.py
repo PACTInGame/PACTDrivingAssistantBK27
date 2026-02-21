@@ -47,13 +47,14 @@ class SettingsManager:
             'vjoy_axis_1': 15,
 
             'cop_assistance': True,
+            'ai_traffic': True,
 
         }
         self.load()
 
     def get(self, key: str, default: Any = None) -> Any:
         """Holt einen Einstellungswert"""
-        return self._settings.get(key, default or self._defaults.get(key))
+        return self._settings.get(key, default if default is not None else self._defaults.get(key))
 
     def set(self, key: str, value: Any):
         """Setzt einen Einstellungswert"""

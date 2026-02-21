@@ -857,7 +857,8 @@ class IS_MTC(object):
 
     def pack(self):
         TEXT_SIZE = len(self.Msg) + (4 - (len(self.Msg) % 4))
-        return self.pack_s.pack(self.Size + TEXT_SIZE, self.Type, self.ReqI, self.Sound, self.UCID, self.PLID, self.Sp2,
+        total_size = self.Size + (TEXT_SIZE // 4)  # self.Size is already /4, add text size /4
+        return self.pack_s.pack(total_size, self.Type, self.ReqI, self.Sound, self.UCID, self.PLID, self.Sp2,
                                 self.Sp3) + struct.pack('%ds' % TEXT_SIZE, self.Msg)
 
 
@@ -1226,7 +1227,7 @@ class IS_REO(object):
             PLID : all PLIDs in new order
 
         """
-        self.Size = 1 + MAX_PLAYERS
+        self.Size = (4 + MAX_PLAYERS) // 4
         self.Type = ISP_REO
         self.ReqI = ReqI
         self.NumP = len(PLID)
@@ -1758,7 +1759,8 @@ class IS_AXM(object):
         self.Info = Info
 
     def pack(self):
-        data = self.pack_s.pack(self.Size + (self.NumO * 8), self.Type, self.ReqI, self.NumO, self.UCID, self.PMOAction,
+        total_size = self.Size + (self.NumO * 2)  # each ObjectInfo is 8 bytes = 2 size units
+        data = self.pack_s.pack(total_size, self.Type, self.ReqI, self.NumO, self.UCID, self.PMOAction,
                                 self.PMOFlags, self.Sp3)
         for i in range(self.NumO):
             data = data + self.Info[i].pack()
@@ -1778,6 +1780,7 @@ class IS_ACR(object):
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.Admin, self.Result, self.Sp3 = self.pack_s.unpack(
             data[:8])
+        self.Size = self.Size * 4
         self.Text = struct.unpack('%dsx' % (self.Size - 9), data[8:])[0]
         self.Text = _eat_null_chars(self.Text)
         return self
@@ -2007,8 +2010,9 @@ class IS_AIC(object):
         if len(self.Inputs) > AIC_MAX_INPUTS:
             raise ValueError(f"IS_AIC: Too many inputs. Max is {AIC_MAX_INPUTS}")
 
-        # Size = 4 bytes header + (number of inputs * 4 bytes)
-        self.Size = (4 + (len(self.Inputs) * 4)) / 4
+        # Size byte = total packet bytes / 4 (new InSim 0.7A+ format)
+        # Total bytes = 4 bytes header + (number of inputs * 4 bytes)
+        self.Size = 1 + len(self.Inputs)
 
         data = self.pack_s.pack(self.Size, self.Type, self.ReqI, self.PLID)
 

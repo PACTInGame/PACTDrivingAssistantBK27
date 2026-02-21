@@ -366,7 +366,7 @@ class AICarController:
             )]
         else:
             inputs = [pyinsim.AIInputVal(Input=AIControl.SEND_AI_INFO)]
-
+        print()
         self.insim.send(pyinsim.ISP_AIC, PLID=plid, Inputs=inputs)
 
     def bind_ai_info_handler(self, plid: int, handler: callable) -> None:

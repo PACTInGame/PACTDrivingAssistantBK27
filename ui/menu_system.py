@@ -19,10 +19,17 @@ class MenuSystem:
         self.set_language = settings.get('language')
         self.translator = LanguageManager()
         self.keybinder = key_binder.Keybinder(self.ui_manager.event_bus)
+        self.ai_traffic_active = False
+
         self.ui_manager.event_bus.subscribe('state_data', self._state_change)
         self.ui_manager.event_bus.subscribe('button_clicked', self._handle_ui_action)
         self.ui_manager.event_bus.subscribe('player_name_changed', self._handle_player_change)
         self.ui_manager.event_bus.subscribe('new_keybinding', self._rebind_key)
+        self.ui_manager.event_bus.subscribe('ai_traffic_state_changed', self._on_ai_traffic_state_changed)
+
+    def _on_ai_traffic_state_changed(self, data):
+        """Callback from AIDriver when traffic state changes."""
+        self.ai_traffic_active = data.get('active', False)
 
     def _rebind_key(self, data):
         setting = data['setting']
@@ -65,10 +72,12 @@ class MenuSystem:
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (26, 0, 105, 20, 5, self.translator.get("Keys and Axes", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 0, 110, 20, 5,
+            (28, 0, 110, 20, 5, self.translator.get("AI Traffic", self.set_language),
+             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
+            (27, 0, 115, 20, 5,
              self.translator.get("Language", self.set_language) + f": {self.set_language}",
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (40, 0, 115, 20, 5, "^1" + self.translator.get("Close", self.set_language),
+            (40, 0, 120, 20, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -204,6 +213,32 @@ class MenuSystem:
             (21, 0, 80, 25, 5, self.translator.get("Cop Mode Settings", self.set_language),
              pyinsim.ISB_LIGHT),
             (22, 0, 85, 25, 5, cop + self.translator.get("Cop Assistance", self.set_language),
+             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
+            (40, 0, 90, 25, 5, "^1" + self.translator.get("Close", self.set_language),
+             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
+        ]
+
+        for button_id, x, y, w, h, text, style in buttons:
+            self.ui_manager.message_sender.create_button(button_id, x, y, w, h, text, style)
+
+    # ─── AI Traffic Menu ──────────────────────────────────────────────
+
+    def open_ai_traffic_menu(self):
+        """Öffnet das AI-Traffic-Menü"""
+        self.current_menu = 'ai_traffic'
+        self._clear_menu_buttons()
+
+        if self.ai_traffic_active:
+            toggle_color = "^2"
+            toggle_text = self.translator.get("Stop AI Traffic", self.set_language)
+        else:
+            toggle_color = "^1"
+            toggle_text = self.translator.get("Start AI Traffic", self.set_language)
+
+        buttons = [
+            (21, 0, 80, 25, 5, self.translator.get("AI Traffic", self.set_language),
+             pyinsim.ISB_LIGHT),
+            (22, 0, 85, 25, 5, toggle_color + toggle_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (40, 0, 90, 25, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
@@ -364,6 +399,8 @@ class MenuSystem:
                 self.open_keys_settings()
             elif button_id == 27:
                 self.change_language()
+            elif button_id == 28:
+                self.open_ai_traffic_menu()
 
         # ── Driving Menu ──
         elif self.current_menu == 'driving':
@@ -459,6 +496,21 @@ class MenuSystem:
                 current = self.settings.get('cop_assistance')
                 self.settings.set('cop_assistance', not current)
                 self.open_cop_menu()
+
+        # ── AI Traffic Menu ──
+        elif self.current_menu == 'ai_traffic':
+            if button_id == 22:  # Toggle AI Traffic
+                if self.ai_traffic_active:
+                    self.ui_manager.event_bus.emit('ai_traffic_stop', {})
+                    self.ui_manager.event_bus.emit(
+                        "notification", {'notification': '^3AI Traffic stopping...'})
+                else:
+                    self.ui_manager.event_bus.emit('ai_traffic_start', {})
+                    self.ui_manager.event_bus.emit(
+                        "notification", {'notification': '^2AI Traffic started.'})
+                # ai_traffic_active is updated by the synchronous callback
+                # _on_ai_traffic_state_changed which fires during the emit above
+                self.open_ai_traffic_menu()
 
         # ── Keys and Axes Menu ──
         elif self.current_menu == 'keys':

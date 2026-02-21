@@ -48,7 +48,6 @@ class AssistanceManager:
         self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
 
 
-
         # Weitere Systeme hier hinzufügen
 
     def _update_state_data(self, data):

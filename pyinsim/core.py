@@ -118,6 +118,8 @@ _PACKET_MAP = {
     insim_.ISP_SLC: insim_.IS_SLC,
     insim_.ISP_CSC: insim_.IS_CSC,
     insim_.ISP_CIM: insim_.IS_CIM,
+    insim_.ISP_AIC: insim_.IS_AIC,
+    insim_.ISP_AII: insim_.IS_AII,
 }
 
 # Event constants.

@@ -59,7 +59,6 @@ class Gearbox(AssistanceSystem):
 
         # Listen for calibration request from menu
         self.event_bus.subscribe('gearbox_calibrate', self._on_calibration_requested)
-        # TODO listen for gear key changes
 
     def _on_calibration_requested(self, data=None):
         """Wird vom Menü über den Event-Bus ausgelöst"""
