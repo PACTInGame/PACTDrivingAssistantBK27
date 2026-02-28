@@ -282,7 +282,7 @@ if __name__ == "__main__":
             if object.Index != 184:
                 objects.append((index, x, y, z))
         print(len(objects))
-        if len(objects) >= 2145:
+        if len(objects) >= 1245:
             gen = MapGenerator(objects)
             gen.process()
             gen.save_to_json()

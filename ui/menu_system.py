@@ -513,6 +513,8 @@ class MenuSystem:
                     self.ui_manager.event_bus.emit('ai_traffic_start', {})
                     self.ui_manager.event_bus.emit(
                         "notification", {'notification': '^2AI Traffic started.'})
+                    self.ui_manager.event_bus.emit(
+                        "notification", {'notification': '^7Correct layout needs to be selected.'})
                 # ai_traffic_active is updated by the synchronous callback
                 # _on_ai_traffic_state_changed which fires during the emit above
                 self.open_ai_traffic_menu()
