@@ -2,7 +2,7 @@ import math
 from typing import Dict, Any, List, Optional, Tuple
 import json
 
-from AI_Control import AIControlState
+from AI_Control import AIControlState, IndicatorMode
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
@@ -61,15 +61,20 @@ def dist(a=(0, 0, 0), b=(0, 0, 0)):
     return math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2)
 
 
-def load_routes_from_file(file_path: str) -> List[Dict[str, Any]]:
-    """Lädt Routen aus einer Datei. Bei inverted=True wird der Pfad umgekehrt."""
+def load_routes_from_file(file_path: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Lädt Routen und Marker aus einer Datei. Bei inverted=True wird der Pfad umgekehrt.
+
+    Returns:
+        Tuple of (roads, markers)
+    """
     with open(file_path, 'r', encoding='utf-8') as file:
         data = json.load(file)
     roads = data.get('roads', [])
     for road in roads:
         if road.get('inverted', False):
             road['path'] = list(reversed(road['path']))
-    return roads
+    markers = data.get('markers', [])
+    return roads, markers
 
 
 def get_closest_index_on_route(carX, carY, carZ, route_points):
@@ -309,9 +314,9 @@ class AIDriver(AssistanceSystem):
 
         # Speed parameters
         self.BASE_SPEED = 70.0           # Base speed in km/h on straight sections
-        self.STRAIGHT_SPEED = 100.0      # Speed in km/h on long straights (no curve for ≥STRAIGHT_LOOKAHEAD_DIST)
+        self.STRAIGHT_SPEED = 107.0      # Speed in km/h on long straights (no curve for ≥STRAIGHT_LOOKAHEAD_DIST)
         self.STRAIGHT_LOOKAHEAD_DIST = 120.0  # Minimum distance (m) without curve to allow STRAIGHT_SPEED
-        self.MIN_SPEED = 15.0            # Minimum speed on tight curves
+        self.MIN_SPEED = 22.0            # Minimum speed on tight curves
         self.CURVATURE_THRESHOLD = 0.004 # Curvature above which to slow down (lower = react to gentle curves)
 
         # Collision avoidance parameters
@@ -325,6 +330,27 @@ class AIDriver(AssistanceSystem):
         self.SMOOTHING_STEPS_THROTTLE = 10.0
         self.SMOOTHING_STEPS_BRAKE = 2.0
         self._smoothed: Dict[int, Dict[str, float]] = {}  # vehicle_id → {throttle, brake, steer}
+
+        # Marker data (stop lines, arrows) – loaded together with routes
+        self._markers: List[Dict[str, Any]] = []
+        # Pre-split marker lists for fast iteration (tuples of (x, y, z))
+        self._stop_lines: List[Tuple[float, float, float]] = []
+        self._arrows_left: List[Tuple[float, float, float]] = []
+        self._arrows_right: List[Tuple[float, float, float]] = []
+
+        # Per-vehicle marker interaction state
+        # stop_line: "idle" → "braking" → "stopped" → "departing" (then back to idle)
+        self._stop_state: Dict[int, str] = {}          # vehicle_id → state
+        self._stop_cooldown: Dict[int, int] = {}       # vehicle_id → remaining cooldown cycles
+        # indicator: remaining cycles until cancel (-1 = inactive)
+        self._indicator_timer: Dict[int, int] = {}     # vehicle_id → remaining cycles
+        # Track which markers a vehicle has already interacted with (to avoid re-trigger)
+        self._marker_cooldown: Dict[int, set] = {}     # vehicle_id → set of marker indices
+
+        self.MARKER_TRIGGER_DISTANCE = 3.0   # meters – activation radius for markers
+        self.MARKER_COOLDOWN_DISTANCE = 8.0  # meters – must move this far before re-trigger
+        self.STOP_BRAKE_POWER = 50.0         # % brake force at stop lines
+        self.INDICATOR_DURATION_CYCLES = 50  # 50 × 100ms = 5 seconds
 
     def _on_state_data(self, data):
         """Listen for track changes to reset AI traffic."""
@@ -368,13 +394,28 @@ class AIDriver(AssistanceSystem):
     # ─── Route helpers ────────────────────────────────────────────────
 
     def _load_routes(self):
-        """Load routes from file (once)."""
+        """Load routes and markers from file (once)."""
         if self.routes is None:
             trackname = str(self.current_track[:2])[2:4] if self.current_track else None
 
             if trackname is not None:
-                routes_list = load_routes_from_file(f"track_data/track_data_{trackname}.json")
-                self.routes = {road['road_id']: road for road in routes_list}
+                roads_list, markers_list = load_routes_from_file(f"track_data/track_data_{trackname}.json")
+                self.routes = {road['road_id']: road for road in roads_list}
+
+                # Store and pre-split markers by type for fast lookup
+                self._markers = markers_list
+                self._stop_lines = [
+                    tuple(m['position']) for m in markers_list if m['type'] == 'stop_line'
+                ]
+                self._arrows_left = [
+                    tuple(m['position']) for m in markers_list if m['type'] == 'arrow_left'
+                ]
+                self._arrows_right = [
+                    tuple(m['position']) for m in markers_list if m['type'] == 'arrow_right'
+                ]
+                print(f"[AIDriver] Loaded {len(self._stop_lines)} stop lines, "
+                      f"{len(self._arrows_left)} left arrows, "
+                      f"{len(self._arrows_right)} right arrows.")
 
     def _find_closest_route(self, vehicle) -> Optional[int]:
         """
@@ -500,6 +541,10 @@ class AIDriver(AssistanceSystem):
 
         self.assigned_routes.clear()
         self._smoothed.clear()
+        self._stop_state.clear()
+        self._stop_cooldown.clear()
+        self._indicator_timer.clear()
+        self._marker_cooldown.clear()
         self.state = self.STATE_INACTIVE
         self.stop_counter = 0
         print("[AIDriver] AI traffic fully stopped.")
@@ -528,6 +573,10 @@ class AIDriver(AssistanceSystem):
         for vid in departed:
             del self.assigned_routes[vid]
             self._smoothed.pop(vid, None)
+            self._stop_state.pop(vid, None)
+            self._stop_cooldown.pop(vid, None)
+            self._indicator_timer.pop(vid, None)
+            self._marker_cooldown.pop(vid, None)
             print(f"[AIDriver] Vehicle {vid} left – removed from AI traffic.")
 
         # ── Drive each assigned vehicle along its route ──
@@ -672,6 +721,105 @@ class AIDriver(AssistanceSystem):
 
         return self.CA_MAX_SPEED_AT_LIMIT * ratio
 
+    # ─── Marker interaction ─────────────────────────────────────────
+
+    def _process_markers(self, vehicle_id: int, vx: float, vy: float, vz: float,
+                         current_speed: float) -> Tuple[Optional[float], Optional[IndicatorMode]]:
+        """
+        Check proximity to markers and return overrides.
+
+        Returns:
+            (brake_override, indicator_override)
+            - brake_override: brake % if stop line active, else None
+            - indicator_override: IndicatorMode if arrow active, else None
+        """
+        brake_override: Optional[float] = None
+        indicator_override: Optional[IndicatorMode] = None
+
+        # Lazy-init per-vehicle state
+        if vehicle_id not in self._marker_cooldown:
+            self._marker_cooldown[vehicle_id] = set()
+
+        cooldown_set = self._marker_cooldown[vehicle_id]
+        stop_state = self._stop_state.get(vehicle_id, "idle")
+
+        # ── Stop-line state machine ──
+        if stop_state == "braking":
+            # Keep braking until nearly stopped
+            if current_speed < 1.0:
+                self._stop_state[vehicle_id] = "stopped"
+                self._stop_cooldown[vehicle_id] = 5  # 5 cycles = 500ms pause
+                brake_override = 100.0
+            else:
+                brake_override = self.STOP_BRAKE_POWER
+        elif stop_state == "stopped":
+            remaining = self._stop_cooldown.get(vehicle_id, 0) - 1
+            if remaining <= 0:
+                self._stop_state[vehicle_id] = "idle"
+                self._stop_cooldown.pop(vehicle_id, None)
+            else:
+                self._stop_cooldown[vehicle_id] = remaining
+                brake_override = 100.0  # hold brake while waiting
+        elif stop_state == "idle":
+            # Check proximity to stop lines
+            for i, (sx, sy, sz) in enumerate(self._stop_lines):
+                dx = vx - sx
+                dy = vy - sy
+                d_sq = dx * dx + dy * dy
+                if d_sq < self.MARKER_TRIGGER_DISTANCE * self.MARKER_TRIGGER_DISTANCE:
+                    marker_key = ("stop", i)
+                    if marker_key not in cooldown_set:
+                        self._stop_state[vehicle_id] = "braking"
+                        brake_override = self.STOP_BRAKE_POWER
+                        cooldown_set.add(marker_key)
+                        break
+                elif d_sq > self.MARKER_COOLDOWN_DISTANCE * self.MARKER_COOLDOWN_DISTANCE:
+                    cooldown_set.discard(("stop", i))
+
+        # ── Indicator timer countdown ──
+        ind_remaining = self._indicator_timer.get(vehicle_id, 0)
+        if ind_remaining > 0:
+            self._indicator_timer[vehicle_id] = ind_remaining - 1
+        elif ind_remaining == 0 and vehicle_id in self._indicator_timer:
+            # Timer just expired – cancel indicator
+            indicator_override = IndicatorMode.CANCEL
+            del self._indicator_timer[vehicle_id]
+
+        # Only check new arrow triggers when no indicator is active
+        if vehicle_id not in self._indicator_timer:
+            # Check left arrows
+            for i, (ax, ay, az) in enumerate(self._arrows_left):
+                dx = vx - ax
+                dy = vy - ay
+                d_sq = dx * dx + dy * dy
+                if d_sq < self.MARKER_TRIGGER_DISTANCE * self.MARKER_TRIGGER_DISTANCE:
+                    marker_key = ("left", i)
+                    if marker_key not in cooldown_set:
+                        indicator_override = IndicatorMode.LEFT
+                        self._indicator_timer[vehicle_id] = self.INDICATOR_DURATION_CYCLES
+                        cooldown_set.add(marker_key)
+                        break
+                elif d_sq > self.MARKER_COOLDOWN_DISTANCE * self.MARKER_COOLDOWN_DISTANCE:
+                    cooldown_set.discard(("left", i))
+
+            # Check right arrows (only if left wasn't just triggered)
+            if indicator_override is None and vehicle_id not in self._indicator_timer:
+                for i, (ax, ay, az) in enumerate(self._arrows_right):
+                    dx = vx - ax
+                    dy = vy - ay
+                    d_sq = dx * dx + dy * dy
+                    if d_sq < self.MARKER_TRIGGER_DISTANCE * self.MARKER_TRIGGER_DISTANCE:
+                        marker_key = ("right", i)
+                        if marker_key not in cooldown_set:
+                            indicator_override = IndicatorMode.RIGHT
+                            self._indicator_timer[vehicle_id] = self.INDICATOR_DURATION_CYCLES
+                            cooldown_set.add(marker_key)
+                            break
+                    elif d_sq > self.MARKER_COOLDOWN_DISTANCE * self.MARKER_COOLDOWN_DISTANCE:
+                        cooldown_set.discard(("right", i))
+
+        return brake_override, indicator_override
+
     # ─── Vehicle control ──────────────────────────────────────────────
 
     def _drive_vehicle(self, vehicle_id: int, vehicle: Vehicle,
@@ -695,13 +843,19 @@ class AIDriver(AssistanceSystem):
         vehicle_y = vehicle.data.y / 65536
         vehicle_z = vehicle.data.z / 65536
 
+        # Dynamic brake lookahead: 15m at 10 km/h, 40m at 60 km/h (linear)
+        current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
+
+        # ── Marker interaction (stop lines, indicators) ──
+        brake_override, indicator_override = self._process_markers(
+            vehicle_id, vehicle_x, vehicle_y, vehicle_z, current_speed
+        )
+
         # Find closest point on route and get upcoming points
         closest_index = get_closest_index_on_route(
             vehicle_x, vehicle_y, vehicle_z, route_data
         )
 
-        # Dynamic brake lookahead: 15m at 10 km/h, 40m at 60 km/h (linear)
-        current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
         lookahead_dist = 15.0 + (current_speed - 10.0) * 0.5  # 25m over 50 km/h range
         lookahead_dist = max(15.0, min(40.0, lookahead_dist))
 
@@ -773,6 +927,11 @@ class AIDriver(AssistanceSystem):
             target_angle, max_steering_angle=self.MAX_STEERING_ANGLE
         )
 
+        # ── Apply stop-line brake override ──
+        if brake_override is not None:
+            raw_throttle = 0.0
+            raw_brake = brake_override
+
         # ── Apply smoothing ──
         throttle, brake, steering = self._smooth(vehicle_id, raw_throttle, raw_brake, raw_steer)
 
@@ -782,3 +941,10 @@ class AIDriver(AssistanceSystem):
             brake=int(brake),
             steer=int(steering),
         ))
+
+        # ── Send indicator command (only when state changes) ──
+        if indicator_override is not None:
+            self.ai_controller.control_ai(vehicle_id, AIControlState(
+                indicators=indicator_override
+            ))
+

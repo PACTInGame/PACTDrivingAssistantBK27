@@ -451,10 +451,6 @@ if __name__ == "__main__":
 
     # Example 1: Simple control
     controller.control_ai(38, AIControlState(
-        ignition=True,
-        throttle=75,
-        steer=10,  # Slight right
-        headlights=HeadlightMode.LOW,
         indicators=IndicatorMode.CANCEL
     ))
 

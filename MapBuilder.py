@@ -9,6 +9,10 @@ from scipy.spatial import KDTree, distance_matrix
 
 
 class MapGenerator:
+    # Object indices that are markers (not road points)
+    MARKER_INDICES = {4, 8, 11}  # 4=stop_line, 8=arrow_left, 11=arrow_right
+    MARKER_TYPE_MAP = {4: "stop_line", 8: "arrow_left", 11: "arrow_right"}
+
     def __init__(self, raw_objects):
         """
         raw_objects: List of tuples (index, x, y, z)
@@ -17,20 +21,38 @@ class MapGenerator:
         self.roads = {}  # {road_index: [ordered (x,y,z) points]}
         self.closed_roads = set()  # Stores indices of roads that are loops
         self.junctions = []
+        self.markers = []  # List of {"type": str, "position": [x, y, z]}
         self.junction_radius = 3.0  # meters
         self.loop_threshold = 50.0  # meters - Distance to auto-close loop
 
     def process(self):
-        print("1. Grouping and ordering road points...")
+        print("1. Extracting markers...")
+        self._extract_markers()
+
+        print("2. Grouping and ordering road points...")
         self._build_ordered_roads()
 
-        print("2. Checking for closed loops...")
+        print("3. Checking for closed loops...")
         self._handle_closed_loops()
 
-        print("3. Detecting junctions in 3D space...")
+        print("4. Detecting junctions in 3D space...")
         self._find_junctions()
 
         return self.roads, self.junctions
+
+    def _extract_markers(self):
+        """Extract marker objects (stop lines, arrows) and remove them from raw_objects."""
+        remaining = []
+        for idx, x, y, z in self.raw_objects:
+            if idx in self.MARKER_INDICES:
+                self.markers.append({
+                    "type": self.MARKER_TYPE_MAP[idx],
+                    "position": [x, y, z]
+                })
+            else:
+                remaining.append((idx, x, y, z))
+        self.raw_objects = remaining
+        print(f"   Found {len(self.markers)} markers.")
 
     def _build_ordered_roads(self):
         """
@@ -185,7 +207,8 @@ class MapGenerator:
                 "coordinate_system": "x, y, z"
             },
             "roads": [],
-            "junctions": self.junctions
+            "junctions": self.junctions,
+            "markers": self.markers
         }
 
         for r_idx, points in self.roads.items():
@@ -259,7 +282,7 @@ if __name__ == "__main__":
             if object.Index != 184:
                 objects.append((index, x, y, z))
         print(len(objects))
-        if len(objects) >= 2076:
+        if len(objects) >= 2145:
             gen = MapGenerator(objects)
             gen.process()
             gen.save_to_json()
