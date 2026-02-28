@@ -337,8 +337,11 @@ class AIDriver(AssistanceSystem):
     def _load_routes(self):
         """Load routes from file (once)."""
         if self.routes is None:
-            routes_list = load_routes_from_file("track_data/track_data.json")
-            self.routes = {road['road_id']: road for road in routes_list}
+            trackname = str(self.current_track[:2])[2:4] if self.current_track else None
+
+            if trackname is not None:
+                routes_list = load_routes_from_file(f"track_data/track_data_{trackname}.json")
+                self.routes = {road['road_id']: road for road in routes_list}
 
     def _find_closest_route(self, vehicle) -> Optional[int]:
         """
@@ -468,7 +471,6 @@ class AIDriver(AssistanceSystem):
 
     def _process_active(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Normal active processing: assign routes and drive vehicles."""
-        self._load_routes()
         if not self.routes:
             return {'ai_active': False}
 

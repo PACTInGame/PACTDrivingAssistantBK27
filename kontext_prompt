@@ -154,9 +154,3 @@ Alle relevanten Einstellungen werden im settings_manager verwaltet. Wenn Einstel
 
 Der Code ist möglichst modular gestaltet und ich habe versucht als Schnittstelle immer nur den Eventbus zu verwenden. Da es sich hierbei um eine große Anwendung handelt, ist es immer enorm wichtig, alle Abhängigkeiten und Wechselwirkungen zu bedenken. Alle Code-Änderungen sollten weiterhin perfekt modular gehalten werden, und sauber geschrieben sein. 
 Wie oben bereits erwähnt, sind nicht alle Funktionen bereits fertig implementiert. Lege den Fokus aber nur auf die Komponenten, die für die aktuelle Änderung relevant sind. Wenn dir etwas in anderen Dateien auffällt, gib immer beschied!
-
-
-
-
-
-
