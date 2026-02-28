@@ -181,14 +181,24 @@ def analyze_upcoming_track(route_points) -> Tuple[float, Tuple[float, float, flo
 
 
     average_curvature = sum(curvatures) / len(curvatures) if curvatures else 0.0
-    if len(route_points) >= 3:
+
+    # Weighted steering target using indices 1, 2, 3 (weights: 25%, 50%, 25%).
+    # Index 2 (directly ahead) dominates, while 1 and 3 provide stability.
+    if len(route_points) >= 4:
+        p1, p2, p3 = route_points[1], route_points[2], route_points[3]
         target_point = (
-            (route_points[1][0] + route_points[2][0]) / 2,
-            (route_points[1][1] + route_points[2][1]) / 2,
-            (route_points[1][2] + route_points[2][2]) / 2
+            p1[0] * 0.25 + p2[0] * 0.50 + p3[0] * 0.25,
+            p1[1] * 0.25 + p2[1] * 0.50 + p3[1] * 0.25,
+            p1[2] * 0.25 + p2[2] * 0.50 + p3[2] * 0.25,
+        )
+    elif len(route_points) >= 3:
+        # Not enough points for full weighting, average indices 1-2
+        p1, p2 = route_points[1], route_points[2]
+        target_point = (
+            (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, (p1[2] + p2[2]) / 2,
         )
     else:
-        target_point = tuple(route_points[1])
+        target_point = tuple(route_points[1] if len(route_points) > 1 else route_points[0])
 
     return average_curvature, target_point
 
@@ -246,6 +256,8 @@ class AIDriver(AssistanceSystem):
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("ai_traffic", event_bus, settings)
+        self.current_track = None
+        self.event_bus.subscribe("state_data", self._on_state_data)
         self.routes = None
         self.ai_controller = None
         self.state = self.STATE_INACTIVE
@@ -267,7 +279,7 @@ class AIDriver(AssistanceSystem):
         # Speed parameters
         self.BASE_SPEED = 70.0           # Base speed in km/h on straight sections
         self.MIN_SPEED = 15.0            # Minimum speed on tight curves
-        self.CURVATURE_THRESHOLD = 0.01  # Curvature above which to slow down
+        self.CURVATURE_THRESHOLD = 0.004 # Curvature above which to slow down (lower = react to gentle curves)
 
         # Collision avoidance parameters
         self.CA_DETECTION_DISTANCE = 50.0   # Start reacting at this distance (meters)
@@ -277,10 +289,19 @@ class AIDriver(AssistanceSystem):
 
         # Smoothing: each cycle, move 1/SMOOTHING_STEPS of the remaining distance
         # toward the target. Handles targets that change every cycle gracefully.
-        self.SMOOTHING_STEPS_THROTTLE = 4.0
+        self.SMOOTHING_STEPS_THROTTLE = 10.0
         self.SMOOTHING_STEPS_BRAKE = 2.0
-        self.SMOOTHING_STEPS_STEER = 2.0
         self._smoothed: Dict[int, Dict[str, float]] = {}  # vehicle_id → {throttle, brake, steer}
+
+    def _on_state_data(self, data):
+        """Listen for track changes to reset AI traffic."""
+        track = data.get('track')
+        if track != self.current_track:
+            self.current_track = track
+            if self.state != self.STATE_INACTIVE:
+                print(f"[AIDriver] Track changed to {track} – stopping AI traffic.")
+                self._on_stop()
+            self.routes = None
 
     def _on_ai_controller_initialized(self, ai_controller):
         self.ai_controller = ai_controller
@@ -360,11 +381,10 @@ class AIDriver(AssistanceSystem):
         Returns:
             Target speed in km/h
         """
-        print(curvature)
         if curvature < self.CURVATURE_THRESHOLD:
             return self.BASE_SPEED
         else:
-            speed_reduction = (curvature - self.CURVATURE_THRESHOLD) * 1000.0
+            speed_reduction = (curvature - self.CURVATURE_THRESHOLD) * 1500.0
             return max(self.MIN_SPEED, self.BASE_SPEED - speed_reduction)
 
     # ─── AI Info monitoring ───────────────────────────────────────────
@@ -373,14 +393,19 @@ class AIDriver(AssistanceSystem):
         """Handle AI info packets – automatic gear shifting and stall recovery."""
         if self.ai_controller is None:
             return
-        if aii.RPM > 4500:
+        if aii.RPM > 3600 and aii.Gear < 6:
             self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=True))
-        if aii.RPM < 2000 and aii.Gear > 2:
+            print(f"[AIDriver] Upshift: RPM={aii.RPM}, Gear={aii.Gear}")
+        else:
+            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=False))
+        if aii.RPM < 1700 and aii.Gear > 2:
             self.ai_controller.control_ai(aii.PLID, AIControlState(shift_down=True))
-        if aii.Gear < 1:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=True))
+        else:
+            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_down=False))
         if aii.RPM < 300:
             self.ai_controller.control_ai(aii.PLID, AIControlState(ignition=True))
+        else:
+            self.ai_controller.control_ai(aii.PLID, AIControlState(ignition=False))
 
     # ─── Main process loop ────────────────────────────────────────────
 
@@ -503,12 +528,13 @@ class AIDriver(AssistanceSystem):
 
         s = self._smoothed[vehicle_id]
         alpha_throttle = 1.0 / self.SMOOTHING_STEPS_THROTTLE
-        alpha_steer = 1.0 / self.SMOOTHING_STEPS_STEER
         alpha_brake = 1.0 / self.SMOOTHING_STEPS_BRAKE
 
         s['throttle'] += (raw_throttle - s['throttle']) * alpha_throttle
         s['brake'] += (raw_brake - s['brake']) * alpha_brake
-        s['steer'] += (raw_steer - s['steer']) * alpha_steer
+
+        # Steering is NOT smoothed – smoothing causes overshoot and oscillation
+        s['steer'] = raw_steer
 
         return s['throttle'], s['brake'], s['steer']
 
@@ -598,8 +624,14 @@ class AIDriver(AssistanceSystem):
         closest_index = get_closest_index_on_route(
             vehicle_x, vehicle_y, vehicle_z, route_data
         )
+
+        # Dynamic brake lookahead: 15m at 10 km/h, 40m at 60 km/h (linear)
+        current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
+        lookahead_dist = 15.0 + (current_speed - 10.0) * 0.5  # 25m over 50 km/h range
+        lookahead_dist = max(15.0, min(40.0, lookahead_dist))
+
         upcoming_points = get_next_points_for_distance(
-            closest_index, route_data, min_distance=50.0, min_points=5
+            closest_index, route_data, min_distance=lookahead_dist, min_points=5
         )
 
         # Analyze the upcoming track section
@@ -617,8 +649,6 @@ class AIDriver(AssistanceSystem):
             else:
                 ca_speed_limit = self._calculate_following_speed(player_distance)
                 target_speed = min(target_speed, ca_speed_limit)
-
-        current_speed = vehicle.data.speed if hasattr(vehicle.data, 'speed') else 0.0
 
         if emergency_brake:
             raw_throttle = 0.0
