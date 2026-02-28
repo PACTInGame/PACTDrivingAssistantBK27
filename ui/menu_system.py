@@ -45,10 +45,15 @@ class MenuSystem:
 
     def _state_change(self, data):
         new_on_track = data['on_track']
+        print(f"State update received - on_track: {new_on_track}")
         if new_on_track != self.on_track:
             self.on_track = new_on_track
             if new_on_track and self.current_menu == 'none':
                 self.create_open_menu_button()
+                print("Player is on track - showing menu button")
+            elif not new_on_track:
+                self._clear_menu_buttons()
+                print("Player is not on track - clearing menu button")
             else:
                 self.close_menu()
 

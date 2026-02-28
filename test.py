@@ -13,7 +13,7 @@ def handle_layout(insim, axm):
         if object.Index != 184:
             objects.append((index, x, y, z))
     print(len(objects))
-    if len(objects) >= 310:
+    if len(objects) >= 318:
         gen = MapGenerator(objects)
         gen.process()
         gen.save_to_json()

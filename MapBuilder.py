@@ -196,7 +196,8 @@ class MapGenerator:
                 "road_id": int(r_idx),
                 "point_count": len(points),
                 "closed_loop": is_closed,  # <--- New Flag
-                "path": points
+                "path": points,
+                "inverted": False
             })
 
         with open(filename, 'w') as f:
@@ -240,24 +241,31 @@ class MapGenerator:
 
 # --- Example Usage ---
 if __name__ == "__main__":
-    # 1. Standard Line
-    road_1 = [(20, x, 0, 0) for x in [0, 10, 2, 8, 4, 6]]
+    import pyinsim
+    from MapBuilder import MapGenerator
 
-    # 2. A Loop (Circle-ish)
-    # Points roughly in a circle, start (0,0) and end (1,1) are close
-    theta = np.linspace(0, 2 * np.pi - 0.2, 10)  # Stop short of full circle
-    r = 100
-    road_loop_pts = []
-    for i, t in enumerate(theta):
-        x = r * np.cos(t)
-        y = r * np.sin(t)
-        road_loop_pts.append((99, x, y, 0))
+    insim = pyinsim.insim(b'127.0.0.1', 29999, Admin=b'', Flags=pyinsim.ISF_MCI | pyinsim.ISF_LOCAL, Interval=1000)
+    objects = []
 
-    # 3. Mock Data assembly
-    input_data = road_1 + road_loop_pts
 
-    # Run Generator
-    gen = MapGenerator(input_data)
-    gen.process()
-    gen.save_to_json()
-    gen.debug_plot()
+    def handle_layout(insim, axm):
+        for object in axm.Info:
+            index = object.Index
+            x = object.X / 16
+            y = object.Y / 16
+            z = object.Zbyte / 4
+            # Coordinates in Meters:
+            if object.Index != 184:
+                objects.append((index, x, y, z))
+        print(len(objects))
+        if len(objects) >= 587:
+            gen = MapGenerator(objects)
+            gen.process()
+            gen.save_to_json()
+            gen.debug_plot()
+
+
+    insim.bind(pyinsim.ISP_AXM, handle_layout)
+    insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
+
+    pyinsim.run()

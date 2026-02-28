@@ -31,10 +31,14 @@ def dist(a=(0, 0, 0), b=(0, 0, 0)):
 
 
 def load_routes_from_file(file_path: str) -> List[Dict[str, Any]]:
-    """Lädt Routen aus einer Datei"""
+    """Lädt Routen aus einer Datei. Bei inverted=True wird der Pfad umgekehrt."""
     with open(file_path, 'r', encoding='utf-8') as file:
         data = json.load(file)
-    return data.get('roads', [])
+    roads = data.get('roads', [])
+    for road in roads:
+        if road.get('inverted', False):
+            road['path'] = list(reversed(road['path']))
+    return roads
 
 
 def get_closest_index_on_route(carX, carY, carZ, route_points):
