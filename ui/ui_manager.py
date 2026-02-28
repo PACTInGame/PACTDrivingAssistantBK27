@@ -33,6 +33,9 @@ class UIManager:
         self.notification_time = time.perf_counter()
         self.collision_warning_level = 0
         self.collision_warning_color = pyinsim.ISB_DARK
+        self.cross_traffic_warning_level = 0
+        self.cross_traffic_warning_side = None
+        self.cross_traffic_warning_color = pyinsim.ISB_DARK
         self.hud_enabled = False
         self.siren_active = False
         self.strobe_active = False
@@ -40,6 +43,7 @@ class UIManager:
 
         # Event-Handler
         self.event_bus.subscribe('collision_warning_changed', self._update_collision_warning_display)
+        self.event_bus.subscribe('cross_traffic_warning_changed', self._update_cross_traffic_warning_display)
         self.event_bus.subscribe('blind_spot_warning_changed', self._update_blind_spot_display)
         self.event_bus.subscribe('outgauge_data', self._get_hud_data)
         self.event_bus.subscribe('state_data', self._state_change)
@@ -208,22 +212,40 @@ class UIManager:
             speed_text = f"{self.speed} km/h" if self.settings.get(
                 "unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
             rpm_text = f"{self.rpm} rpm" if self.rpm < self.redline - 1 else f"^1{self.rpm} rpm"
+
+            # Bestimme den aktiven Warnzustand (Frontkollision hat Priorität)
+            hud_style = pyinsim.ISB_DARK
+
             if self.collision_warning_level >= 2:
                 self.collision_warning_color = pyinsim.ISB_LIGHT if self.collision_warning_color == pyinsim.ISB_DARK else pyinsim.ISB_DARK
-
             if self.collision_warning_level > 0:
                 speed_text = "^1- - -"
                 rpm_text = "^1- - -"
+                hud_style = self.collision_warning_color
             if self.collision_warning_level <= 2:
                 self.collision_warning_color = pyinsim.ISB_DARK
 
+            # Querverkehrswarnung (nur wenn keine Frontkollisionswarnung aktiv)
+            if self.collision_warning_level == 0 and self.cross_traffic_warning_level > 0:
+                if self.cross_traffic_warning_level >= 2:
+                    self.cross_traffic_warning_color = pyinsim.ISB_LIGHT if self.cross_traffic_warning_color == pyinsim.ISB_DARK else pyinsim.ISB_DARK
+                    hud_style = self.cross_traffic_warning_color
+                else:
+                    self.cross_traffic_warning_color = pyinsim.ISB_DARK
+
+                ctw_symbol = "^1< < <" if self.cross_traffic_warning_side == 'right' else "^1> > >"
+                speed_text = ctw_symbol
+                rpm_text = ctw_symbol
+            else:
+                self.cross_traffic_warning_color = pyinsim.ISB_DARK
+
             self.message_sender.create_button(1, self.settings.get("hud_width"), self.settings.get("hud_height"),
                                                 13, 8,
-                                                speed_text, self.collision_warning_color)
+                                                speed_text, hud_style)
             self.message_sender.create_button(2, self.settings.get("hud_width") + 13,
                                                   self.settings.get("hud_height"),
                                                   13,
-                                                  8, rpm_text, self.collision_warning_color)
+                                                  8, rpm_text, hud_style)
             self.message_sender.create_button(3, self.settings.get("hud_width") + 26, self.settings.get("hud_height"),
                                                 3, 4,
                                                 f"{self.gear}", pyinsim.ISB_DARK)
@@ -252,6 +274,19 @@ class UIManager:
             self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
 
         self.collision_warning_level = warning_level
+
+    def _update_cross_traffic_warning_display(self, data):
+        """Aktualisiert Querverkehrswarn-Anzeige"""
+        warning_level = data['level']
+        warning_side = data.get('side')
+
+        if warning_level >= 2 > self.cross_traffic_warning_level:
+            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+
+        self.cross_traffic_warning_level = warning_level
+        self.cross_traffic_warning_side = warning_side
 
     def _update_blind_spot_display(self, data):
         """Aktualisiert Toter-Winkel-Anzeige"""
