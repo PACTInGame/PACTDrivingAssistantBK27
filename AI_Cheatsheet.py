@@ -450,22 +450,23 @@ if __name__ == "__main__":
     controller = AICarController(insim)
 
     # Example 1: Simple control
-    controller.control_ai(2, AIControlState(
+    controller.control_ai(38, AIControlState(
         ignition=True,
         throttle=75,
         steer=10,  # Slight right
-        headlights=HeadlightMode.LOW
+        headlights=HeadlightMode.LOW,
+        indicators=IndicatorMode.CANCEL
     ))
 
     # Example 2: Using dictionary interface
-    controller.control_ai_raw(2, {
-        'throttle': 50,
-        'steer': -20,  # Left turn
-        'indicators': IndicatorMode.LEFT
-    })
+    #controller.control_ai_raw(38, {
+    #    'throttle': 50,
+    #    'steer': -20,  # Left turn
+     #   'indicators': IndicatorMode.LEFT
+    #})
 
     # Example 3: Using helper functions
-    controller.control_ai(2, AIControlHelper.drive_forward(speed_percent=80))
+    #controller.control_ai(2, AIControlHelper.drive_forward(speed_percent=80))
 
 
     # Example 4: Request AI info with callback

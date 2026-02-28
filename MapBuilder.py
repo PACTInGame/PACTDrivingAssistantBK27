@@ -255,6 +255,7 @@ if __name__ == "__main__":
             y = object.Y / 16
             z = object.Zbyte / 4
             # Coordinates in Meters:
+            print(object.Index)
             if object.Index != 184:
                 objects.append((index, x, y, z))
         print(len(objects))

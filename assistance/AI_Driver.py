@@ -25,6 +25,37 @@ def calculate_angle(own_x: float, own_y: float, point_x: float, point_y: float, 
     return angle
 
 
+def calculate_angle_meters(own_x_m: float, own_y_m: float, target_x_m: float, target_y_m: float,
+                           own_heading: float) -> float:
+    """Calculate angle from own position to target, both already in meters.
+
+    Same logic as calculate_angle but without the /65536 conversion on own_x/own_y,
+    since both coordinate pairs are expected to be in meters already.
+
+    Args:
+        own_x_m: Own X position in meters
+        own_y_m: Own Y position in meters
+        target_x_m: Target X position in meters
+        target_y_m: Target Y position in meters
+        own_heading: Own heading in game units
+
+    Returns:
+        Angle in degrees (-180 to +180), 0 = straight ahead
+    """
+    ang = (math.atan2((own_x_m - target_x_m),
+                      (own_y_m - target_y_m)) * 180.0) / 3.1415926535897931
+    if ang < 0.0:
+        ang = 360.0 + ang
+    consider_dir = ang + own_heading / 182
+    if consider_dir > 360.0:
+        consider_dir -= 360.0
+    angle = (consider_dir + 180.0) % 360.0
+
+    if angle > 180.0:
+        angle -= 360.0
+    return angle
+
+
 def dist(a=(0, 0, 0), b=(0, 0, 0)):
     """Determine the distance between two points."""
     return math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2)
@@ -278,6 +309,8 @@ class AIDriver(AssistanceSystem):
 
         # Speed parameters
         self.BASE_SPEED = 70.0           # Base speed in km/h on straight sections
+        self.STRAIGHT_SPEED = 100.0      # Speed in km/h on long straights (no curve for ≥STRAIGHT_LOOKAHEAD_DIST)
+        self.STRAIGHT_LOOKAHEAD_DIST = 120.0  # Minimum distance (m) without curve to allow STRAIGHT_SPEED
         self.MIN_SPEED = 15.0            # Minimum speed on tight curves
         self.CURVATURE_THRESHOLD = 0.004 # Curvature above which to slow down (lower = react to gentle curves)
 
@@ -374,21 +407,23 @@ class AIDriver(AssistanceSystem):
 
     # ─── Speed ────────────────────────────────────────────────────────
 
-    def calculate_target_speed(self, curvature: float) -> float:
+    def calculate_target_speed(self, curvature: float, long_straight: bool = False) -> float:
         """
         Calculate target speed based on upcoming curvature.
 
         Args:
             curvature: Average curvature of upcoming section
+            long_straight: True if no curve detected for ≥STRAIGHT_LOOKAHEAD_DIST ahead
 
         Returns:
             Target speed in km/h
         """
+        base = self.STRAIGHT_SPEED if long_straight else self.BASE_SPEED
         if curvature < self.CURVATURE_THRESHOLD:
-            return self.BASE_SPEED
+            return base
         else:
             speed_reduction = (curvature - self.CURVATURE_THRESHOLD) * 1500.0
-            return max(self.MIN_SPEED, self.BASE_SPEED - speed_reduction)
+            return max(self.MIN_SPEED, base - speed_reduction)
 
     # ─── AI Info monitoring ───────────────────────────────────────────
 
@@ -505,7 +540,7 @@ class AIDriver(AssistanceSystem):
             if route_data is None:
                 continue
 
-            self._drive_vehicle(vehicle_id, vehicle, route_data, own_vehicle)
+            self._drive_vehicle(vehicle_id, vehicle, route_data, own_vehicle, vehicles)
 
         return {'ai_active': True}
 
@@ -578,6 +613,42 @@ class AIDriver(AssistanceSystem):
         in_cone = abs(angle) < self.CA_CONE_HALF_ANGLE
         return in_cone, distance
 
+    def _is_ai_vehicle_ahead(self, vehicle: Vehicle,
+                             other_vehicle: Vehicle) -> Tuple[bool, float]:
+        """
+        Check whether another AI vehicle is directly ahead of the given AI vehicle.
+
+        Same logic as _is_player_ahead_of_vehicle but uses calculate_angle_meters
+        since both vehicles have coordinates in game units (both need /65536).
+
+        Args:
+            vehicle: The AI vehicle whose forward cone is checked
+            other_vehicle: The other AI vehicle to check against
+
+        Returns:
+            Tuple of (is_ahead, distance_in_meters).
+        """
+        # Convert both positions to meters
+        vx = vehicle.data.x / 65536
+        vy = vehicle.data.y / 65536
+        ox = other_vehicle.data.x / 65536
+        oy = other_vehicle.data.y / 65536
+
+        dx = vx - ox
+        dy = vy - oy
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        # Quick reject: too far away to matter
+        if distance > self.CA_DETECTION_DISTANCE:
+            return False, distance
+
+        # Angle from AI vehicle toward the other AI vehicle, relative to AI vehicle's heading
+        angle = calculate_angle_meters(vx, vy, ox, oy, vehicle.data.heading)
+
+        # Check if angle falls inside the forward cone (centered on 0°)
+        in_cone = abs(angle) < self.CA_CONE_HALF_ANGLE
+        return in_cone, distance
+
     def _calculate_following_speed(self, distance: float) -> float:
         """
         Calculate the maximum allowed speed based on distance to a vehicle ahead.
@@ -604,7 +675,8 @@ class AIDriver(AssistanceSystem):
     # ─── Vehicle control ──────────────────────────────────────────────
 
     def _drive_vehicle(self, vehicle_id: int, vehicle: Vehicle,
-                       route_data: Dict[str, Any], own_vehicle: OwnVehicle):
+                       route_data: Dict[str, Any], own_vehicle: OwnVehicle,
+                       vehicles: Dict[int, Vehicle]):
         """
         Execute one control step for a single vehicle along its route.
 
@@ -613,6 +685,7 @@ class AIDriver(AssistanceSystem):
             vehicle: Vehicle object with current position/state
             route_data: Route dict with 'path' key
             own_vehicle: The player's own vehicle (for collision avoidance)
+            vehicles: All AI vehicles dict (for AI-to-AI collision avoidance)
         """
         if self.ai_controller is None:
             return
@@ -639,17 +712,44 @@ class AIDriver(AssistanceSystem):
         # Analyze the upcoming track section
         curvature, target_point = analyze_upcoming_track(upcoming_points)
 
+        # ── Long-straight detection: look 120m ahead for curves ──
+        long_straight = False
+        far_points = get_next_points_for_distance(
+            closest_index, route_data,
+            min_distance=self.STRAIGHT_LOOKAHEAD_DIST, min_points=5
+        )
+        far_curvature, _ = analyze_upcoming_track(far_points)
+        if far_curvature < self.CURVATURE_THRESHOLD:
+            long_straight = True
+
         # ── Speed feedforward ──
-        target_speed = self.calculate_target_speed(curvature)
+        target_speed = self.calculate_target_speed(curvature, long_straight=long_straight)
 
         # ── Collision avoidance override ──
+        # Check player vehicle
         is_ahead, player_distance = self._is_player_ahead_of_vehicle(vehicle, own_vehicle)
         emergency_brake = False
+        closest_distance = float('inf')
+
         if is_ahead:
-            if player_distance < self.CA_EMERGENCY_DISTANCE:
+            closest_distance = player_distance
+
+        # Check other AI vehicles
+        for other_id, other_vehicle in vehicles.items():
+            if other_id == vehicle_id:
+                continue
+            if other_id not in self.assigned_routes:
+                continue
+            ai_ahead, ai_distance = self._is_ai_vehicle_ahead(vehicle, other_vehicle)
+            if ai_ahead and ai_distance < closest_distance:
+                closest_distance = ai_distance
+
+        # Apply collision avoidance based on closest obstacle
+        if closest_distance < float('inf'):
+            if closest_distance < self.CA_EMERGENCY_DISTANCE:
                 emergency_brake = True
             else:
-                ca_speed_limit = self._calculate_following_speed(player_distance)
+                ca_speed_limit = self._calculate_following_speed(closest_distance)
                 target_speed = min(target_speed, ca_speed_limit)
 
         if emergency_brake:
