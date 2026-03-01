@@ -1,16 +1,10 @@
-import math
 import time
 from typing import Dict, Any
 
-import pyautogui
-import shapely
-from shapely.geometry.point import Point
-from shapely.geometry.polygon import Polygon
 
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
-from misc.helpers import calc_polygon_points, point_in_rectangle
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 

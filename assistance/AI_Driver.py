@@ -9,6 +9,7 @@ from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.language import LanguageManager
+from misc.helpers import resolve_path
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -400,7 +401,7 @@ class AIDriver(AssistanceSystem):
 
         # --- Validate track data file exists ---
         trackname = str(self.current_track[:2])[2:4]
-        file_path = f"track_data/track_data_{trackname}.json"
+        file_path = resolve_path("track_data", f"track_data_{trackname}.json")
         if not os.path.isfile(file_path):
             lang = self.settings.get('language')
             self.event_bus.emit("notification",
@@ -459,7 +460,7 @@ class AIDriver(AssistanceSystem):
             trackname = str(self.current_track[:2])[2:4] if self.current_track else None
 
             if trackname is not None:
-                roads_list, markers_list = load_routes_from_file(f"track_data/track_data_{trackname}.json")
+                roads_list, markers_list = load_routes_from_file(resolve_path("track_data", f"track_data_{trackname}.json"))
                 self.routes = {road['road_id']: road for road in roads_list}
 
                 # Store and pre-split markers by type for fast lookup

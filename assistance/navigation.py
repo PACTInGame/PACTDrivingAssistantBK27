@@ -8,6 +8,7 @@ from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.language import LanguageManager
+from misc.helpers import resolve_path
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -163,7 +164,7 @@ class NavigationSystem(AssistanceSystem):
 
     def _load_map_data(self):
         """Parses the JSON and builds the Graph"""
-        file_path = f"track_data/track_data_{self.current_track[:2]}.json"
+        file_path = resolve_path("track_data", f"track_data_{self.current_track[:2]}.json")
 
         if not os.path.exists(file_path):
             print(f"NavSystem: Map file not found {file_path}")

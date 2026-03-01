@@ -3,17 +3,22 @@ Setup Wizard for LFS Assistant Add-on.
 Guides the user through first-time configuration of LFS (cfg.txt, InSim autostart).
 """
 
+import glob
 import os
 import re
-import threading
+import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import psutil
 
+from misc.helpers import resolve_path
+
 # --- Constants ---
 
-FIRST_RUN_FLAG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.setup_done')
+def _get_flag_file_path() -> str:
+    """Returns the path to the setup flag file, next to the executable or project root."""
+    return resolve_path('.setup_done')
 
 DEFAULT_LFS_CFG_PATH = r"C:\LFS\cfg.txt"
 
@@ -33,10 +38,15 @@ REQUIRED_CFG_SETTINGS = {
 
 INSIM_AUTOEXEC_LINE = "/insim 29999"
 
+# Directory containing the bundled .lyt layout files (relative to this file)
+def _get_layouts_dir() -> str:
+    """Returns the path to the layouts directory, relative to EXE or project root."""
+    return resolve_path('layouts')
+
 
 def is_first_run() -> bool:
     """Check whether the setup has already been completed."""
-    flag = os.path.normpath(FIRST_RUN_FLAG_FILE)
+    flag = _get_flag_file_path()
     if not os.path.isfile(flag):
         return True
     try:
@@ -48,7 +58,7 @@ def is_first_run() -> bool:
 
 def mark_setup_done():
     """Write the flag file so the wizard is not shown again."""
-    flag = os.path.normpath(FIRST_RUN_FLAG_FILE)
+    flag = _get_flag_file_path()
     os.makedirs(os.path.dirname(flag), exist_ok=True)
     with open(flag, 'w', encoding='utf-8') as f:
         f.write('true')
@@ -128,6 +138,26 @@ def add_insim_autoexec(lfs_dir: str):
         if existing and not existing.endswith('\n'):
             f.write('\n')
         f.write(INSIM_AUTOEXEC_LINE + '\n')
+
+
+def copy_layout_files(lfs_dir: str) -> int:
+    """
+    Copy all .lyt layout files from the application's ``layouts`` directory
+    into the LFS ``layout`` folder (``<lfs_dir>/layout/``).
+
+    Returns the number of files copied.
+    """
+    dest_dir = os.path.join(lfs_dir, 'data/layout')
+    os.makedirs(dest_dir, exist_ok=True)
+
+    lyt_files = glob.glob(os.path.join(_get_layouts_dir(), '*.lyt'))
+    copied = 0
+    for src_path in lyt_files:
+        filename = os.path.basename(src_path)
+        dest_path = os.path.join(dest_dir, filename)
+        shutil.copy2(src_path, dest_path)
+        copied += 1
+    return copied
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +305,38 @@ class SetupWizard:
                 add_insim_autoexec(self.lfs_dir)
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to update autoexec.lfs:\n{e}")
-        self._step_done()
+        self._step_copy_layouts()
+
+    def _step_copy_layouts(self):
+        """Step: Ask whether to install bundled AI traffic layouts."""
+        self._clear_buttons()
+        self.path_var.set("")
+
+        result = messagebox.askyesno(
+            "Install AI Traffic Layouts",
+            "Do you want to install the AI traffic layouts?\n\n"
+            "These layouts are required for the AI traffic feature on supported tracks. "
+            "If you select 'No', you can always copy them manually later."
+        )
+        if result:
+            self.status_label.config(text="Installing AI traffic layouts…")
+            self.info_label.config(text="")
+            try:
+                copied = copy_layout_files(self.lfs_dir)
+                if copied > 0:
+                    self.status_label.config(
+                        text=f"{copied} layout file(s) installed successfully!"
+                    )
+                else:
+                    self.status_label.config(text="No layout files found to install.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to copy layout files:\n{e}")
+                self.status_label.config(text="Layout installation failed.")
+        else:
+            self.status_label.config(text="Layout installation skipped.")
+            self.info_label.config(text="")
+
+        self.root.after(600, self._step_done)
 
     def _step_done(self):
         """Final step: inform user and let them close the window."""

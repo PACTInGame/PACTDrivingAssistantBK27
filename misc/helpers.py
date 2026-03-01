@@ -1,6 +1,27 @@
 import math
+import os
+import sys
 
 import psutil
+
+
+def get_base_dir() -> str:
+    """Return the project root directory.
+
+    When running as a PyInstaller EXE this is the folder containing the .exe.
+    When running as a normal Python script this is the workspace root
+    (one level above the 'misc' package).
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+    )
+
+
+def resolve_path(*parts: str) -> str:
+    """Join *parts* to the project base directory and return the full path."""
+    return os.path.join(get_base_dir(), *parts)
 
 
 def is_lfs_running():

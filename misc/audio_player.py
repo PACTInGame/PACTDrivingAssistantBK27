@@ -2,6 +2,7 @@ import time
 
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.helpers import resolve_path
 # init pygame mixer stuff
 import pygame
 
@@ -36,7 +37,7 @@ class AudioPlayer():
     def _play_audio(self, audio_file):
         # Play audio using pygame
         try:
-            sound = pygame.mixer.Sound(f"audio/{audio_file}.wav")
+            sound = pygame.mixer.Sound(resolve_path("audio", f"{audio_file}.wav"))
             sound.play()
         except Exception as e:
             print(f"Error playing audio file {audio_file}: {e}")

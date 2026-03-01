@@ -1,12 +1,13 @@
 import json
 import os
 from typing import Any, Dict
+from misc.helpers import resolve_path
 
 class SettingsManager:
     """Verwaltet alle Einstellungen mit Persistierung"""
 
     def __init__(self, settings_file: str = "settings.json"):
-        self.settings_file = settings_file
+        self.settings_file = resolve_path(settings_file)
         self._settings: Dict[str, Any] = {}
         self._defaults: Dict[str, Any] = {
             'forward_collision_warning': True,

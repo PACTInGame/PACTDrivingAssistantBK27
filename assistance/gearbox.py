@@ -9,6 +9,7 @@ from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 import json
 from pathlib import Path
+from misc.helpers import resolve_path
 
 
 class Gearbox(AssistanceSystem):
@@ -71,7 +72,7 @@ class Gearbox(AssistanceSystem):
         cname = str(cname)
         cname = cname[2:-1]
         print(cname)
-        calibration_file = Path("data/gearbox_calibrations.json")
+        calibration_file = Path(resolve_path("data", "gearbox_calibrations.json"))
         calibration_file.parent.mkdir(parents=True, exist_ok=True)
 
         calibrations = {}
@@ -90,7 +91,7 @@ class Gearbox(AssistanceSystem):
 
     def load_calibrations_for_cars(self, cname):
         """Lädt Kalibrierungen pro Autos"""
-        calibration_file = Path("data/gearbox_calibrations.json")
+        calibration_file = Path(resolve_path("data", "gearbox_calibrations.json"))
         cname = str(cname)
         cname = cname[2:-1]
 
