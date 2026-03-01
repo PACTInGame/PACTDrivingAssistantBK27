@@ -8,6 +8,11 @@ class MessageSender:
     def __init__(self, connector: LFSConnector):
         self.connector = connector
         self.active_buttons: Dict[int, bool] = {}
+        self.connector.event_bus.subscribe("send_command_to_lfs", self._on_send_command_to_lfs)
+
+    def _on_send_command_to_lfs(self, command: str):
+        """Event-Handler für das Senden von Befehlen an LFS"""
+        self.send_command(command)
 
     def send_message(self, message: str):
         """Sendet eine Chat-Nachricht"""

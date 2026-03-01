@@ -3,6 +3,7 @@ import pyautogui
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.language import LanguageManager
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -14,6 +15,7 @@ class AutoHold(AssistanceSystem):
         super().__init__("auto_hold", event_bus, settings)
         self.current_warning_level = 0
         self.own_rectangle = None
+        self.translator = LanguageManager()
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Auto-Hold-Logik"""
@@ -27,7 +29,7 @@ class AutoHold(AssistanceSystem):
                 # Press the handbrake key to activate auto-hold using direct input, right here
                 pyautogui.keyDown(user_handbrake_key)
                 pyautogui.keyUp(user_handbrake_key)
-                self.event_bus.emit("notification", {'notification': 'Auto Hold'})
+                self.event_bus.emit("notification", {'notification': self.translator.get('Auto Hold', self.settings.get('language'))})
 
         return {
             'auto_hold_active': auto_hold

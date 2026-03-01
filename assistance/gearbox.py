@@ -4,6 +4,7 @@ import pyautogui
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.language import LanguageManager
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 import json
@@ -40,6 +41,7 @@ class Gearbox(AssistanceSystem):
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("automatic_gearbox", event_bus, settings)
+        self.translator = LanguageManager()
         self.gearbox_active = False
         self.calibrating = False
         self.calibration_requested = False
@@ -111,23 +113,29 @@ class Gearbox(AssistanceSystem):
         except (json.JSONDecodeError, KeyError):
             pass
 
+    def _lang(self):
+        return self.settings.get('language')
+
+    def _t(self, key):
+        return self.translator.get(key, self._lang())
+
     def _start_calibration(self):
         """Startet die Kalibrierung"""
         self.calibrating = True
         self.calibration_step = 0
         self.time_in_step = time.perf_counter()
-        self.event_bus.emit("notification", {'notification': 'Gearbox Calibration Started'})
-        self.event_bus.emit("notification", {'notification': '^1Keep the rpm at idle!'})
-        self.event_bus.emit("notification", {'notification': '^1Recording idle rpm!'})
+        self.event_bus.emit("notification", {'notification': self._t('Gearbox Calibration Started')})
+        self.event_bus.emit("notification", {'notification': '^1' + self._t('Keep the rpm at idle!')})
+        self.event_bus.emit("notification", {'notification': '^1' + self._t('Recording idle rpm!')})
 
     def _abort_calibration(self, reason=""):
         """Bricht die Kalibrierung ab"""
         self.calibrating = False
         self.calibration_step = 0
         self.calibration_requested = False
-        msg = 'Gearbox Calibration Aborted'
+        msg = self._t('Gearbox Calibration Aborted')
         if reason:
-            msg += f' - {reason}'
+            msg += f' - {self._t(reason)}'
         self.event_bus.emit("notification", {'notification': f'^1{msg}'})
 
     def _get_smoothed_throttle(self, raw_throttle: float) -> float:
@@ -242,7 +250,7 @@ class Gearbox(AssistanceSystem):
             self.calibration_requested = False
             if own_vehicle.data.speed > 1:
                 self.event_bus.emit("notification",
-                                   {'notification': '^1Vehicle must be stationary to calibrate!'})
+                                   {'notification': '^1' + self._t('Vehicle must be stationary to calibrate!')})
             else:
                 self._start_calibration()
 
@@ -254,29 +262,29 @@ class Gearbox(AssistanceSystem):
 
             if self.calibration_step == 0 and time.perf_counter() - self.time_in_step > 12:
                 self.idle = round(own_vehicle.rpm)
-                self.event_bus.emit("notification", {'notification': f'Idle RPM set to {self.idle}'})
+                self.event_bus.emit("notification", {'notification': f'{self._t("Idle RPM set to")} {self.idle}'})
                 self.calibration_step = 1
                 self.time_in_step = time.perf_counter()
-                self.event_bus.emit("notification", {'notification': f'^1Rev it to the redline!'})
-                self.event_bus.emit("notification", {'notification': '^1Recording redline!'})
+                self.event_bus.emit("notification", {'notification': '^1' + self._t('Rev it to the redline!')})
+                self.event_bus.emit("notification", {'notification': '^1' + self._t('Recording redline!')})
 
             elif self.calibration_step == 1 and time.perf_counter() - self.time_in_step > 12:
                 self.redline = round(own_vehicle.rpm)
-                self.event_bus.emit("notification", {'notification': f'Redline RPM set to {self.redline}'})
+                self.event_bus.emit("notification", {'notification': f'{self._t("Redline RPM set to")} {self.redline}'})
                 self.calibration_step = 2
                 self.time_in_step = time.perf_counter()
-                self.event_bus.emit("notification", {'notification': f'^1Shift into the highest gear!'})
-                self.event_bus.emit("notification", {'notification': '^1Recording highest gear!'})
+                self.event_bus.emit("notification", {'notification': '^1' + self._t('Shift into the highest gear!')})
+                self.event_bus.emit("notification", {'notification': '^1' + self._t('Recording highest gear!')})
 
             elif self.calibration_step == 2 and time.perf_counter() - self.time_in_step > 12:
                 self.max_gears = own_vehicle.gear
-                self.event_bus.emit("notification", {'notification': f'Max gear set to {self.max_gears - 1}'})
+                self.event_bus.emit("notification", {'notification': f'{self._t("Max gear set to")} {self.max_gears - 1}'})
                 self.calibrating = False
                 self.save_calibrations_for_cars(own_vehicle.data.cname)
-                self.event_bus.emit("notification", {'notification': 'Gearbox Calibration Completed'})
+                self.event_bus.emit("notification", {'notification': self._t('Gearbox Calibration Completed')})
                 self.event_bus.emit("notification", {
                     'notification': f'Idle: {self.idle}, Redline: {self.redline}, Gears: {self.max_gears - 1}'})
-                self.event_bus.emit("notification", {'notification': f'Reset possible in menu!'})
+                self.event_bus.emit("notification", {'notification': self._t('Reset possible in menu!')})
                 self.car = own_vehicle.data.cname
         else:
             # Nur schalten wenn kalibriert

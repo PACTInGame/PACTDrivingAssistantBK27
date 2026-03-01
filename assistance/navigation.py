@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.language import LanguageManager
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -134,6 +135,7 @@ class NavigationSystem(AssistanceSystem):
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("sat_nav", event_bus, settings)
+        self.translator = LanguageManager()
 
         # State
         self.sat_nav_active = False  # Default to active to allow processing
@@ -548,10 +550,12 @@ class NavigationSystem(AssistanceSystem):
                 if dist_to_junction < self.NOTIFICATION_DISTANCE and not self.next_maneuver_emitted:
                     maneuver = self._determine_maneuver(road_id, next_road_id, target_junction_idx)
 
+                    lang = self.settings.get('language')
+                    translated_maneuver = self.translator.get(maneuver, lang)
                     print(f"[DEBUG NAV] EMITTING MANEUVER: {maneuver} in {int(dist_to_junction)}m")
 
                     self.event_bus.emit("notification", {
-                        'notification': f"{maneuver} in {int(dist_to_junction)}m",
+                        'notification': f"{translated_maneuver} in {int(dist_to_junction)}m",
                         'type': 'navigation',
                         'icon': maneuver.lower().replace(" ", "_")  # e.g. turn_left
                     })
@@ -574,7 +578,8 @@ class NavigationSystem(AssistanceSystem):
 
                 if dist < 50 and not self.next_maneuver_emitted:
                     print(f"[DEBUG NAV] EMITTING: Destination Reached")
-                    self.event_bus.emit("notification", {'notification': 'Destination Reached'})
+                    lang = self.settings.get('language')
+                    self.event_bus.emit("notification", {'notification': self.translator.get('Destination Reached', lang)})
                     self.next_maneuver_emitted = True
         else:
             print(f"[DEBUG NAV] No route available")

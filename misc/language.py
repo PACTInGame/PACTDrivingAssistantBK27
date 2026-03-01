@@ -11,6 +11,7 @@ class LanguageManager:
 
         # Translation dictionary - organized by English key, then by language code
         self.translations = {
+            # ─── Main Menu ────────────────────────────────────────────
             "Main Menu": {
                 "en": "Main Menu",
                 "de": "Hauptmenü",
@@ -26,7 +27,7 @@ class LanguageManager:
                 "de": "Fahren",
                 "it": "Guida",
                 "fr": "Conduite",
-                "tr": "Sürüş",
+                "tr": "Sürüs",
                 "no": "Kjøring",
                 "dk": "Kørsel",
                 "se": "Körning"
@@ -80,7 +81,713 @@ class LanguageManager:
                 "no": "Auto Hold",
                 "dk": "Auto Hold",
                 "se": "Auto Hold"
-            }
+            },
+            # ─── Main Menu Entries ────────────────────────────────────
+            "Cop Mode": {
+                "en": "Cop Mode",
+                "de": "Polizei-Modus",
+                "it": "Modalità Polizia",
+                "fr": "Mode Police",
+                "tr": "Polis Modu",
+                "no": "Politimodus",
+                "dk": "Politimodus",
+                "se": "Polisläge"
+            },
+            "Keys and Axes": {
+                "en": "Keys and Axes",
+                "de": "Tasten & Achsen",
+                "it": "Tasti e Assi",
+                "fr": "Touches et Axes",
+                "tr": "Tuşlar ve Eksenler",
+                "no": "Taster og Akser",
+                "dk": "Taster og Akser",
+                "se": "Knappar och Axlar"
+            },
+            "AI Traffic": {
+                "en": "AI Traffic",
+                "de": "KI-Verkehr",
+                "it": "Traffico IA",
+                "fr": "Trafic IA",
+                "tr": "YZ Trafik",
+                "no": "KI-Trafikk",
+                "dk": "AI-Trafik",
+                "se": "AI-Trafik"
+            },
+            # ─── Driving Menu ─────────────────────────────────────────
+            "Driving Settings": {
+                "en": "Driving Settings",
+                "de": "Fahreinstellungen",
+                "it": "Impost. di Guida",
+                "fr": "Réglages Conduite",
+                "tr": "Sürüş Ayarları",
+                "no": "Kjøreinnstillinger",
+                "dk": "Køreindstillinger",
+                "se": "Körinställningar"
+            },
+            "Collision Warning": {
+                "en": "Collision Warning",
+                "de": "Kollisionswarnung",
+                "it": "Avviso Collisione",
+                "fr": "Alerte Collision",
+                "tr": "Çarpışma Uyarısı",
+                "no": "Kollisjonsvarsel",
+                "dk": "Kollisionsadvarsel",
+                "se": "Kollisionsvarning"
+            },
+            "Blind Spot Warn.": {
+                "en": "Blind Spot Warn.",
+                "de": "Totwinkelwarnung",
+                "it": "Avviso Ang. Cieco",
+                "fr": "Alerte Angle Mort",
+                "tr": "Kör Nokta Uyarısı",
+                "no": "Blindsonevarsel",
+                "dk": "Blindvinkeladv.",
+                "se": "Dödavinkelvarning"
+            },
+            "Cross Traffic Warn.": {
+                "en": "Cross Traffic Warn.",
+                "de": "Querverkehrswarnung",
+                "it": "Avviso Traffico Lat.",
+                "fr": "Alerte Trafic Lat.",
+                "tr": "Çapraz Trafik Uyar.",
+                "no": "Krysstrafikkvars.",
+                "dk": "Tværtrafikadvarsel",
+                "se": "Tvärtrafik varning"
+            },
+            "Automatic Gearbox": {
+                "en": "Automatic Gearbox",
+                "de": "Automatikgetriebe",
+                "it": "Cambio Automatico",
+                "fr": "Boîte Automatique",
+                "tr": "Otomatik Vites",
+                "no": "Automatgir",
+                "dk": "Automatgear",
+                "se": "Automatlåda"
+            },
+            "Calibrate": {
+                "en": "Calibrate",
+                "de": "Kalibrieren",
+                "it": "Calibra",
+                "fr": "Calibrer",
+                "tr": "Kalibre Et",
+                "no": "Kalibrer",
+                "dk": "Kalibrer",
+                "se": "Kalibrera"
+            },
+            "Adaptive Lights": {
+                "en": "Adaptive Lights",
+                "de": "Adaptives Licht",
+                "it": "Luci Adattive",
+                "fr": "Phares Adaptatifs",
+                "tr": "Adaptif Farlar",
+                "no": "Adaptive Lys",
+                "dk": "Adaptive Lys",
+                "se": "Adaptiv Belysning"
+            },
+            "High Beam Assist": {
+                "en": "High Beam Assist",
+                "de": "Fernlichtassistent",
+                "it": "Assist. Abbaglianti",
+                "fr": "Assist. Feux Route",
+                "tr": "Uzun Far Asistanı",
+                "no": "Fjernlysassistent",
+                "dk": "Fjernlysassistent",
+                "se": "Helljusassistent"
+            },
+            "Early": {
+                "en": "Early",
+                "de": "Früh",
+                "it": "Presto",
+                "fr": "Tôt",
+                "tr": "Erken",
+                "no": "Tidlig",
+                "dk": "Tidlig",
+                "se": "Tidig"
+            },
+            "Medium": {
+                "en": "Medium",
+                "de": "Mittel",
+                "it": "Medio",
+                "fr": "Moyen",
+                "tr": "Orta",
+                "no": "Middels",
+                "dk": "Middel",
+                "se": "Medel"
+            },
+            "Late": {
+                "en": "Late",
+                "de": "Spät",
+                "it": "Tardi",
+                "fr": "Tard",
+                "tr": "Geç",
+                "no": "Sent",
+                "dk": "Sent",
+                "se": "Sen"
+            },
+            # ─── Parking Menu ─────────────────────────────────────────
+            "Parking Settings": {
+                "en": "Parking Settings",
+                "de": "Parkeinstellungen",
+                "it": "Impost. Parcheggio",
+                "fr": "Réglages Station.",
+                "tr": "Park Ayarları",
+                "no": "Parkinnstillinger",
+                "dk": "Parkindstillinger",
+                "se": "Parkinställningar"
+            },
+            "Park Distance Control": {
+                "en": "Park Distance Control",
+                "de": "Einparkhilfe",
+                "it": "Sensori Parcheggio",
+                "fr": "Radar de Recul",
+                "tr": "Park Sensörü",
+                "no": "Parkeringssensor",
+                "dk": "Parkeringssensor",
+                "se": "Parkeringssensor"
+            },
+            "Visual": {
+                "en": "Visual",
+                "de": "Visuell",
+                "it": "Visivo",
+                "fr": "Visuel",
+                "tr": "Görsel",
+                "no": "Visuell",
+                "dk": "Visuel",
+                "se": "Visuell"
+            },
+            "Visual & Audio": {
+                "en": "Visual & Audio",
+                "de": "Visuell & Audio",
+                "it": "Visivo & Audio",
+                "fr": "Visuel & Audio",
+                "tr": "Görsel & Ses",
+                "no": "Visuell & Lyd",
+                "dk": "Visuel & Lyd",
+                "se": "Visuell & Ljud"
+            },
+            # ─── System Settings ──────────────────────────────────────
+            "System Settings": {
+                "en": "System Settings",
+                "de": "Systemeinstellungen",
+                "it": "Impost. Sistema",
+                "fr": "Réglages Système",
+                "tr": "Sistem Ayarları",
+                "no": "Systeminnstillinger",
+                "dk": "Systemindstillinger",
+                "se": "Systeminställningar"
+            },
+            "Unit": {
+                "en": "Unit",
+                "de": "Einheit",
+                "it": "Unità",
+                "fr": "Unité",
+                "tr": "Birim",
+                "no": "Enhet",
+                "dk": "Enhed",
+                "se": "Enhet"
+            },
+            "Metric": {
+                "en": "Metric",
+                "de": "Metrisch",
+                "it": "Metrico",
+                "fr": "Métrique",
+                "tr": "Metrik",
+                "no": "Metrisk",
+                "dk": "Metrisk",
+                "se": "Metrisk"
+            },
+            "Imperial": {
+                "en": "Imperial",
+                "de": "Imperial",
+                "it": "Imperiale",
+                "fr": "Impérial",
+                "tr": "İmparatorluk",
+                "no": "Imperialt",
+                "dk": "Imperielt",
+                "se": "Imperialt"
+            },
+            "Head-Up Display": {
+                "en": "Head-Up Display",
+                "de": "Head-Up Display",
+                "it": "Head-Up Display",
+                "fr": "Affichage Tête Haute",
+                "tr": "Head-Up Display",
+                "no": "Head-Up Display",
+                "dk": "Head-Up Display",
+                "se": "Head-Up Display"
+            },
+            # ─── Cop Mode Menu ────────────────────────────────────────
+            "Cop Mode Settings": {
+                "en": "Cop Mode Settings",
+                "de": "Polizei-Einstellungen",
+                "it": "Impost. Polizia",
+                "fr": "Réglages Police",
+                "tr": "Polis Modu Ayarları",
+                "no": "Politiinnstillinger",
+                "dk": "Politiindstillinger",
+                "se": "Polisinställningar"
+            },
+            "Cop Assistance": {
+                "en": "Cop Assistance",
+                "de": "Polizei-Assistent",
+                "it": "Assist. Polizia",
+                "fr": "Assist. Police",
+                "tr": "Polis Asistanı",
+                "no": "Politiassistent",
+                "dk": "Politiassistent",
+                "se": "Polisassistent"
+            },
+            # ─── AI Traffic Menu ──────────────────────────────────────
+            "Stop AI Traffic": {
+                "en": "Stop AI Traffic",
+                "de": "KI-Verkehr stoppen",
+                "it": "Ferma Traffico IA",
+                "fr": "Arrêter Trafic IA",
+                "tr": "YZ Trafiği Durdur",
+                "no": "Stopp KI-Trafikk",
+                "dk": "Stop AI-Trafik",
+                "se": "Stoppa AI-Trafik"
+            },
+            "Start AI Traffic": {
+                "en": "Start AI Traffic",
+                "de": "KI-Verkehr starten",
+                "it": "Avvia Traffico IA",
+                "fr": "Démarrer Trafic IA",
+                "tr": "YZ Trafiği Başlat",
+                "no": "Start KI-Trafikk",
+                "dk": "Start AI-Trafik",
+                "se": "Starta AI-Trafik"
+            },
+            # ─── Keys and Axes Menu ───────────────────────────────────
+            "Handbrake Key": {
+                "en": "Handbrake Key",
+                "de": "Handbremse Taste",
+                "it": "Tasto Freno a Mano",
+                "fr": "Touche Frein à Main",
+                "tr": "El Freni Tuşu",
+                "no": "Håndbrekkstast",
+                "dk": "Håndbremsetast",
+                "se": "Handbromsknapp"
+            },
+            "Shift Up Key": {
+                "en": "Shift Up Key",
+                "de": "Hochschalten Taste",
+                "it": "Tasto Marcia Su",
+                "fr": "Touche Rapport +",
+                "tr": "Vites Yükselt Tuşu",
+                "no": "Gir Opp Tast",
+                "dk": "Gear Op Tast",
+                "se": "Växla Upp Knapp"
+            },
+            "Shift Down Key": {
+                "en": "Shift Down Key",
+                "de": "Runterschalten Taste",
+                "it": "Tasto Marcia Giù",
+                "fr": "Touche Rapport -",
+                "tr": "Vites Düşür Tuşu",
+                "no": "Gir Ned Tast",
+                "dk": "Gear Ned Tast",
+                "se": "Växla Ned Knapp"
+            },
+            "Clutch Key": {
+                "en": "Clutch Key",
+                "de": "Kupplung Taste",
+                "it": "Tasto Frizione",
+                "fr": "Touche Embrayage",
+                "tr": "Debriyaj Tuşu",
+                "no": "Clutchtast",
+                "dk": "Koblingstart",
+                "se": "Kopplingsknapp"
+            },
+            "Ignition Key": {
+                "en": "Ignition Key",
+                "de": "Zündung Taste",
+                "it": "Tasto Accensione",
+                "fr": "Touche Contact",
+                "tr": "Kontak Tuşu",
+                "no": "Tenningtast",
+                "dk": "Tændingstast",
+                "se": "Tändningsknapp"
+            },
+            # ─── Await Key Binding ────────────────────────────────────
+            "Rebind Key": {
+                "en": "Rebind Key",
+                "de": "Taste neu belegen",
+                "it": "Riassegna Tasto",
+                "fr": "Réassigner Touche",
+                "tr": "Tuş Yeniden Ata",
+                "no": "Tilordne Tast",
+                "dk": "Gentildel Tast",
+                "se": "Byt Knapp"
+            },
+            "Press a key to bind...": {
+                "en": "Press a key to bind...",
+                "de": "Taste drücken...",
+                "it": "Premi un tasto...",
+                "fr": "Appuyez sur une touche...",
+                "tr": "Bir tuşa basın...",
+                "no": "Trykk en tast...",
+                "dk": "Tryk en tast...",
+                "se": "Tryck en knapp..."
+            },
+            "Cancel": {
+                "en": "Cancel",
+                "de": "Abbrechen",
+                "it": "Annulla",
+                "fr": "Annuler",
+                "tr": "İptal",
+                "no": "Avbryt",
+                "dk": "Annuller",
+                "se": "Avbryt"
+            },
+            # ─── Notifications (menu_system.py) ──────────────────────
+            "Keybinding cancelled.": {
+                "en": "Keybinding cancelled.",
+                "de": "Tastenbelegung abgebrochen.",
+                "it": "Assegnazione annullata.",
+                "fr": "Attribution annulée.",
+                "tr": "Tuş ataması iptal edildi.",
+                "no": "Tasttilordning avbrutt.",
+                "dk": "Tasttildeling annulleret.",
+                "se": "Knappbindning avbruten."
+            },
+            "Gearbox calibration requested...": {
+                "en": "Gearbox calibration requested...",
+                "de": "Getriebe-Kalibrierung angefordert...",
+                "it": "Calibrazione cambio richiesta...",
+                "fr": "Calibration boîte demandée...",
+                "tr": "Vites kalibrasyonu istendi...",
+                "no": "Girkalibrering forespurt...",
+                "dk": "Gearkalibrering anmodet...",
+                "se": "Växellådskalibrering begärd..."
+            },
+            "AI Traffic stopping...": {
+                "en": "AI Traffic stopping...",
+                "de": "KI-Verkehr wird gestoppt...",
+                "it": "Traffico IA in arresto...",
+                "fr": "Arrêt du trafic IA...",
+                "tr": "YZ Trafiği durduruluyor...",
+                "no": "KI-Trafikk stopper...",
+                "dk": "AI-Trafik stopper...",
+                "se": "AI-Trafik stoppas..."
+            },
+            "AI Traffic started.": {
+                "en": "AI Traffic started.",
+                "de": "KI-Verkehr gestartet.",
+                "it": "Traffico IA avviato.",
+                "fr": "Trafic IA démarré.",
+                "tr": "YZ Trafiği başlatıldı.",
+                "no": "KI-Trafikk startet.",
+                "dk": "AI-Trafik startet.",
+                "se": "AI-Trafik startad."
+            },
+            # ─── Notifications (auto_hold.py) ────────────────────────
+            # "Auto Hold" is already defined above
+
+            # ─── Notifications (key_binder.py) ───────────────────────
+            "Press Mouse L again to bind!": {
+                "en": "Press Mouse L again to bind!",
+                "de": "Maus L erneut drücken!",
+                "it": "Premi di nuovo Mouse L!",
+                "fr": "Appuyez encore sur Souris G !",
+                "tr": "Bağlamak için tekrar Sol Tık!",
+                "no": "Trykk Mus V igjen!",
+                "dk": "Tryk Mus V igen!",
+                "se": "Tryck Mus V igen!"
+            },
+            # ─── Notifications (gearbox.py) ──────────────────────────
+            "Gearbox Calibration Started": {
+                "en": "Gearbox Calibration Started",
+                "de": "Getriebe-Kalibrierung gestartet",
+                "it": "Calibrazione Cambio Avviata",
+                "fr": "Calibration Boîte Lancée",
+                "tr": "Vites Kalibrasyonu Başladı",
+                "no": "Girkalibrering Startet",
+                "dk": "Gearkalibrering Startet",
+                "se": "Växellådskalibrering Startad"
+            },
+            "Keep the rpm at idle!": {
+                "en": "Keep the rpm at idle!",
+                "de": "Drehzahl im Leerlauf halten!",
+                "it": "Mantieni il minimo!",
+                "fr": "Maintenez le ralenti !",
+                "tr": "Rölantide tutun!",
+                "no": "Hold turtallet på tomgang!",
+                "dk": "Hold omdrejningerne i tomgang!",
+                "se": "Håll varvtalet på tomgång!"
+            },
+            "Recording idle rpm!": {
+                "en": "Recording idle rpm!",
+                "de": "Leerlaufdrehzahl wird gemessen!",
+                "it": "Registrazione minimo!",
+                "fr": "Enregistrement ralenti !",
+                "tr": "Rölanti kaydediliyor!",
+                "no": "Registrerer tomgang!",
+                "dk": "Registrerer tomgang!",
+                "se": "Registrerar tomgång!"
+            },
+            "Gearbox Calibration Aborted": {
+                "en": "Gearbox Calibration Aborted",
+                "de": "Getriebe-Kalibrierung abgebrochen",
+                "it": "Calibrazione Cambio Interrotta",
+                "fr": "Calibration Boîte Annulée",
+                "tr": "Vites Kalibrasyonu İptal Edildi",
+                "no": "Girkalibrering Avbrutt",
+                "dk": "Gearkalibrering Afbrudt",
+                "se": "Växellådskalibrering Avbruten"
+            },
+            "Vehicle moved during calibration!": {
+                "en": "Vehicle moved during calibration!",
+                "de": "Fahrzeug hat sich bewegt!",
+                "it": "Veicolo mosso durante calibraz.!",
+                "fr": "Véhicule bougé pendant calibr. !",
+                "tr": "Araç kalibrasyon sırasında hareket etti!",
+                "no": "Kjøretøy beveget seg!",
+                "dk": "Køretøj flyttede sig!",
+                "se": "Fordon rörde sig!"
+            },
+            "Vehicle must be stationary to calibrate!": {
+                "en": "Vehicle must be stationary to calibrate!",
+                "de": "Fahrzeug muss stillstehen!",
+                "it": "Veicolo fermo per calibrare!",
+                "fr": "Véhicule à l'arrêt pour calibrer !",
+                "tr": "Araç durmalı!",
+                "no": "Kjøretøy må stå stille!",
+                "dk": "Køretøj skal holde stille!",
+                "se": "Fordon måste stå stilla!"
+            },
+            "Idle RPM set to": {
+                "en": "Idle RPM set to",
+                "de": "Leerlaufdrehzahl gesetzt auf",
+                "it": "RPM minimo impostato a",
+                "fr": "Régime ralenti réglé à",
+                "tr": "Rölanti devri ayarlandı:",
+                "no": "Tomgang satt til",
+                "dk": "Tomgang sat til",
+                "se": "Tomgång satt till"
+            },
+            "Rev it to the redline!": {
+                "en": "Rev it to the redline!",
+                "de": "Auf Maximaldrehzahl drehen!",
+                "it": "Porta al fuorigiri!",
+                "fr": "Montez au rupteur !",
+                "tr": "Kırmızı bölgeye çıkın!",
+                "no": "Gi gass til rødmerket!",
+                "dk": "Giv gas til rødmarkeringen!",
+                "se": "Gasa till rödmarkeringen!"
+            },
+            "Recording redline!": {
+                "en": "Recording redline!",
+                "de": "Maximaldrehzahl wird gemessen!",
+                "it": "Registrazione fuorigiri!",
+                "fr": "Enregistrement rupteur !",
+                "tr": "Kırmızı bölge kaydediliyor!",
+                "no": "Registrerer rødmerke!",
+                "dk": "Registrerer rødmarkering!",
+                "se": "Registrerar rödmarkering!"
+            },
+            "Redline RPM set to": {
+                "en": "Redline RPM set to",
+                "de": "Maximaldrehzahl gesetzt auf",
+                "it": "RPM fuorigiri impostato a",
+                "fr": "Régime rupteur réglé à",
+                "tr": "Kırmızı bölge devri ayarlandı:",
+                "no": "Rødmerke satt til",
+                "dk": "Rødmarkering sat til",
+                "se": "Rödmarkering satt till"
+            },
+            "Shift into the highest gear!": {
+                "en": "Shift into the highest gear!",
+                "de": "Höchsten Gang einlegen!",
+                "it": "Inserisci la marcia più alta!",
+                "fr": "Passez le rapport le plus haut !",
+                "tr": "En yüksek vitese geçin!",
+                "no": "Legg inn høyeste gir!",
+                "dk": "Skift til højeste gear!",
+                "se": "Lägg i högsta växeln!"
+            },
+            "Recording highest gear!": {
+                "en": "Recording highest gear!",
+                "de": "Höchster Gang wird gemessen!",
+                "it": "Registrazione marcia max!",
+                "fr": "Enregistrement rapport max !",
+                "tr": "En yüksek vites kaydediliyor!",
+                "no": "Registrerer høyeste gir!",
+                "dk": "Registrerer højeste gear!",
+                "se": "Registrerar högsta växel!"
+            },
+            "Max gear set to": {
+                "en": "Max gear set to",
+                "de": "Höchster Gang gesetzt auf",
+                "it": "Marcia max impostata a",
+                "fr": "Rapport max réglé à",
+                "tr": "Maks. vites ayarlandı:",
+                "no": "Høyeste gir satt til",
+                "dk": "Højeste gear sat til",
+                "se": "Högsta växel satt till"
+            },
+            "Gearbox Calibration Completed": {
+                "en": "Gearbox Calibration Completed",
+                "de": "Getriebe-Kalibrierung abgeschlossen",
+                "it": "Calibrazione Cambio Completata",
+                "fr": "Calibration Boîte Terminée",
+                "tr": "Vites Kalibrasyonu Tamamlandı",
+                "no": "Girkalibrering Fullført",
+                "dk": "Gearkalibrering Fuldført",
+                "se": "Växellådskalibrering Klar"
+            },
+            "Reset possible in menu!": {
+                "en": "Reset possible in menu!",
+                "de": "Zurücksetzen im Menü möglich!",
+                "it": "Reset possibile nel menu!",
+                "fr": "Réinit. possible dans le menu !",
+                "tr": "Menüden sıfırlanabilir!",
+                "no": "Tilbakestilling mulig i menyen!",
+                "dk": "Nulstilling mulig i menuen!",
+                "se": "Återställning möjlig i menyn!"
+            },
+            # ─── Notifications (AI_Driver.py) ────────────────────────
+            "Traffic not avail. on this map": {
+                "en": "Traffic not avail. on this map",
+                "de": "Verkehr nicht verfügbar",
+                "it": "Traffico non disponibile",
+                "fr": "Trafic indisponible",
+                "tr": "Trafik bu haritada yok",
+                "no": "Trafikk ikke tilgjengelig",
+                "dk": "Trafik ikke tilgængelig",
+                "se": "Trafik ej tillgänglig"
+            },
+            "Wrong track config for traffic": {
+                "en": "Wrong track config for traffic",
+                "de": "Falsche Streckenkonfig.",
+                "it": "Config. pista errata",
+                "fr": "Mauvaise config. circuit",
+                "tr": "Yanlış pist yapılandırması",
+                "no": "Feil banekonfigurasjon",
+                "dk": "Forkert banekonfiguration",
+                "se": "Fel bankonfiguration"
+            },
+            # ─── Notifications (navigation.py) ───────────────────────
+            "Destination Reached": {
+                "en": "Destination Reached",
+                "de": "Ziel erreicht",
+                "it": "Destinazione Raggiunta",
+                "fr": "Destination Atteinte",
+                "tr": "Hedefe Ulaşıldı",
+                "no": "Mål Nådd",
+                "dk": "Destination Nået",
+                "se": "Mål Nått"
+            },
+            "Go Straight": {
+                "en": "Go Straight",
+                "de": "Geradeaus",
+                "it": "Dritto",
+                "fr": "Tout Droit",
+                "tr": "Düz Gidin",
+                "no": "Rett Frem",
+                "dk": "Lige Ud",
+                "se": "Rakt Fram"
+            },
+            "Turn Left": {
+                "en": "Turn Left",
+                "de": "Links abbiegen",
+                "it": "Gira a Sinistra",
+                "fr": "Tournez à Gauche",
+                "tr": "Sola Dönün",
+                "no": "Sving Venstre",
+                "dk": "Drej Venstre",
+                "se": "Sväng Vänster"
+            },
+            "Turn Right": {
+                "en": "Turn Right",
+                "de": "Rechts abbiegen",
+                "it": "Gira a Destra",
+                "fr": "Tournez à Droite",
+                "tr": "Sağa Dönün",
+                "no": "Sving Høyre",
+                "dk": "Drej Højre",
+                "se": "Sväng Höger"
+            },
+            "Off": {
+                "en": "Off",
+                "de": "Aus",
+                "it": "Off",
+                "fr": "Arrêt",
+                "tr": "Kapalı",
+                "no": "Av",
+                "dk": "Fra",
+                "se": "Av"
+            },
+            "Up": {
+                "en": "Up",
+                "de": "Hoch",
+                "it": "Su",
+                "fr": "Haut",
+                "tr": "Yukarı",
+                "no": "Opp",
+                "dk": "Op",
+                "se": "Upp"
+            },
+            "Down": {
+                "en": "Down",
+                "de": "Runter",
+                "it": "Giù",
+                "fr": "Bas",
+                "tr": "Aşağı",
+                "no": "Ned",
+                "dk": "Ned",
+                "se": "Ner"
+            },
+            "Left": {
+                "en": "Left",
+                "de": "Links",
+                "it": "Sinistra",
+                "fr": "Gauche",
+                "tr": "Sol",
+                "no": "Venstre",
+                "dk": "Venstre",
+                "se": "Vänster"
+            },
+            "Right": {
+                "en": "Right",
+                "de": "Rechts",
+                "it": "Destra",
+                "fr": "Droite",
+                "tr": "Sağ",
+                "no": "Høyre",
+                "dk": "Højre",
+                "se": "Höger"
+            },
+            "Key": {
+                "en": "Key",
+                "de": "Taste",
+                "it": "Tasto",
+                "fr": "Touche",
+                "tr": "Tuş",
+                "no": "Tast",
+                "dk": "Tast",
+                "se": "Knapp"
+            },
+            "currently bound to": {
+                "en": "currently bound to",
+                "de": "aktuell belegt mit",
+                "it": "attualmente assegnato a",
+                "fr": "actuellement lié à",
+                "tr": "şu anda bağlı:",
+                "no": "for tiden tilordnet",
+                "dk": "i øjeblikket tildelt",
+                "se": "för närvarande bunden till"
+            },
+            "HUD Position": {
+                "en": "HUD Position",
+                "de": "HUD Position",
+                "it": "Posizione HUD",
+                "fr": "Position HUD",
+                "tr": "HUD Konumu",
+                "no": "HUD Posisjon",
+                "dk": "HUD Position",
+                "se": "HUD Position"
+            },
         }
 
     def get(self, english_key, language_code=None):

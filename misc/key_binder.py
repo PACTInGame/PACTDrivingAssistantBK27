@@ -1,10 +1,13 @@
 import threading
 from pynput import keyboard, mouse
+from misc.language import LanguageManager
 
 
 class Keybinder:
-    def __init__(self, event_bus):
+    def __init__(self, event_bus, settings=None):
         self.event_bus = event_bus
+        self.settings = settings
+        self.translator = LanguageManager()
         self.event_bus.subscribe('await_keybinding', self._listen_for_key)
         self._listening = False
         self._current_setting = None
@@ -107,7 +110,8 @@ class Keybinder:
             })
             self._current_setting = None
     def _emit_mouse_message(self):
-        self.event_bus.emit("notification", {'notification': 'Press Mouse L again to bind!'})
+        lang = self.settings.get('language') if self.settings else 'en'
+        self.event_bus.emit("notification", {'notification': self.translator.get('Press Mouse L again to bind!', lang)})
 
     def stop_listening(self):
         """Stop all active listeners."""

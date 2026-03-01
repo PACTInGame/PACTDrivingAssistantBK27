@@ -138,11 +138,11 @@ Insgesamt sollen folgende Funktionalitäten funktionieren:
 - Adaptive Lichtfunktionen (Warnblinker bei Vollbremsung, Fernlicht bei Nacht wenn kein Verkehr vor einem ist, etc.) (implementiert)
 - Head-Up-Display (implementiert)
 - Park-Distance-Control (Hindernis-Anzeige beim Parken, andere Fahrzeug und Hindernisse auf der Strecke) (implementiert, aber verbesserungspotenzial)
-- Querverkehrswarnung (noch nicht fertig)
-- Ein Automatikgetriebe (noch nicht fertig)
+- Querverkehrswarnung (implementiert)
+- Ein Automatikgetriebe (noch nicht fertig implementiert)
 - Menü (als UI für Einstellungen / Funktionen etc. mit Steuerung für alle Funktionen, in verschiedenen Sprachen) (nicht fertig)
-- Notbremseingriffe bei Frontkollisionswarnung und Querverkehrswarnung (nicht fertig - funktioniert derzeit nur mit Lenkrad/Controller, nicht mit Tastatursteuerung. Muss generell nochmal überarbeitet werden)
-- KI-Verkehr auf den Maps, die Städte abbilden (noch nicht fertig)
+- Notbremseingriffe bei Frontkollisionswarnung und Querverkehrswarnung (nicht fertig - Muss generell nochmal überarbeitet werden. Vorerst komplett deaktiviert.)
+- KI-Verkehr auf den Maps, die Städte abbilden (implementiert)
 - Assistenzsysteme für Cops (das ist für Online-Server relevant) (noch nicht alles implementiert)
 - viele weitere Kleinigkeiten und coole extras, diese liste ist nicht ganz vollständig.
 

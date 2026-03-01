@@ -109,6 +109,18 @@ class CrossTrafficWarning(AssistanceSystem):
             self._emit_if_changed(warning_level, warning_side)
             return {'level': 0, 'side': None, 'ttc': float('inf')}
 
+        # Warnschwellen basierend auf Einstellung (0=Early, 1=Medium, 2=Late)
+        ctw_dist = self.settings.get("cross_traffic_warning_distance")
+        if ctw_dist == 0:
+            visual_threshold = 3.5
+            acoustic_threshold = 3.0
+        elif ctw_dist == 2:
+            visual_threshold = 1.5
+            acoustic_threshold = 1.0
+        else:  # 1 = Medium (default)
+            visual_threshold = 2.5
+            acoustic_threshold = 1.5
+
         # Eigene Position in Metern (LFS nutzt 1/65536 Meter)
         own_x = own_vehicle.data.x / 65536.0
         own_y = own_vehicle.data.y / 65536.0
@@ -169,10 +181,10 @@ class CrossTrafficWarning(AssistanceSystem):
                 min_ttc = ttc
                 side = _compute_side(own_dx, own_dy, own_x, own_y, other_x, other_y)
 
-                if ttc < 1.0:
+                if ttc < acoustic_threshold:
                     warning_level = 2  # Akustisch + blinkend
                     warning_side = side
-                elif ttc < 2.0:
+                elif ttc < visual_threshold:
                     warning_level = max(warning_level, 1)  # Visuell
                     if warning_level == 1:
                         warning_side = side

@@ -18,7 +18,7 @@ class MenuSystem:
         self.on_track = False
         self.set_language = settings.get('language')
         self.translator = LanguageManager()
-        self.keybinder = key_binder.Keybinder(self.ui_manager.event_bus)
+        self.keybinder = key_binder.Keybinder(self.ui_manager.event_bus, self.settings)
         self.ai_traffic_active = False
 
         self.ui_manager.event_bus.subscribe('state_data', self._state_change)
@@ -45,15 +45,12 @@ class MenuSystem:
 
     def _state_change(self, data):
         new_on_track = data['on_track']
-        print(f"State update received - on_track: {new_on_track}")
         if new_on_track != self.on_track:
             self.on_track = new_on_track
             if new_on_track and self.current_menu == 'none':
                 self.create_open_menu_button()
-                print("Player is on track - showing menu button")
             elif not new_on_track:
                 self._clear_menu_buttons()
-                print("Player is not on track - clearing menu button")
             else:
                 self.close_menu()
 
@@ -105,7 +102,10 @@ class MenuSystem:
         hba = "^2" if self.settings.get('high_beam_assist') else "^1"
 
         distance = self.settings.get('collision_warning_distance')
-        distance_text = "^2Early" if distance == 0 else "^3Medium" if distance == 1 else "^1Late"
+        distance_text = "^2" + self.translator.get("Early", self.set_language) if distance == 0 else "^3" + self.translator.get("Medium", self.set_language) if distance == 1 else "^1" + self.translator.get("Late", self.set_language)
+
+        ctw_distance = self.settings.get('cross_traffic_warning_distance')
+        ctw_distance_text = "^2" + self.translator.get("Early", self.set_language) if ctw_distance == 0 else "^3" + self.translator.get("Medium", self.set_language) if ctw_distance == 1 else "^1" + self.translator.get("Late", self.set_language)
 
         buttons = [
             (21, 0, 70, 25, 5, self.translator.get("Driving Settings", self.set_language),
@@ -117,6 +117,8 @@ class MenuSystem:
             (24, 0, 80, 25, 5, bsw + self.translator.get("Blind Spot Warn.", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (25, 0, 85, 25, 5, ctw + self.translator.get("Cross Traffic Warn.", self.set_language),
+             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
+            (31, 25, 85, 15, 5, ctw_distance_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (26, 0, 90, 25, 5, agb + self.translator.get("Automatic Gearbox", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
@@ -148,7 +150,7 @@ class MenuSystem:
         pdc_mode_text = (
             self.translator.get("Visual", self.set_language) if pdc_mode == 1
             else self.translator.get("Visual & Audio", self.set_language) if pdc_mode == 2
-            else "^1Off"
+            else "^1" + self.translator.get("Off", self.set_language)
         )
 
         buttons = [
@@ -173,7 +175,7 @@ class MenuSystem:
         self._clear_menu_buttons()
 
         unit = self.settings.get('unit')
-        unit_text = "^2Metric" if unit == "metric" else "^2Imperial"
+        unit_text = "^2" + self.translator.get("Metric", self.set_language) if unit == "metric" else "^2" + self.translator.get("Imperial", self.set_language)
         hud_on = self.settings.get('hud_active')
         hud_text = "^2" if hud_on else "^1"
         hud_h = self.settings.get('hud_height')
@@ -188,15 +190,15 @@ class MenuSystem:
              pyinsim.ISB_LIGHT),
             (24, 0, 85, 20, 5, hud_text + self.translator.get("Head-Up Display", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 90, 25, 5, f"^7HUD Position  (V:{hud_h}  H:{hud_w})",
+            (25, 0, 90, 25, 5, f"^7{self.translator.get('HUD Position', self.set_language)}  (V:{hud_h}  H:{hud_w})",
              pyinsim.ISB_LIGHT),
-            (26, 25, 90, 5, 5, "^7Up",
+            (26, 25, 90, 5, 5, "^7" + self.translator.get("Up", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 30, 90, 5, 5, "^7Down",
+            (27, 30, 90, 5, 5, "^7" + self.translator.get("Down", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (28, 35, 90, 5, 5, "^7Left",
+            (28, 35, 90, 5, 5, "^7" + self.translator.get("Left", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (29, 40, 90, 5, 5, "^7Right",
+            (29, 40, 90, 5, 5, "^7" + self.translator.get("Right", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (40, 0, 95, 25, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
@@ -264,44 +266,28 @@ class MenuSystem:
         shift_down_key = self.settings.get('user_shift_down_key').upper()
         clutch_key = self.settings.get('user_clutch_key').upper()
         ignition_key = self.settings.get('user_ignition_key').upper()
-        brake_key = self.settings.get('user_brake_key').upper()
-        brake_axis = self.settings.get('user_axis_brake')
-        vjoy_axis = self.settings.get('vjoy_axis_1')
 
         buttons = [
             (21, 0, 75, 25, 5, self.translator.get("Keys and Axes", self.set_language),
              pyinsim.ISB_LIGHT),
-            (24, 0, 85, 20, 5, self.translator.get("Handbrake Key", self.set_language),
+            (22, 0, 80, 20, 5, self.translator.get("Handbrake Key", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 90, 20, 5, self.translator.get("Shift Up Key", self.set_language),
+            (23, 0, 85, 20, 5, self.translator.get("Shift Up Key", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (35, 0, 95, 20, 5, self.translator.get("Shift Down Key", self.set_language),
+            (24, 0, 90, 20, 5, self.translator.get("Shift Down Key", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (26, 0, 100, 20, 5, self.translator.get("Clutch Key", self.set_language),
+            (25, 0, 95, 20, 5, self.translator.get("Clutch Key", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 0, 105, 20, 5, self.translator.get("Ignition Key", self.set_language),
+            (26, 0, 100, 20, 5, self.translator.get("Ignition Key", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (28, 20, 85, 5, 5, f"{handbrake_key}", pyinsim.ISB_LIGHT),
-            (29, 20, 90, 5, 5, f"{shift_up_key}", pyinsim.ISB_LIGHT),
-            (36, 20, 95, 5, 5, f"{shift_down_key}", pyinsim.ISB_LIGHT),
-            (30, 20, 100, 5, 5, f"{clutch_key}", pyinsim.ISB_LIGHT),
-            (31, 20, 105, 5, 5, f"{ignition_key}", pyinsim.ISB_LIGHT),
-            (40, 0, 110, 25, 5, "^1" + self.translator.get("Close", self.set_language),
+            (27, 20, 80, 5, 5, f"{handbrake_key}", pyinsim.ISB_LIGHT),
+            (28, 20, 85, 5, 5, f"{shift_up_key}", pyinsim.ISB_LIGHT),
+            (29, 20, 90, 5, 5, f"{shift_down_key}", pyinsim.ISB_LIGHT),
+            (30, 20, 95, 5, 5, f"{clutch_key}", pyinsim.ISB_LIGHT),
+            (31, 20, 100, 5, 5, f"{ignition_key}", pyinsim.ISB_LIGHT),
+            (40, 0, 105, 25, 5, "^1" + self.translator.get("Close", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
-
-        control_mode = self.settings.get('own_control_mode')
-        if control_mode in [0, 1]:
-            buttons.append((22, 0, 80, 20, 5, self.translator.get("Brake Key", self.set_language),
-                            pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
-            buttons.append((32, 20, 80, 5, 5, f"{brake_key}", pyinsim.ISB_LIGHT))
-        elif control_mode == 2:
-            buttons.append((22, 0, 80, 20, 5, self.translator.get("Brake Axis", self.set_language),
-                            pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
-            buttons.append((23, 25, 80, 20, 5, self.translator.get("Vjoy Axis", self.set_language),
-                            pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
-            buttons.append((33, 20, 80, 5, 5, f"{brake_axis}", pyinsim.ISB_LIGHT))
-            buttons.append((34, 45, 80, 5, 5, f"{vjoy_axis}", pyinsim.ISB_LIGHT))
 
         for button_id, x, y, w, h, text, style in buttons:
             self.ui_manager.message_sender.create_button(button_id, x, y, w, h, text, style)
@@ -313,7 +299,7 @@ class MenuSystem:
         self.current_menu = 'await_key'
         self._clear_menu_buttons()
 
-        text = f"^7Key {setting}, currently bound to '{self.settings.get(setting)}'."
+        text = f"^7{self.translator.get('Key', self.set_language)} {setting}, {self.translator.get('currently bound to', self.set_language)} '{self.settings.get(setting)}'."
 
         buttons = [
             (21, 0, 80, 25, 5, self.translator.get("Rebind Key", self.set_language),
@@ -384,7 +370,7 @@ class MenuSystem:
             elif self.current_menu == 'await_key':
                 self.keybinder.stop_listening()
                 self.ui_manager.event_bus.emit(
-                    "notification", {'notification': '^1Keybinding cancelled.'})
+                    "notification", {'notification': '^1' + self.translator.get("Keybinding cancelled.", self.set_language)})
                 self.open_keys_settings()
             else:
                 self.open_main_menu()
@@ -444,8 +430,12 @@ class MenuSystem:
             elif button_id == 30:  # Calibrate Gearbox
                 self.ui_manager.event_bus.emit('gearbox_calibrate', {})
                 self.ui_manager.event_bus.emit(
-                    "notification", {'notification': '^3Gearbox calibration requested...'})
+                    "notification", {'notification': '^3' + self.translator.get("Gearbox calibration requested...", self.set_language)})
                 self.close_menu()
+            elif button_id == 31:  # Change Cross Traffic Warning Distance
+                current = self.settings.get('cross_traffic_warning_distance')
+                self.settings.set('cross_traffic_warning_distance', (current + 1) % 3)
+                self.open_driving_menu()
 
         # ── Parking Menu ──
         elif self.current_menu == 'parking':
@@ -508,45 +498,32 @@ class MenuSystem:
                 if self.ai_traffic_active:
                     self.ui_manager.event_bus.emit('ai_traffic_stop', {})
                     self.ui_manager.event_bus.emit(
-                        "notification", {'notification': '^3AI Traffic stopping...'})
+                        "notification", {'notification': '^3' + self.translator.get("AI Traffic stopping...", self.set_language)})
                 else:
                     self.ui_manager.event_bus.emit('ai_traffic_start', {})
-                    self.ui_manager.event_bus.emit(
-                        "notification", {'notification': '^2AI Traffic started.'})
-                    self.ui_manager.event_bus.emit(
-                        "notification", {'notification': '^7Correct layout needs to be selected.'})
-                # ai_traffic_active is updated by the synchronous callback
-                # _on_ai_traffic_state_changed which fires during the emit above
+                    # AIDriver validates the track and emits its own notifications.
+                    # ai_traffic_active is updated by the synchronous callback
+                    # _on_ai_traffic_state_changed which fires during the emit above.
+                    if self.ai_traffic_active:
+                        self.ui_manager.event_bus.emit(
+                            "notification", {'notification': '^2' + self.translator.get("AI Traffic started.", self.set_language)})
                 self.open_ai_traffic_menu()
 
         # ── Keys and Axes Menu ──
         elif self.current_menu == 'keys':
             setting = ''
             if button_id == 22:
-                if self.settings.get('own_control_mode') in [0, 1]:
-                    setting = 'user_brake_key'
-                    self.ui_manager.event_bus.emit('await_keybinding', {'setting': setting})
-                    self.open_awaiting_key(setting)
-                else:
-                    current_axis = self.settings.get('user_axis_brake')
-                    self.settings.set('user_axis_brake', (current_axis + 1) % 25)
-                    self.open_keys_settings()
-            elif button_id == 23:
-                current_axis = self.settings.get('vjoy_axis_1')
-                self.settings.set('vjoy_axis_1', (current_axis + 1) % 25)
-                self.open_keys_settings()
-            elif button_id == 24:
                 setting = 'user_handbrake_key'
-            elif button_id == 25:
+            elif button_id == 23:
                 setting = 'user_shift_up_key'
-            elif button_id == 35:
+            elif button_id == 24:
                 setting = 'user_shift_down_key'
-            elif button_id == 26:
+            elif button_id == 25:
                 setting = 'user_clutch_key'
-            elif button_id == 27:
+            elif button_id == 26:
                 setting = 'user_ignition_key'
 
-            if button_id in [24, 25, 35, 26, 27]:
+            if button_id in [22, 23, 24, 25, 26]:
                 self.ui_manager.event_bus.emit('await_keybinding', {'setting': setting})
                 self.open_awaiting_key(setting)
 

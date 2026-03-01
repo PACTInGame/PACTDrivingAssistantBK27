@@ -1,4 +1,6 @@
 import math
+import os
+import time
 from typing import Dict, Any, List, Optional, Tuple
 import json
 
@@ -6,6 +8,7 @@ from AI_Control import AIControlState, IndicatorMode
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.language import LanguageManager
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -290,8 +293,19 @@ class AIDriver(AssistanceSystem):
     STATE_ACTIVE = 1
     STATE_STOPPING = 2
 
+    # Allowed track configurations for AI traffic
+    ALLOWED_TRACKS = {b'BL1X', b'SO7', b'KY1X'}
+
+    # Track-specific layout hint notifications (matched by track prefix)
+    TRACK_LAYOUT_HINTS = {
+        b'BL': '^7Select GP Track X',
+        b'SO': '^7Select City',
+        b'KY': '^7Select Oval X',
+    }
+
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("ai_traffic", event_bus, settings)
+        self.translator = LanguageManager()
         self.current_track = None
         self.event_bus.subscribe("state_data", self._on_state_data)
         self.routes = None
@@ -338,6 +352,18 @@ class AIDriver(AssistanceSystem):
         self._arrows_left: List[Tuple[float, float, float]] = []
         self._arrows_right: List[Tuple[float, float, float]] = []
 
+        # Per-vehicle shift retry state for monitor_ai toggle logic.
+        # After sending shift_up=True or shift_down=True, the next cycle always
+        # sends False first (reset), so a stuck command is retried automatically.
+        # Keys: PLID → {"up": bool, "down": bool}
+        self._shift_pending: Dict[int, Dict[str, bool]] = {}
+
+        # Per-vehicle timestamp of last received AI info packet.
+        # Used to detect when the repeating request was lost (e.g. after map reload)
+        # and needs to be re-issued.
+        self._last_ai_info_time: Dict[int, float] = {}
+        self.AI_INFO_TIMEOUT = 2.0  # seconds – re-request after this silence
+
         # Per-vehicle marker interaction state
         # stop_line: "idle" → "braking" → "stopped" → "departing" (then back to idle)
         self._stop_state: Dict[int, str] = {}          # vehicle_id → state
@@ -371,11 +397,44 @@ class AIDriver(AssistanceSystem):
         """Start AI traffic. Route assignment happens in the next process() call."""
         if self.state != self.STATE_INACTIVE:
             return
+
+        # --- Validate track data file exists ---
+        trackname = str(self.current_track[:2])[2:4]
+        file_path = f"track_data/track_data_{trackname}.json"
+        if not os.path.isfile(file_path):
+            lang = self.settings.get('language')
+            self.event_bus.emit("notification",
+                                {'notification': '^1' + self.translator.get('Traffic not avail. on this map', lang)})
+            print(f"[AIDriver] Track data file not found: {file_path}")
+
+            return
+        # --- Validate track configuration ---
+        if self.current_track not in self.ALLOWED_TRACKS:
+            lang = self.settings.get('language')
+            self.event_bus.emit("notification",
+                               {'notification': '^1' + self.translator.get('Wrong track config for traffic', lang)})
+            print(f"[AIDriver] Track {self.current_track} is not a valid traffic track.")
+            # Emit track-specific layout hint notification
+            track_prefix = self.current_track[:2]
+            hint = self.TRACK_LAYOUT_HINTS.get(track_prefix)
+            if hint:
+                self.event_bus.emit("notification", {'notification': hint})
+            return
+
+
+
+        # --- All checks passed – start traffic ---
+        self.event_bus.emit("send_command_to_lfs", "/axload AI_Traffic")
+        self.event_bus.emit("send_command_to_lfs", "/restart")
+
         self._load_routes()
         self.assigned_routes = {}
         self._smoothed = {}
         self.state = self.STATE_ACTIVE
         self.event_bus.emit("ai_traffic_state_changed", {"active": True})
+
+
+
         print("[AIDriver] AI traffic started.")
 
     def _on_stop(self, data=None):
@@ -396,6 +455,7 @@ class AIDriver(AssistanceSystem):
     def _load_routes(self):
         """Load routes and markers from file (once)."""
         if self.routes is None:
+            print(self.current_track)
             trackname = str(self.current_track[:2])[2:4] if self.current_track else None
 
             if trackname is not None:
@@ -433,17 +493,14 @@ class AIDriver(AssistanceSystem):
         vx = vehicle.data.x / 65536
         vy = vehicle.data.y / 65536
         vz = vehicle.data.z / 65536
-
         min_distance = float('inf')
         closest_route_id = None
-
         for road_id, road in self.routes.items():
             for point in road.get('path', []):
                 d = dist((vx, vy, vz), tuple(point))
                 if d < min_distance:
                     min_distance = d
                     closest_route_id = road_id
-
         return closest_route_id
 
     # ─── Speed ────────────────────────────────────────────────────────
@@ -469,22 +526,56 @@ class AIDriver(AssistanceSystem):
     # ─── AI Info monitoring ───────────────────────────────────────────
 
     def monitor_ai(self, aii):
-        """Handle AI info packets – automatic gear shifting and stall recovery."""
+        """Handle AI info packets – automatic gear shifting and stall recovery.
+
+        Uses a toggle mechanism to prevent shift commands from getting stuck.
+        After sending shift_up=True (or shift_down=True), the next cycle
+        *always* sends False first (reset cycle).  If the RPM still requires
+        a shift, True is sent again the cycle after that.  This means a shift
+        can only happen every other cycle, but it guarantees that a failed
+        shift is always retried.
+        """
         if self.ai_controller is None:
             return
-        if aii.RPM > 3600 and aii.Gear < 6:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=True))
-            print(f"[AIDriver] Upshift: RPM={aii.RPM}, Gear={aii.Gear}")
-        else:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_up=False))
-        if aii.RPM < 1700 and aii.Gear > 2:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_down=True))
-        else:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(shift_down=False))
+
+        plid = aii.PLID
+
+        # Record reception time for timeout detection
+        self._last_ai_info_time[plid] = time.time()
+
+        # Lazy-init per-vehicle shift state
+        if plid not in self._shift_pending:
+            self._shift_pending[plid] = {"up": False, "down": False}
+
+        pending = self._shift_pending[plid]
+
+        # ── Shift Up ──
+        wants_shift_up = aii.RPM > 3600 and aii.Gear < 6
+        if pending["up"]:
+            # Last cycle sent True → always reset to False first
+            self.ai_controller.control_ai(plid, AIControlState(shift_up=False))
+            pending["up"] = False
+        elif wants_shift_up:
+            # No pending reset → send the actual shift command
+            self.ai_controller.control_ai(plid, AIControlState(shift_up=True))
+            pending["up"] = True
+
+        # ── Shift Down ──
+        wants_shift_down = aii.RPM < 1700 and aii.Gear > 2
+        if pending["down"]:
+            # Last cycle sent True → always reset to False first
+            self.ai_controller.control_ai(plid, AIControlState(shift_down=False))
+            pending["down"] = False
+        elif wants_shift_down:
+            # No pending reset → send the actual shift command
+            self.ai_controller.control_ai(plid, AIControlState(shift_down=True))
+            pending["down"] = True
+
+        # ── Stall recovery (ignition) ──
         if aii.RPM < 300:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(ignition=True))
+            self.ai_controller.control_ai(plid, AIControlState(ignition=True))
         else:
-            self.ai_controller.control_ai(aii.PLID, AIControlState(ignition=False))
+            self.ai_controller.control_ai(plid, AIControlState(ignition=False))
 
     # ─── Main process loop ────────────────────────────────────────────
 
@@ -541,6 +632,8 @@ class AIDriver(AssistanceSystem):
 
         self.assigned_routes.clear()
         self._smoothed.clear()
+        self._shift_pending.clear()
+        self._last_ai_info_time.clear()
         self._stop_state.clear()
         self._stop_cooldown.clear()
         self._indicator_timer.clear()
@@ -567,12 +660,26 @@ class AIDriver(AssistanceSystem):
                     if self.ai_controller is not None:
                         self.ai_controller.bind_ai_info_handler(vehicle_id, self.monitor_ai)
                         self.ai_controller.request_ai_info(vehicle_id, repeat_interval=100)
+                        self._last_ai_info_time[vehicle_id] = time.time()
+
+        # ── Re-request AI info for vehicles that stopped receiving data ──
+        if self.ai_controller is not None:
+            now = time.time()
+            for vehicle_id in self.assigned_routes:
+                last_time = self._last_ai_info_time.get(vehicle_id)
+                if last_time is not None and (now - last_time) > self.AI_INFO_TIMEOUT:
+                    self.ai_controller.bind_ai_info_handler(vehicle_id, self.monitor_ai)
+                    self.ai_controller.request_ai_info(vehicle_id, repeat_interval=100)
+                    self._last_ai_info_time[vehicle_id] = now
+                    print(f"[AIDriver] Re-requested AI info for vehicle {vehicle_id} (timeout)")
 
         # ── Remove vehicles that have left the track ──
         departed = [vid for vid in self.assigned_routes if vid not in vehicles]
         for vid in departed:
             del self.assigned_routes[vid]
             self._smoothed.pop(vid, None)
+            self._shift_pending.pop(vid, None)
+            self._last_ai_info_time.pop(vid, None)
             self._stop_state.pop(vid, None)
             self._stop_cooldown.pop(vid, None)
             self._indicator_timer.pop(vid, None)

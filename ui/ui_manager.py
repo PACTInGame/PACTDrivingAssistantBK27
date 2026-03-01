@@ -39,6 +39,7 @@ class UIManager:
         self.hud_enabled = False
         self.siren_active = False
         self.strobe_active = False
+        self.siren_ui_visible = False
 
 
         # Event-Handler
@@ -68,23 +69,32 @@ class UIManager:
         button_id = btc.ClickID
         if button_id == 62:
             self.siren_active = not self.siren_active
-            self._show_siren_ui({'ui': True})
+            self._update_siren_buttons()
         elif button_id == 63:
             self.strobe_active = not self.strobe_active
-            self._show_siren_ui({'ui': True})
+            self._update_siren_buttons()
 
 
     def _show_siren_ui(self, data):
         ui = data['ui']
         if ui:
-            siren_text = "^7Siren" if not self.siren_active else "^4Siren"
-            strobe_text = "^7Strobe" if not self.strobe_active else "^4Strobe"
-            self.message_sender.create_button(62, self.settings.get("hud_width"), self.settings.get("hud_height") - 5, 6, 5, siren_text, pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
-            self.message_sender.create_button(63, self.settings.get("hud_width")+6, self.settings.get("hud_height") - 5, 7, 5, strobe_text,
-                                              pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+            self.siren_ui_visible = True
+            self._update_siren_buttons()
         else:
+            self.siren_ui_visible = False
             self.message_sender.remove_button(62)
             self.message_sender.remove_button(63)
+
+    def _update_siren_buttons(self):
+        """Aktualisiert Position und Zustand der Siren/Strobe-Buttons basierend auf HUD-Position."""
+        siren_text = "^7Siren" if not self.siren_active else "^4Siren"
+        strobe_text = "^7Strobe" if not self.strobe_active else "^4Strobe"
+        hud_x = self.settings.get("hud_width")
+        hud_y = self.settings.get("hud_height")
+        self.message_sender.create_button(62, hud_x, hud_y - 5, 6, 5, siren_text,
+                                          pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+        self.message_sender.create_button(63, hud_x + 6, hud_y - 5, 7, 5, strobe_text,
+                                          pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
 
 
     def _decel_debug(self, data):
@@ -193,6 +203,7 @@ class UIManager:
                 self.message_sender.remove_button(i)
             self.siren_active = False
             self.strobe_active = False
+            self.siren_ui_visible = False
             self.redline = 0
             self.current_menu = None
             self.message_sender.create_button(1, 0, 180, 25, 5,
@@ -252,6 +263,9 @@ class UIManager:
 
             if self.pdc_data and self.pdc_data[0] != -1:
                 self._show_pdc_display()
+
+            if self.siren_ui_visible:
+                self._update_siren_buttons()
 
             self.show_notifications()
 

@@ -279,10 +279,10 @@ if __name__ == "__main__":
             z = object.Zbyte / 4
             # Coordinates in Meters:
             print(object.Index)
-            if object.Index != 184:
+            if object.Index != 184 and object.Index != 185:
                 objects.append((index, x, y, z))
         print(len(objects))
-        if len(objects) >= 1245:
+        if len(objects) >= 2551:
             gen = MapGenerator(objects)
             gen.process()
             gen.save_to_json()

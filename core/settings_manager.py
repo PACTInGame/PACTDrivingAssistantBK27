@@ -14,6 +14,7 @@ class SettingsManager:
             'cross_traffic_warning': True,
             'automatic_gearbox': False,
             'collision_warning_distance': 1, # 0 = Early, 1 = Normal, 2 = Late
+            'cross_traffic_warning_distance': 1, # 0 = Early, 1 = Medium, 2 = Late
             'automatic_emergency_brake': 1,  # 0 = Off, 1 = Warn, 2 = Warn & Brake
             'auto_hold': True,
             'adaptive_lights': True,

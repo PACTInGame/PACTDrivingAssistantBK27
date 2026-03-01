@@ -160,7 +160,6 @@ class LightAssists(AssistanceSystem):
                 self.event_bus.emit("show_siren_ui", {"ui": True})
             else:
                 self.event_bus.emit("show_siren_ui", {"ui": False})
-            print(f"Cop Assistance {'enabled' if self.copassist_enabled else 'disabled'}")
 
         return {
             'adaptive_lights': True
