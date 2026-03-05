@@ -788,6 +788,67 @@ class LanguageManager:
                 "dk": "HUD Position",
                 "se": "HUD Position"
             },
+            # ─── Chat Command Translations ────────────────────────────
+            "enabled": {
+                "en": "enabled",
+                "de": "aktiviert",
+                "it": "attivato",
+                "fr": "activé",
+                "tr": "etkin",
+                "no": "aktivert",
+                "dk": "aktiveret",
+                "se": "aktiverad"
+            },
+            "disabled": {
+                "en": "disabled",
+                "de": "deaktiviert",
+                "it": "disattivato",
+                "fr": "désactivé",
+                "tr": "devre dışı",
+                "no": "deaktivert",
+                "dk": "deaktiveret",
+                "se": "inaktiverad"
+            },
+            "Siren": {
+                "en": "Siren",
+                "de": "Sirene",
+                "it": "Sirena",
+                "fr": "Sirène",
+                "tr": "Siren",
+                "no": "Sirene",
+                "dk": "Sirene",
+                "se": "Siren"
+            },
+            "Strobe": {
+                "en": "Strobe",
+                "de": "Blaulicht",
+                "it": "Strobo",
+                "fr": "Stroboscope",
+                "tr": "Çakar",
+                "no": "Blålys",
+                "dk": "Blålys",
+                "se": "Blixtljus"
+            },
+            "Siren not available": {
+                "en": "Siren not available",
+                "de": "Sirene nicht verfügbar",
+                "it": "Sirena non disponibile",
+                "fr": "Sirène non disponible",
+                "tr": "Siren kullanılamıyor",
+                "no": "Sirene ikke tilgjengelig",
+                "dk": "Sirene ikke tilgængelig",
+                "se": "Siren inte tillgänglig"
+            },
+            "Strobe not available": {
+                "en": "Strobe not available",
+                "de": "Blaulicht nicht verfügbar",
+                "it": "Strobo non disponibile",
+                "fr": "Stroboscope non disponible",
+                "tr": "Çakar kullanılamıyor",
+                "no": "Blålys ikke tilgjengelig",
+                "dk": "Blålys ikke tilgængeligt",
+                "se": "Blixtljus inte tillgängligt"
+            },
         }
 
     def get(self, english_key, language_code=None):

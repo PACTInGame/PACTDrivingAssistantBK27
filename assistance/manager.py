@@ -5,6 +5,7 @@ from assistance.adaptive_lights import LightAssists
 from assistance.auto_hold import AutoHold
 from assistance.base_system import AssistanceSystem
 from assistance.blind_spot_warning import BlindSpotWarning
+from assistance.chat_commands import ChatCommandHandler
 from assistance.collision_warning import ForwardCollisionWarning
 from assistance.cross_traffic_warning import CrossTrafficWarning
 from assistance.gearbox import Gearbox
@@ -49,6 +50,8 @@ class AssistanceManager:
         self.systems['ctw'] = CrossTrafficWarning(self.event_bus, self.settings)
         self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
 
+        # Chat-Command Handler (event-basiert, kein process()-System)
+        self.chat_commands = ChatCommandHandler(self.event_bus, self.settings)
 
         # Weitere Systeme hier hinzufügen
 

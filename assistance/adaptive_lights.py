@@ -5,6 +5,7 @@ from typing import Dict, Any
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.language import LanguageManager
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -22,6 +23,9 @@ class LightAssists(AssistanceSystem):
         self.event_bus.subscribe("player_name_changed", self._on_player_name_changed)
         self.event_bus.subscribe("button_clicked", self._handle_button_click)
         self.event_bus.subscribe("state_data", self._handle_state_change)
+        self.event_bus.subscribe("siren_toggle_requested", self._on_siren_toggle_requested)
+        self.event_bus.subscribe("strobe_toggle_requested", self._on_strobe_toggle_requested)
+        self.translator = LanguageManager()
         self.on_track = False
         self.player_name = "Unknown"
         self.strobe_active = False
@@ -76,6 +80,35 @@ class LightAssists(AssistanceSystem):
             self.strobe_active = not self.strobe_active
             if not self.strobe_active:
                 self.disable_siren()
+
+    def _on_siren_toggle_requested(self, data):
+        """Toggled die Sirene via Chat-Command. Nur wenn Cop-Modus aktiv."""
+        lang = self.settings.get('language')
+        if not self.is_siren_enabled_role or not self.settings.get('cop_assistance'):
+            self.event_bus.emit("notification",
+                                {'notification': '^1' + self.translator.get("Siren not available", lang)})
+            return
+        self.siren_active = not self.siren_active
+        self.event_bus.emit("siren_state_changed", {"siren_active": self.siren_active})
+        status = self.translator.get("enabled", lang) if self.siren_active else self.translator.get("disabled", lang)
+        color = "^2" if self.siren_active else "^1"
+        self.event_bus.emit("notification",
+                            {'notification': f'{color}{self.translator.get("Siren", lang)}: {status}'})
+
+    def _on_strobe_toggle_requested(self, data):
+        """Toggled die Stroboskoplichter via Chat-Command. Nur wenn Cop-Modus aktiv."""
+        lang = self.settings.get('language')
+        if not self.is_siren_enabled_role or not self.settings.get('cop_assistance'):
+            self.event_bus.emit("notification",
+                                {'notification': '^1' + self.translator.get("Strobe not available", lang)})
+            return
+        self.strobe_active = not self.strobe_active
+        if not self.strobe_active:
+            self.disable_siren()
+        status = self.translator.get("enabled", lang) if self.strobe_active else self.translator.get("disabled", lang)
+        color = "^2" if self.strobe_active else "^1"
+        self.event_bus.emit("notification",
+                            {'notification': f'{color}{self.translator.get("Strobe", lang)}: {status}'})
 
     def _on_player_name_changed(self, data):
         player_name = data.get('player_name', '')

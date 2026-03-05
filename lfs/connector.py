@@ -126,6 +126,7 @@ class LFSConnector:
 
     def _handle_message(self, insim, mso):
         """Verarbeitet Chat-Nachrichten"""
+        print(mso.Msg)
         self.event_bus.emit('message_received', mso)
 
     def _handle_layout(self, insim, axm):
