@@ -507,6 +507,8 @@ class MenuSystem:
                     if self.ai_traffic_active:
                         self.ui_manager.event_bus.emit(
                             "notification", {'notification': '^2' + self.translator.get("AI Traffic started.", self.set_language)})
+                        self.ui_manager.event_bus.emit(
+                            "notification", {'notification': '^3' + self.translator.get("Camera needs to be on own vehicle.", self.set_language)})
                 self.open_ai_traffic_menu()
 
         # ── Keys and Axes Menu ──

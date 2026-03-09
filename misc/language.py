@@ -481,6 +481,16 @@ class LanguageManager:
                 "dk": "AI-Trafik startet.",
                 "se": "AI-Trafik startad."
             },
+            "Camera needs to be on own vehicle.": {
+                "en": "Camera needs to be on own vehicle.",
+                "de": "Kamera muss auf eigenem Fahrzeug sein.",
+                "it": "La telecamera deve essere sul proprio veicolo.",
+                "fr": "La caméra doit être sur votre véhicule.",
+                "tr": "Kamera kendi aracınızda olmalıdır.",
+                "no": "Kameraet må være på eget kjøretøy.",
+                "dk": "Kameraet skal være på eget køretøj.",
+                "se": "Kameran måste vara på eget fordon."
+            },
             # ─── Notifications (auto_hold.py) ────────────────────────
             # "Auto Hold" is already defined above
 

@@ -471,8 +471,8 @@ if __name__ == "__main__":
         print(f"AI {aii.PLID}: RPM={aii.RPM}, Gear={aii.Gear}")
 
 
-    controller.bind_ai_info_handler(1, monitor_ai)
-    controller.request_ai_info(1, repeat_interval=200)
+    controller.bind_ai_info_handler(2, monitor_ai)
+    controller.request_ai_info(2, repeat_interval=200)
 
     # Start InSim
     pyinsim.run()

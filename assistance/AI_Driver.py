@@ -602,11 +602,10 @@ class AIDriver(AssistanceSystem):
 
         # Send full brake to every assigned vehicle
         for vehicle_id in list(self.assigned_routes.keys()):
-            if vehicle_id in vehicles:
-                self.ai_controller.control_ai(vehicle_id, AIControlState(
-                    throttle=0,
-                    brake=100,
-                ))
+            self.ai_controller.control_ai(vehicle_id, AIControlState(
+                throttle=0,
+                brake=100,
+            ))
 
         self.stop_counter += 1
 
@@ -643,19 +642,44 @@ class AIDriver(AssistanceSystem):
         self.stop_counter = 0
         print("[AIDriver] AI traffic fully stopped.")
 
+    def _is_local_ai_vehicle(self, vehicle) -> bool:
+        """Check whether a vehicle is a local AI driver by its player name.
+
+        LFS default AI driver names contain 'AI' (e.g. 'AI 1', 'AI 2').
+        The pname field can be bytes or str depending on the source.
+        """
+        pname = vehicle.data.pname
+        if isinstance(pname, bytes):
+            return b'AI' in pname
+        if isinstance(pname, str):
+            return 'AI' in pname
+        return False
+
     def _process_active(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Normal active processing: assign routes and drive vehicles."""
         if not self.routes:
             return {'ai_active': False}
 
-        # ── Assign routes to new (unassigned) vehicles ──
-        for vehicle_id, vehicle in vehicles.items():
+        # ── Build combined dict of all vehicles that could be AI-controlled ──
+        # vehicles dict does NOT contain own_vehicle (VehicleManager separates it),
+        # but own_vehicle might itself be an AI driver (e.g. camera on an AI car).
+        all_candidates: Dict[int, Vehicle] = dict(vehicles)
+        if (own_vehicle.data.player_id != 0
+                and own_vehicle.data.player_id not in all_candidates):
+            all_candidates[own_vehicle.data.player_id] = own_vehicle
+
+        # ── Assign routes to new (unassigned) AI vehicles ──
+        for vehicle_id, vehicle in all_candidates.items():
             if vehicle_id not in self.assigned_routes:
+                # Only control vehicles whose player name contains "AI"
+                if not self._is_local_ai_vehicle(vehicle):
+                    continue
+
                 route_id = self._find_closest_route(vehicle)
                 if route_id is not None:
                     self.assigned_routes[vehicle_id] = route_id
                     vehicle.current_route = route_id
-                    print(f"[AIDriver] Vehicle {vehicle_id} assigned to route {route_id}")
+                    print(f"[AIDriver] Vehicle {vehicle_id} ({vehicle.data.pname}) assigned to route {route_id}")
 
                     # Bind AI info handler and request periodic updates
                     if self.ai_controller is not None:
@@ -675,7 +699,7 @@ class AIDriver(AssistanceSystem):
                     print(f"[AIDriver] Re-requested AI info for vehicle {vehicle_id} (timeout)")
 
         # ── Remove vehicles that have left the track ──
-        departed = [vid for vid in self.assigned_routes if vid not in vehicles]
+        departed = [vid for vid in self.assigned_routes if vid not in all_candidates]
         for vid in departed:
             del self.assigned_routes[vid]
             self._smoothed.pop(vid, None)
@@ -689,7 +713,7 @@ class AIDriver(AssistanceSystem):
 
         # ── Drive each assigned vehicle along its route ──
         for vehicle_id, route_id in self.assigned_routes.items():
-            vehicle = vehicles.get(vehicle_id)
+            vehicle = all_candidates.get(vehicle_id)
             if vehicle is None:
                 continue
 
@@ -697,7 +721,7 @@ class AIDriver(AssistanceSystem):
             if route_data is None:
                 continue
 
-            self._drive_vehicle(vehicle_id, vehicle, route_data, own_vehicle, vehicles)
+            self._drive_vehicle(vehicle_id, vehicle, route_data, own_vehicle, all_candidates)
 
         return {'ai_active': True}
 
@@ -988,13 +1012,15 @@ class AIDriver(AssistanceSystem):
         target_speed = self.calculate_target_speed(curvature, long_straight=long_straight)
 
         # ── Collision avoidance override ──
-        # Check player vehicle
-        is_ahead, player_distance = self._is_player_ahead_of_vehicle(vehicle, own_vehicle)
+        # Check player vehicle (only if own_vehicle is NOT a controlled AI vehicle –
+        # otherwise it is already handled by the AI-to-AI loop below)
         emergency_brake = False
         closest_distance = float('inf')
 
-        if is_ahead:
-            closest_distance = player_distance
+        if own_vehicle.data.player_id not in self.assigned_routes:
+            is_ahead, player_distance = self._is_player_ahead_of_vehicle(vehicle, own_vehicle)
+            if is_ahead:
+                closest_distance = player_distance
 
         # Check other AI vehicles
         for other_id, other_vehicle in vehicles.items():

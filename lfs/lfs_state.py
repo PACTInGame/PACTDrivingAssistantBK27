@@ -1,5 +1,4 @@
 import time
-from typing import Dict
 
 import pyinsim
 
@@ -36,21 +35,29 @@ class StateHandler:
             self.time_menu_opened = time.time()
             self.on_track = False
 
-        flags = [int(i) for i in str("{0:b}".format(sta.Flags))]
+        # Use proper bitwise operations for flag parsing
+        flags_raw = sta.Flags
         self.in_game_cam = sta.InGameCam
-        if len(flags) >= 15:
-            game = flags[-1] == 1 and flags[-15] == 1
-            if not self.on_track and game:
-                start_game_insim()
 
-            elif self.on_track and not game:
-                start_menu_insim()
+        ISS_GAME = 1
+        ISS_DIALOG = 16
+        ISS_FRONT_END = 256
+        ISS_TEXT_ENTRY = 32768
 
-        elif self.on_track:
+        is_in_game = bool(flags_raw & ISS_GAME)
+        is_front_end = bool(flags_raw & ISS_FRONT_END)
+
+        # on_track is True when ISS_GAME is set AND ISS_FRONT_END (entry screen) is NOT set.
+        # ISS_DIALOG (in-game options menu) must NOT affect on_track.
+        game = is_in_game and not is_front_end
+
+        if not self.on_track and game:
+            start_game_insim()
+        elif self.on_track and not game:
             start_menu_insim()
 
-        self.text_entry = len(flags) >= 16 and flags[-16] == 1
-        self.dialog = len(flags) >= 5 and flags[-5] == 1
+        self.text_entry = bool(flags_raw & ISS_TEXT_ENTRY)
+        self.dialog = bool(flags_raw & ISS_DIALOG)
         self.track = sta.Track
         state_data = {
             'on_track': self.on_track,
