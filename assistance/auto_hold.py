@@ -16,6 +16,16 @@ class AutoHold(AssistanceSystem):
         self.current_warning_level = 0
         self.own_rectangle = None
         self.translator = LanguageManager()
+        self.dialog_active = False
+        self.text_entry_active = False
+
+        # Subscribe to state data for dialog/text entry detection
+        self.event_bus.subscribe('state_data', self._on_state_data)
+
+    def _on_state_data(self, data):
+        """Aktualisiert Dialog- und TextEntry-Status aus dem Game-State."""
+        self.dialog_active = data.get('dialog', False)
+        self.text_entry_active = data.get('text_entry', False)
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Auto-Hold-Logik"""
@@ -25,6 +35,9 @@ class AutoHold(AssistanceSystem):
         if own_vehicle.data.speed < 0.05 and own_vehicle.brake > 0.05:
             auto_hold = True
             if not own_vehicle.handbrake_light:
+                # Block keypress when a dialog or text entry is open to prevent input interference
+                if self.dialog_active or self.text_entry_active:
+                    return {'auto_hold_active': auto_hold}
                 user_handbrake_key = self.settings.get('user_handbrake_key')
                 # Press the handbrake key to activate auto-hold using direct input, right here
                 pyautogui.keyDown(user_handbrake_key)

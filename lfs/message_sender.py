@@ -9,15 +9,17 @@ class MessageSender:
         self.connector = connector
         self.active_buttons: Dict[int, bool] = {}
         self.connector.event_bus.subscribe("send_command_to_lfs", self._on_send_command_to_lfs)
+        self.connector.event_bus.subscribe("send_local_message_to_lfs", self.send_local_message)
+
 
     def _on_send_command_to_lfs(self, command: str):
         """Event-Handler für das Senden von Befehlen an LFS"""
         self.send_command(command)
 
-    def send_message(self, message: str):
+    def send_local_message(self, message: str):
         """Sendet eine Chat-Nachricht"""
-        # Implementation für Chat-Nachrichten
-        pass
+        self.connector.send_local_message_to_lfs(message)
+
     def send_command(self, command: str):
         """Sendet einen Befehl an LFS"""
         self.connector.send_command_to_lfs(command)

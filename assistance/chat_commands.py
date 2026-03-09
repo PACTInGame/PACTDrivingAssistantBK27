@@ -1,4 +1,6 @@
 import re
+import random
+import time
 
 import pyinsim
 from pyinsim.func import stripcols, stripenc
@@ -37,6 +39,7 @@ class ChatCommandHandler:
 
         # Command-Mapping: command_string -> handler_method
         self._commands = {
+            'help': self._cmd_help,
             'siren': self._cmd_siren,
             'strobe': self._cmd_strobe,
             'fcw': self._cmd_fcw,
@@ -45,6 +48,35 @@ class ChatCommandHandler:
             'light': self._cmd_light,
             'highbeam': self._cmd_highbeam,
         }
+
+        # Tooltip system
+        self._tooltip_keys = [
+            "tooltip_help_command",
+            "tooltip_key_binding",
+            "tooltip_fun_fact",
+            "tooltip_bug_report",
+            "tooltip_ai_traffic",
+        ]
+        self._last_tooltip_time = time.time()
+        self._on_track = False
+
+        # Subscribe to state data for on-track detection
+        self.event_bus.subscribe('state_data', self._on_state_data)
+
+    def _on_state_data(self, data):
+        """Aktualisiert den On-Track-Status."""
+        self._on_track = data.get('on_track', False)
+
+    def check_tooltip(self):
+        """Prüft ob ein periodischer Tooltip gesendet werden soll. Wird extern aufgerufen."""
+        if not self._on_track:
+            return
+
+        interval = 360
+        now = time.time()
+        if now - self._last_tooltip_time >= interval:
+            self._last_tooltip_time = now
+            self._send_random_tooltip()
 
     def _on_player_name_changed(self, data):
         """Aktualisiert den eigenen Spielernamen."""
@@ -187,4 +219,27 @@ class ChatCommandHandler:
         current = self.settings.get('high_beam_assist')
         self.settings.set('high_beam_assist', not current)
         self._notify("High Beam Assist", not current)
+
+    def _cmd_help(self):
+        """Sendet eine Liste aller verfügbaren Commands als lokale Nachrichten."""
+        help_lines = [
+            "^7--- PACT Driving Assistant Commands ---",
+            "^7$help    ^3- Show this help",
+            "^7$siren   ^3- Turn on/off siren as a cop",
+            "^7$strobe  ^3- Turn on/off strobe as a cop",
+            "^7$fcw     ^3- Turn on/off forward collision warning",
+            "^7$ctw     ^3- Turn on/off cross traffic warning",
+            "^7$autoh   ^3- Turn on/off auto-hold (parking brake when stopping)",
+            "^7$light   ^3- Turn on/off adaptive brake lights",
+            "^7$highbeam^3- Turn on/off high beam assistant",
+        ]
+        for line in help_lines:
+            self.event_bus.emit("send_local_message_to_lfs", line)
+
+    def _send_random_tooltip(self):
+        """Sendet einen zufälligen übersetzten Tooltip als lokale Nachricht."""
+        lang = self.settings.get('language')
+        key = random.choice(self._tooltip_keys)
+        text = self.translator.get(key, lang)
+        self.event_bus.emit("send_local_message_to_lfs", f"^3PACT ^7| {text}")
 

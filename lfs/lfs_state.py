@@ -50,12 +50,12 @@ class StateHandler:
             start_menu_insim()
 
         self.text_entry = len(flags) >= 16 and flags[-16] == 1
+        self.dialog = len(flags) >= 5 and flags[-5] == 1
         self.track = sta.Track
-        # TODO Add other state stuff, and not enable autohold etc if textentry etc
-        # TODO add a help tooltip every minute or 5 mins
         state_data = {
             'on_track': self.on_track,
             'text_entry': self.text_entry,
+            'dialog': self.dialog,
             'track': self.track,
             'in_game_cam': self.in_game_cam,
             'in_game_interface': self.in_game_interface,

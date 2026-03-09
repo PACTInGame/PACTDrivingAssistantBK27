@@ -82,6 +82,8 @@ class AssistanceManager:
                 # print(f"Error in assistance system {name}: {e}")
 
         self.event_bus.emit('assistance_results', results)
+        # Check for periodic tooltip messages
+        self.chat_commands.check_tooltip()
         return results
 
     def get_system(self, name: str) -> Optional[AssistanceSystem]:

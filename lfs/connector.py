@@ -147,6 +147,12 @@ class LFSConnector:
         self.insim.send(pyinsim.ISP_MST,
                         Msg=command)
 
+    def send_local_message_to_lfs(self, message: str):
+        """Sendet einen Befehl an LFS"""
+        message = message.encode()
+        self.insim.send(pyinsim.ISP_MSL,
+                        Msg=message)
+
     def send_light_command(self, data):
         """Schaltet ein Licht ein oder aus
 

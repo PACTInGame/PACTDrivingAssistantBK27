@@ -849,6 +849,58 @@ class LanguageManager:
                 "dk": "Blålys ikke tilgængeligt",
                 "se": "Blixtljus inte tillgängligt"
             },
+
+            # ─── Tooltips ─────────────────────────────────────────────
+            "tooltip_help_command": {
+                "en": "Type '$help' in chat to see all available commands.",
+                "de": "Schreibe '$help' in den Chat, um alle verfügbaren Commands zu sehen.",
+                "it": "Scrivi '$help' nella chat per vedere tutti i comandi disponibili.",
+                "fr": "Tapez '$help' dans le chat pour afficher toutes les commandes.",
+                "tr": "Mevcut komutları görmek için sohbete '$help' yazın.",
+                "no": "Skriv '$help' i chatten for å se alle tilgjengelige kommandoer.",
+                "dk": "Skriv '$help' i chatten for at se alle tilgængelige kommandoer.",
+                "se": "Skriv '$help' i chatten för att se alla tillgängliga kommandon."
+            },
+            "tooltip_key_binding": {
+                "en": "You can bind commands to wheel or keyboard buttons in the LFS options.",
+                "de": "Du kannst in den LFS-Optionen Commands auf Lenkrad- oder Tastaturtasten legen.",
+                "it": "Nelle opzioni di LFS puoi assegnare i comandi ai pulsanti del volante o della tastiera.",
+                "fr": "Vous pouvez assigner des commandes aux touches du volant ou du clavier dans les options LFS.",
+                "tr": "LFS ayarlarından komutları direksiyon veya klavye tuşlarına atayabilirsiniz.",
+                "no": "Du kan tilordne kommandoer til ratt- eller tastaturknapper i LFS-innstillingene.",
+                "dk": "Du kan tildele kommandoer til rat- eller tastaturknapper i LFS-indstillingerne.",
+                "se": "Du kan tilldela kommandon till ratt- eller tangentbordsknappar i LFS-inställningarna."
+            },
+            "tooltip_fun_fact": {
+                "en": "Fun Fact: The PACT Driving Assistant has been around since 2018. This is version 10.",
+                "de": "Fun Fact: Den PACT Driving Assistant gibt es seit 2018. Dies ist Version 10.",
+                "it": "Curiosità: il PACT Driving Assistant esiste dal 2018. Questa è la versione 10.",
+                "fr": "Le saviez-vous ? Le PACT Driving Assistant existe depuis 2018. Ceci est la version 10.",
+                "tr": "Biliyor muydunuz? PACT Driving Assistant 2018'den beri var. Bu, 10. sürüm.",
+                "no": "Visste du? PACT Driving Assistant har eksistert siden 2018. Dette er versjon 10.",
+                "dk": "Vidste du? PACT Driving Assistant har eksisteret siden 2018. Dette er version 10.",
+                "se": "Visste du? PACT Driving Assistant har funnits sedan 2018. Det här är version 10."
+            },
+            "tooltip_bug_report": {
+                "en": "Found a bug? Report it in the PACT Driving Assistant thread on the LFS forum.",
+                "de": "Einen Bug gefunden? Melde ihn im PACT Driving Assistant Thread im LFS-Forum.",
+                "it": "Hai trovato un bug? Segnalalo nel thread del PACT Driving Assistant sul forum LFS.",
+                "fr": "Un bug ? Signalez-le dans le fil PACT Driving Assistant sur le forum LFS.",
+                "tr": "Bir hata mı buldunuz? LFS forumundaki PACT Driving Assistant başlığında bildirin.",
+                "no": "Funnet en feil? Meld den i PACT Driving Assistant-tråden på LFS-forumet.",
+                "dk": "Fundet en fejl? Rapportér den i PACT Driving Assistant-tråden på LFS-forummet.",
+                "se": "Hittat en bugg? Rapportera den i PACT Driving Assistant-tråden på LFS-forumet."
+            },
+            "tooltip_ai_traffic": {
+                "en": "On many tracks you can drive with AI traffic in single player mode.",
+                "de": "Auf vielen Strecken kannst du im Einzelspieler-Modus mit KI-Verkehr fahren.",
+                "it": "Su molti circuiti puoi guidare con il traffico IA in modalità giocatore singolo.",
+                "fr": "Sur de nombreux circuits, vous pouvez rouler avec du trafic IA en mode solo.",
+                "tr": "Birçok pistte tek oyunculu modda yapay zekâ trafiğiyle sürüş yapabilirsiniz.",
+                "no": "På mange baner kan du kjøre med AI-trafikk i enkeltspillermodus.",
+                "dk": "På mange baner kan du køre med AI-trafik i enkeltspillertilstand.",
+                "se": "På många banor kan du köra med AI-trafik i enspelarlä̈ge."
+            },
         }
 
     def get(self, english_key, language_code=None):
