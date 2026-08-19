@@ -106,3 +106,27 @@ wizard — is the obvious hardening step. See `known-issues.md` #24.
 `C:\LFS\docs\InSim.txt` documents the `cfg.txt` OutGauge/OutSim keys in its OutGauge
 section; `C:\LFS\docs\OutSimPack.txt` documents the `OSO_*` option bits behind
 `OutSim Opts`; `C:\LFS\docs\Commands.txt` lists every `/` command, including `/insim`.
+
+## 5. `cfg.txt` is avoidable — `SMALL_SSG`
+
+`InSim.txt` (Dashboard Packets section):
+
+> *"If OutGauge has not been setup in cfg.txt, the SSG packet makes LFS send UDP packets
+> if in game, using the OutGauge system […] You do not need to set any OutGauge values in
+> LFS cfg.txt — OutGauge is fully initialised by the SSG packet."*
+
+```python
+insim.send(pyinsim.ISP_SMALL, SubT=pyinsim.SMALL_SSG, UVal=interval_ms)  # 0 = stop
+```
+
+Packets go to the UDP port given as **`UDPPort` in the `IS_ISI` handshake**.
+`LFSConnector.connect()` does not currently pass `UDPPort`, so this would need adding
+alongside the `SMALL_SSG` request.
+
+This removes the entire class of failure in §2 and §3: no `cfg.txt` editing, no
+"LFS must be closed", no silent breakage after an LFS reinstall, and no wizard step for
+OutGauge at all. It still only streams *"if in game"* from an internal view
+(`conventions.md` §5.3), and it still reports the **viewed** car (`conventions.md` §5.2).
+
+The wizard's `cfg.txt` handling would remain useful only for **OutSim**, which has no
+equivalent InSim-side initialiser.

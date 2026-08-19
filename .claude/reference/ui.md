@@ -80,17 +80,24 @@ blocked when:
 |---|---|---|
 | `ISS_TEXT_ENTRY` is set | `state_data['text_entry']` | the keystroke is typed into the LFS chat instead of acting as a control |
 | `ISS_DIALOG` is set | `state_data['dialog']` | the keystroke operates the open dialog |
-| the user is holding **Shift** | **not available via InSim** — must be tracked locally with `pynput` | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
+| the user is holding **Shift** | `OutGaugePack.Flags & OG_SHIFT` (1); `OG_CTRL` (2) for Ctrl. Falls back to a local `pynput` listener when OutGauge is not streaming | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
 | LFS is not the foreground window | Win32 / `pygetwindow` | otherwise we type into the user's browser |
 | not `on_track` | `state_data['on_track']` | no control input is meaningful |
 
 `AutoHold` currently checks `dialog` and `text_entry` only. `Gearbox` checks **nothing**.
 Neither checks Shift or focus. See `known-issues.md` #11.
 
-There is no InSim packet reporting modifier-key state — `IS_BTC.CFlags` carries
-`ISB_SHIFT`/`ISB_CTRL` but only for button clicks. Global Shift state must come from a
-local `pynput` listener; `misc/key_binder.py` already depends on `pynput` and is the
-natural place to expose it.
+**Shift state is available from OutGauge**: `OutGaugePack.Flags` carries `OG_SHIFT` (1)
+and `OG_CTRL` (2), updated at the OutGauge rate. Since OutGauge only streams while on
+track in an internal view (`conventions.md` §5.3) — which is exactly when key injection
+happens — this covers the relevant cases. `misc/key_binder.py` already depends on
+`pynput` and is the natural place for a fallback listener if a broader guarantee is
+needed. (`IS_BTC.CFlags` also has `ISB_SHIFT`/`ISB_CTRL`, but only for button clicks.)
+
+Also note: whichever key the injector presses must be the key **the user has actually
+bound in LFS**. The `user_*_key` settings are the app's guess at that binding and
+nothing verifies it — a wrong binding means the injection does nothing, or does
+something else entirely.
 
 ### 1.5 The user can clear our buttons — and we never notice
 

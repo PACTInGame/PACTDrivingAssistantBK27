@@ -172,4 +172,4 @@ systems when `on_track` is true.
 5. Emit results as events; never call the UI directly. Document the event in
    `reference/events.md`.
 6. Add a menu entry in `ui/menu_system.py` and translations in `misc/language.py`.
-7. Respect the cycle budget — see `conventions.md` §5.
+7. Respect the cycle budget — see `conventions.md` §6.

@@ -178,3 +178,7 @@ See `reference/ai-traffic.md`.
 Would convert `needed_deceleration_update` into a vJoy brake axis for wheel users,
 switching LFS's brake axis via `/axis` commands. Commented out in `manager.py`; its
 `Controls/wheel.py` dependency is also broken (`known-issues.md` #8).
+
+**Read `reference/control-intervention.md` before touching this or any other feature
+that actuates the car.** It covers arbitration, handback, fail-safe behaviour, the axis
+configuration requirement, and the keyboard key-release trap.

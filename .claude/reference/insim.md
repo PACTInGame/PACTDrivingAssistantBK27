@@ -17,6 +17,25 @@ carry fast enough. OutSim is connected (`LFSConnector.start_outsim`) and emits
 `outsim_data`, but **nothing subscribes to it yet** — it is the intended source if a
 system ever needs G-forces, per-wheel loads or slip.
 
+### OutGauge specifics — read before relying on it
+
+- **`OutGaugePack.PLID` is the *viewed* player, not necessarily the local driver.**
+  TAB changes it. Full semantics and the robust way to find your own PLID:
+  `conventions.md` §5.
+- **It only streams from an internal view, on track.** Chase/heli/TV camera, or being
+  in the garage, stops it dead — and with it every assistance system, silently.
+- **`Flags` carries live modifier-key state**: `OG_SHIFT` (1) and `OG_CTRL` (2). This is
+  the cheapest source for "is the user holding Shift", which matters before injecting
+  keys (`ui.md` §1.4). It is only valid while OutGauge is streaming.
+- `Flags` also carries user unit preferences: `OG_KM` (16384, else miles) and
+  `OG_BAR` (32768, else psi) — the HUD's `unit` setting could default from these.
+- **`SMALL_SSG` makes `cfg.txt` unnecessary.** Sending `IS_SMALL` with
+  `SubT = SMALL_SSG` and `UVal = interval_ms` (0 stops) makes LFS stream OutGauge for
+  the currently viewed car to the UDP port given as `UDPPort` in the `IS_ISI`
+  handshake — *"You do not need to set any OutGauge values in LFS cfg.txt"*. This is the
+  robust replacement for the current cfg.txt dependency; note `LFSConnector.connect()`
+  does not currently pass `UDPPort`. See `lfs-setup.md` §5.
+
 The first-run setup wizard (`core/setup_wizard.py`) writes the required `cfg.txt`
 entries (`OutSim Mode 2`, `OutSim Opts 1ff`, ports, `OutGauge Mode 2`) and optionally
 appends `/insim 29999` to `data/script/autoexec.lfs`.
@@ -77,6 +96,7 @@ Sent by this project:
 | `ISP_BTN` | draw a UI button (the only way to render anything in LFS) |
 | `ISP_BFN` | delete a button by `ClickID` |
 | `ISP_TINY` | request state (`TINY_SST`), players (`TINY_NPL`), layout (`TINY_AXM`) |
+| `ISP_SMALL` + `SMALL_SSG` | *(not used)* start OutGauge streaming without `cfg.txt` |
 | `ISP_SMALL` + `SMALL_LCL` | **local car lights** — indicators, low/high beam, fog, extra |
 | `ISP_SMALL` + `SMALL_LCS` | **local car switches** — siren, horn, flash |
 | `ISP_MST` | send a command to LFS (e.g. `/axload AI_Traffic`, `/restart`) |
@@ -142,6 +162,16 @@ LCL_Mask_FogRear 0x00100000  LCL_Mask_FogFront 0x00200000  LCL_Mask_Extra 0x0040
 
 # SMALL_LCS — switches
 LCS_SET_SIREN 0x10   LCS_Mask_Siren 0x300000 (0 off / 1 fast / 2 slow)
+
+# OutGaugePack Flags — OG_*
+OG_SHIFT 1 (Shift key held)  OG_CTRL 2 (Ctrl key held)
+OG_TURBO 8192  OG_KM 16384 (else the user prefers miles)  OG_BAR 32768 (else psi)
+
+# IS_NPL PType — bit 0 female / bit 1 AI / bit 2 remote
+# own player == IS_NPL with UCID == 0 and not (PType & 2)
+
+# IS_STA InGameCam — OutGauge only streams in an INTERNAL view (3 or 4)
+VIEW_FOLLOW 0  VIEW_HELI 1  VIEW_CAM 2  VIEW_DRIVER 3  VIEW_CUSTOM 4  VIEW_ANOTHER 255
 
 # OutGauge ShowLights (dashboard) — DL_*
 DL_SHIFT 1  DL_FULLBEAM 2  DL_HANDBRAKE 4  DL_PITSPEED 8  DL_TC 16

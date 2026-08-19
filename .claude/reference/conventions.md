@@ -117,7 +117,91 @@ default, and never let an unknown `CName` raise.
 connection selects a car — both are unused here but are the hooks if mod handling ever
 needs to be explicit.
 
-## 5. Performance rules for the hot path
+## 5. Player identification (PLID) — whose car is this actually?
+
+`PLID` (player ID) is the key almost everything in this project is indexed by: the
+vehicle dict, route assignments, AI control, light commands. Getting "which PLID is
+*ours*" wrong is subtle, because the wrong answer is usually still a **useful** answer.
+
+### 5.1 Where PLIDs come from
+
+| Source | Field | Meaning |
+|---|---|---|
+| `IS_MCI` / `CompCar` | `PLID` | one entry per car on track |
+| `IS_NPL` | `PLID` + `UCID` + `PType` | a player joined the race **or left the pits** |
+| `IS_PLL` | `PLID` | a player left |
+| `IS_STA` | `ViewPLID` | **unique ID of the player currently being viewed** (0 = none) |
+| **OutGauge** | `PLID` | **unique ID of the *viewed* player** — see below |
+
+### 5.2 OutGauge reports the viewed car, not necessarily your car
+
+`InSim.txt` defines `OutGaugePack.PLID` as *"Unique ID of viewed player"*. LFS sends
+the dashboard data of **whatever car the camera is on**, which TAB cycles through
+(offline: own car and the AI drivers; online: all players).
+
+Consequences:
+
+- **On track, driving your own car, OutGauge `PLID` is your PLID.** This is the
+  simplest way to learn it and is what `OwnVehicle.update_outgauge_data` relies on
+  (`self.data.player_id = packet.PLID`).
+- **While spectating, or after pressing TAB, it is somebody else's PLID.** The whole
+  `OwnVehicle` object then describes the observed car.
+- For most systems that is **the desired behaviour**: the HUD shows the observed car's
+  speed, and collision warnings refer to the car you are actually looking at. Do not
+  "fix" this reflexively.
+- It is wrong wherever the intent is genuinely *the local driver* — anything that
+  actuates (auto-hold, gearbox, light commands, siren) acts on **your** car via
+  `SMALL_LCL`/`SMALL_LCS`/keypresses while the *data* describes someone else's. Braking
+  or shifting based on a spectated car is a real hazard.
+
+`IS_STA.ViewPLID` carries the same information over InSim and is unpacked by pyinsim,
+but is not read anywhere in this project.
+
+### 5.3 Two additional conditions on OutGauge
+
+Per `InSim.txt`: *"The user's car in multiplayer or the viewed car in single player or
+single player replay can output information to a dashboard system **while viewed from
+an internal view**."* And `OutGauge Mode` is `0 = off / 1 = driving / 2 = driving+replay`.
+
+So OutGauge stops streaming entirely when:
+
+- the camera is **not** an internal view — `IS_STA.InGameCam` other than `VIEW_DRIVER`
+  (3) or `VIEW_CUSTOM` (4); chase (`VIEW_FOLLOW` 0), heli (1) and TV (2) produce nothing;
+- you are **in the pits / garage**, not on track — which is why the own PLID cannot be
+  established there;
+- `OutGauge Mode` is 0 in `cfg.txt`.
+
+Because `own_vehicle` is only ever updated from OutGauge, **every one of these silently
+freezes all assistance** (`known-issues.md` #24, #29). The existing workaround is
+`StateHandler.start_game_insim()`, which re-opens the OutGauge socket on track entry if
+more than 30 s have passed; `AIDriver` sidesteps it with the notification *"Camera needs
+to be on own vehicle."*
+
+### 5.4 Determining your own PLID robustly
+
+The camera-independent way is `IS_NPL`, which carries both:
+
+- `UCID` — connection id, **0 = local**;
+- `PType` — bit 0 female, **bit 1 = AI**, **bit 2 = remote**.
+
+Your own player is the `IS_NPL` with `UCID == 0` and `PType & 2 == 0`. That works in the
+garage, in menus, and regardless of camera, and it distinguishes "the car I drive" from
+"the car I am watching" — which OutGauge alone cannot.
+
+`VehicleManager._handle_player_joined` currently stores only `PName`, `CName` and a
+derived control mode, **discarding `UCID` and `PType`**. Both should be kept; see
+`known-issues.md` #30.
+
+Note `IS_NPL` is also sent when a player *leaves the pits*, not only on joining — do not
+treat it as a one-shot "player created" event.
+
+### 5.5 Do not detect AI drivers by name
+
+`PType` bit 1 is the authoritative AI flag. `AIDriver._is_local_ai_vehicle` instead
+tests `b'AI' in pname`, which matches any human called MAIK, RAID or CAIN and hands
+their car to the traffic controller. See `known-issues.md` #31.
+
+## 6. Performance rules for the hot path
 
 The hot path is: every InSim packet handler, `AssistanceSystem.process()`,
 `UIManager.update_hud()`, and everything they emit into. Budget per assistance cycle is
@@ -142,7 +226,7 @@ Do not:
 If a change adds measurable per-cycle cost, state the cost and the worst-case vehicle
 count in the code comment.
 
-## 6. Physics expectations
+## 7. Physics expectations
 
 LFS is a full simulation: tyre load sensitivity, Kamm circle, per-wheel slip, brake
 balance, aero. Assistance logic must be defensible in those terms.
@@ -158,7 +242,7 @@ balance, aero. Assistance logic must be defensible in those terms.
 - OutSim (`OutSimPack`) can supply per-wheel data and G-forces if a system needs real
   slip/friction information — it is connected but currently unused.
 
-## 7. Code style
+## 8. Code style
 
 - Follow the surrounding file: German docstrings/comments in the older modules,
   English in the newer ones. Do not mass-translate.

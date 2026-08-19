@@ -49,8 +49,8 @@ real OS keys with `pyautogui`. `AutoHold` guards against `dialog`/`text_entry`;
 **`Gearbox` guards against nothing**. Neither checks whether the user is holding
 **Shift** (LFS binds many SHIFT+key commands, so an injected key becomes a command) nor
 whether LFS is the foreground window (so the app can type into the user's browser).
-Shift state is not available through InSim and must come from a local `pynput`
-listener. Full rule set in `ui.md` §1.4.
+Shift state is available as `OutGaugePack.Flags & OG_SHIFT` and is simply not read.
+Full rule set in `ui.md` §1.4.
 
 **#12 — No shared-state locking.** Packet handlers (main thread) mutate the vehicle
 dict while assistance systems (worker thread) iterate it. `ParkDistanceControl` works
@@ -113,7 +113,8 @@ immediately forever. Every assistance system silently does nothing, with no diag
 `own_vehicle.data.player_id` also comes only from OutGauge, so the app cannot even
 identify the player's car. An LFS update or reinstall can reset `cfg.txt`, and the setup
 wizard never re-runs because of the `.setup_done` flag. Needs a startup validation of
-`cfg.txt` plus a "no OutGauge data after N seconds" warning. See `lfs-setup.md`.
+`cfg.txt` plus a "no OutGauge data after N seconds" warning — or, better, dropping the
+`cfg.txt` dependency entirely via `SMALL_SSG` (`lfs-setup.md` §5).
 
 **#25 — Screen context is detected far too crudely.** `StateHandler` derives only
 `on_track = ISS_GAME and not ISS_FRONT_END`, plus `text_entry` and `dialog`. It ignores
@@ -138,6 +139,43 @@ understand why. Either clamp the HUD out of the reserved area or warn. `ui.md` �
 `(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary `CName`
 values. PDC sensor geometry and FCW's car-length term are then wrong for every modded
 car. `conventions.md` §4 has the preferred alternatives.
+
+**#29 — OutGauge stops in any external camera view, freezing all assistance.** LFS only
+streams OutGauge from an internal view while on track. Switching to chase/heli/TV camera,
+or entering the garage, stops `own_vehicle_updated` — and `process_all_systems()` then
+returns immediately every cycle. Same silent-freeze mechanism as #24, but triggered by
+ordinary user actions rather than misconfiguration. The 30-second
+`start_outgauge()` re-init in `StateHandler.start_game_insim` is a partial workaround.
+`conventions.md` §5.3.
+
+**#30 — Own PLID is derived only from OutGauge, so it follows the camera.**
+`OwnVehicle.update_outgauge_data` sets `data.player_id = packet.PLID`, but that field is
+the **viewed** player. Pressing TAB or spectating silently repoints the entire
+`OwnVehicle` object at somebody else's car. Harmless (arguably correct) for the HUD and
+warnings; actively wrong for anything that actuates — auto-hold, gearbox, light and
+siren commands act on the local car while the data describes another one.
+`IS_NPL` carries `UCID` and `PType`, which identify the local human driver
+camera-independently, but `VehicleManager._handle_player_joined` discards both.
+`conventions.md` §5.
+
+**#31 — AI drivers are detected by substring match on the player name.**
+`AIDriver._is_local_ai_vehicle` returns true for `b'AI' in pname`, so a human called
+MAIK, RAID or CAIN is adopted by the traffic controller and driven by it. `IS_NPL.PType`
+bit 1 is the authoritative AI flag and is not read. `conventions.md` §5.5.
+
+**#32 — Key bindings are guessed, never asserted.** The `user_*_key` settings are the
+app's assumption about what the user bound in LFS; nothing verifies them, so a mismatch
+makes auto-hold and the gearbox silently do nothing or press the wrong control. LFS
+accepts `/key <key> <function>`, which would let the app *set* the binding it is going to
+inject. Same class of problem for `user_axis_*` / `vjoy_axis_1`, where an unset value
+means the brake-intervention `/axis` switch points at the wrong device.
+`control-intervention.md` §2, §3.1.
+
+**#33 — Keyboard intervention has an unsolved key-release trap.** If an intervention
+injects a key the user is physically holding and then releases it, LFS sees the release
+and stops braking while the driver is still pressing the pedal key. Any future automatic
+braking on keyboard/mouse must track real hardware key state and suppress its own
+release. `control-intervention.md` §3.2.
 
 ## Housekeeping
 

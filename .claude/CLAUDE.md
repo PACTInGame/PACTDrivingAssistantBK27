@@ -85,6 +85,7 @@ Read **only** what the task needs. Do not read the whole `reference/` folder.
 | HUD, menus, button IDs, settings keys, translations | `reference/ui.md` |
 | **Which LFS screen are we on**, when buttons may be drawn, when key injection must be blocked | `reference/ui.md` §1 |
 | App does not connect / connects but nothing happens / `cfg.txt`, OutGauge, `autoexec.lfs`, setup wizard | `reference/lfs-setup.md` |
+| Automatic braking, cruise control, or anything that **actuates** the car instead of warning | `reference/control-intervention.md` |
 | Fixing bugs / hardening / "why is this broken" | `reference/known-issues.md` |
 | Writing or running tests | `reference/testing.md` |
 | Raw LFS protocol truth (when pyinsim seems wrong/incomplete) | `C:\LFS\docs\InSim.txt`, `OutSimPack.txt`, `Commands.txt` — see `reference/insim.md` §6 |
@@ -105,6 +106,10 @@ superseded by these docs but kept for context.
 - **Do not silently widen scope.** Fix what was asked; list other defects you spot.
 - **Never re-enable automatic braking intervention** without being asked — it is
   deliberately disabled (`assistance/collision_warning.py`, `controller_emulator`).
+  If asked, read `reference/control-intervention.md` first.
+- **`OutGauge` describes the car the *camera* is on, not necessarily the player's car.**
+  Fine for the HUD and warnings, wrong for anything that actuates. Never actuate on a
+  PLID you have not confirmed is the local driver. `reference/conventions.md` §5.
 - **`pyautogui` keypresses are global OS input.** Any code that injects keys must be
   blocked while `text_entry` or `dialog` is set, while the user holds **Shift** (LFS
   binds SHIFT+key commands), while not `on_track`, and when LFS is not the foreground
@@ -134,6 +139,8 @@ Update when:
   documented → `conventions.md` / `insim.md`
 - LFS screen/state behaviour or a button quirk is discovered → `ui.md` §1
 - an LFS-side configuration requirement changes → `lfs-setup.md`
+- a decision is made about how control is taken from or returned to the driver →
+  `control-intervention.md`
 - a known issue is fixed, or a new systemic defect is found → `known-issues.md`
 - an architectural or design decision is made → the relevant file, with the *why*
 
