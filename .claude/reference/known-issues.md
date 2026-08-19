@@ -44,10 +44,13 @@ unconditionally *after* the import, so `vj` and `setJoy` are never bound and
 `press_wheel_brake` would raise `NameError`. Currently unreachable only because
 `ControllerEmulator` is commented out in `AssistanceManager`.
 
-**#11 — Global keypress injection has no focus check.** `AutoHold` and `Gearbox` use
-`pyautogui` to press keys. `AutoHold` guards against `dialog`/`text_entry`; `Gearbox`
-does not guard at all. Neither checks whether LFS is the foreground window, so the app
-can type into whatever the user has focused.
+**#11 — Global keypress injection is under-guarded.** `AutoHold` and `Gearbox` press
+real OS keys with `pyautogui`. `AutoHold` guards against `dialog`/`text_entry`;
+**`Gearbox` guards against nothing**. Neither checks whether the user is holding
+**Shift** (LFS binds many SHIFT+key commands, so an injected key becomes a command) nor
+whether LFS is the foreground window (so the app can type into the user's browser).
+Shift state is not available through InSim and must come from a local `pynput`
+listener. Full rule set in `ui.md` §1.4.
 
 **#12 — No shared-state locking.** Packet handlers (main thread) mutate the vehicle
 dict while assistance systems (worker thread) iterate it. `ParkDistanceControl` works
@@ -99,6 +102,42 @@ one of them). One owner should hold the state and publish it.
 
 **#18 — `sat_nav` has no settings key**, so `NavigationSystem.is_enabled()` is always
 `False`. Either add the key or remove the system from `_init_systems`.
+
+## LFS integration, screen context and car data
+
+**#24 — OutGauge misconfiguration is undetectable and fatal.** If `cfg.txt` has
+OutGauge off or on the wrong port, InSim still connects, the startup connection test
+passes, and buttons still draw — but `own_vehicle_updated` never fires, so
+`AssistanceManager.own_vehicle` stays `None` and `process_all_systems()` returns
+immediately forever. Every assistance system silently does nothing, with no diagnostic.
+`own_vehicle.data.player_id` also comes only from OutGauge, so the app cannot even
+identify the player's car. An LFS update or reinstall can reset `cfg.txt`, and the setup
+wizard never re-runs because of the `.setup_done` flag. Needs a startup validation of
+`cfg.txt` plus a "no OutGauge data after N seconds" warning. See `lfs-setup.md`.
+
+**#25 — Screen context is detected far too crudely.** `StateHandler` derives only
+`on_track = ISS_GAME and not ISS_FRONT_END`, plus `text_entry` and `dialog`. It ignores
+`ISS_VISIBLE` (the authoritative "are our buttons on screen" flag), `ISS_SHIFTU` and
+`ISS_MULTI`, and it never binds `ISP_CIM` — so the app cannot distinguish the main menu,
+the entry screen, the garage and its nine submodes, options, or car/track select. Its
+own `in_game_interface` / `submode_interface` fields are initialised to 0 and never
+written; pyinsim already has `IS_CIM` and every constant. See `ui.md` §1.
+
+**#26 — The user can clear our buttons and they never come back.** `BFN_USER_CLEAR`
+(SHIFT+B) and `BFN_REQUEST` (SHIFT+B / SHIFT+I) arrive as inbound `IS_BFN` packets and
+neither is bound. The HUD recovers because it repaints every 50 ms, but the menu, PDC
+and notification buttons stay gone until something else redraws them. `ui.md` §1.5.
+
+**#27 — HUD position can break the LFS entry screen.** Buttons inside
+`L 0…110, T 30…170` make LFS keep that rectangle clear of its own UI. `hud_width` /
+`hud_height` are user-adjustable in 2-unit steps with no constraint, so a user can move
+the HUD into that area and make LFS's own entry-screen menus vanish, with no way to
+understand why. Either clamp the HUD out of the reserved area or warn. `ui.md` §1.3.
+
+**#28 — Vehicle mods fall through hardcoded car tables.** `get_vehicle_size()` returns
+`(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary `CName`
+values. PDC sensor geometry and FCW's car-length term are then wrong for every modded
+car. `conventions.md` §4 has the preferred alternatives.
 
 ## Housekeeping
 

@@ -2,7 +2,114 @@
 
 Everything visible is an InSim button. Mechanics and styles: `insim.md` §4.
 
-## 1. Button ID allocation — respect this map
+## 1. Screen context — where buttons may appear, and when input must be blocked
+
+LFS is not one screen. Buttons behave differently on each, and injected keypresses are
+dangerous on several. **Determining the current context correctly is a prerequisite for
+both, and the project currently does it only crudely.**
+
+### 1.1 The contexts
+
+| Context | `IS_STA` signature | Buttons | Notes |
+|---|---|---|---|
+| Main menu / multiplayer server list | neither `ISS_GAME` nor `ISS_FRONT_END` | **must not be drawn** | LFS shows none of our buttons here anyway; drawing is pointless and clutters the button set |
+| Single-player **entry screen** | `ISS_FRONT_END` (256) | **should be drawn** | see the space-clearing quirk in §1.3 |
+| **Pit / garage view** | `ISS_GAME`, plus `IS_CIM` `Mode = CIM_GARAGE` (3) | **should be drawn** | many submodes — `IS_CIM.SubMode` distinguishes them (`GRG_INFO`, `GRG_COLOURS`, `GRG_BRAKE_TC`, `GRG_SUSP`, `GRG_STEER`, `GRG_DRIVE`, `GRG_TYRES`, `GRG_AERO`, `GRG_PASS`) |
+| **In game / on track** | `ISS_GAME` and not `ISS_FRONT_END` | **always drawn** | the normal case |
+| ESC menu / any dialog | `ISS_DIALOG` (16) | LFS hides them | our buttons disappear on their own; do not fight it |
+| Text entry (chat) | `ISS_TEXT_ENTRY` (32768) | LFS hides them | **and keyboard injection must stop — see §1.4** |
+| SHIFT+U free view | `ISS_SHIFTU` (8) | drawn | `IS_CIM.SubMode` = `FVM_PLAIN` (no buttons), `FVM_BUTTONS`, `FVM_EDIT` |
+| Options / host options / car select / track select | `IS_CIM` `Mode` 1 / 2 / 4 / 5 | normal buttons hidden | only `INST_ALWAYS_ON` buttons survive here |
+
+Per `InSim.txt`, LFS displays normal buttons in exactly four screens: **main entry
+screen, race setup screen, in game, and SHIFT+U mode.**
+
+### 1.2 `ISS_VISIBLE` is the authoritative answer
+
+`IS_STA.Flags & ISS_VISIBLE` (16384) means *"InSim buttons are visible right now"*.
+It is the single reliable signal for whether our UI is actually on screen, and it is
+**not currently read anywhere in the project**. Prefer it over inferring visibility from
+`ISS_GAME`/`ISS_FRONT_END`/`ISS_DIALOG` combinations.
+
+`lfs/lfs_state.py` currently derives only `on_track = ISS_GAME and not ISS_FRONT_END`,
+plus `text_entry` and `dialog`. Its `in_game_interface` and `submode_interface` fields
+are placeholders that are **initialised to 0 and never updated** — they were clearly
+meant for `IS_CIM`. Wiring `ISP_CIM` in `LFSConnector` and filling those two fields
+(then widening the `state_data` payload) is the intended fix.
+
+`IS_CIM` needs no `ISF_*` flag: LFS sends it whenever the local connection's interface
+mode changes. pyinsim already has the `IS_CIM` class and every `CIM_*` / `NRM_*` /
+`GRG_*` / `FVM_*` constant — only the binding is missing.
+
+### 1.3 The entry-screen space-clearing quirk
+
+`InSim.txt` defines a recommended button area:
+
+```
+IS_X_MIN 0    IS_X_MAX 110
+IS_Y_MIN 30   IS_Y_MAX 170
+```
+
+**Buttons inside this area cause LFS to keep the area clear** — it moves or hides its
+own UI so the two do not overlap. Buttons *outside* the area get no space reserved and
+simply overlap whatever LFS is drawing.
+
+That is the "LFS UI disappears depending on button position" behaviour seen on the entry
+screen: it is intentional (it lets an InSim program own the screen), but it makes LFS's
+own menus unusable if our HUD happens to sit in that rectangle. Since `hud_width` /
+`hud_height` are user-configurable, a user can drag the HUD into the reserved area and
+break the entry screen without understanding why.
+
+Practical rules:
+- Keep persistent HUD elements **outside** `0–110 × 30–170` unless the intent really is
+  to take over the screen.
+- The menu (IDs 20–40, drawn at x 0–50, y 70–120) sits **inside** the reserved area —
+  that is correct for a menu, and is why it is drawn only while on track.
+- `INST_ALWAYS_ON` (128, the `Inst` byte of `IS_BTN`) makes a button visible in *all*
+  screens including garage and options. `LFSConnector.send_button()` already accepts an
+  `inst` argument but nothing passes it. Use it sparingly and only at the screen edges,
+  as `InSim.txt` warns.
+
+### 1.4 Input injection safety — hard rules
+
+`AutoHold` and `Gearbox` inject global keypresses with `pyautogui`. These are real OS
+keystrokes: they go wherever focus is. Any code path that injects a key **must** be
+blocked when:
+
+| Condition | Source | Why |
+|---|---|---|
+| `ISS_TEXT_ENTRY` is set | `state_data['text_entry']` | the keystroke is typed into the LFS chat instead of acting as a control |
+| `ISS_DIALOG` is set | `state_data['dialog']` | the keystroke operates the open dialog |
+| the user is holding **Shift** | **not available via InSim** — must be tracked locally with `pynput` | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
+| LFS is not the foreground window | Win32 / `pygetwindow` | otherwise we type into the user's browser |
+| not `on_track` | `state_data['on_track']` | no control input is meaningful |
+
+`AutoHold` currently checks `dialog` and `text_entry` only. `Gearbox` checks **nothing**.
+Neither checks Shift or focus. See `known-issues.md` #11.
+
+There is no InSim packet reporting modifier-key state — `IS_BTC.CFlags` carries
+`ISB_SHIFT`/`ISB_CTRL` but only for button clicks. Global Shift state must come from a
+local `pynput` listener; `misc/key_binder.py` already depends on `pynput` and is the
+natural place to expose it.
+
+### 1.5 The user can clear our buttons — and we never notice
+
+`IS_BFN` is bidirectional. Two subtypes arrive **from** LFS and neither is bound:
+
+- `BFN_USER_CLEAR` (2) — the user pressed SHIFT+B and cleared this InSim instance's
+  buttons. Our UI is gone until something redraws it.
+- `BFN_REQUEST` (3) — the user pressed SHIFT+B / SHIFT+I asking for buttons back. This
+  is the signal to redraw everything.
+
+Because the HUD is repainted every 50 ms it recovers by itself, but the menu, PDC and
+notification buttons do not. Binding `ISP_BFN` and forcing a full redraw on both
+subtypes is the correct handling.
+
+Conversely, `BFN_CLEAR` (1) sent **to** LFS clears every button this instance created in
+a single packet — the right replacement for the current 239-packet delete loop
+(`known-issues.md` #10).
+
+## 2. Button ID allocation — respect this map
 
 IDs are global and collide silently. `UIManager` owns the authoritative comment block;
 this is the same map:
@@ -25,7 +132,7 @@ When adding UI, claim a free range here and update both this table and the comme
 tracks the visual state and `LightAssists._handle_button_click` performs the action.
 Both subscribe to `button_clicked`, so their two booleans can drift apart.
 
-## 2. HUD and warnings — `ui/ui_manager.py`
+## 3. HUD and warnings — `ui/ui_manager.py`
 
 - `update_hud()` runs every `ui_refresh_rate` ms (default 50) and only draws while
   `hud_active` and `on_track`.
@@ -42,7 +149,7 @@ Both subscribe to `button_clicked`, so their two booleans can drift apart.
 - Audio: `UIManager` emits `play_audio` (three times, to lengthen the tone) when a
   warning crosses level 2. `AudioPlayer` suppresses repeats of `fcw` within 3 s.
 
-## 3. Menus — `ui/menu_system.py`
+## 4. Menus — `ui/menu_system.py`
 
 A flat state machine: `current_menu ∈ {'none','main','driving','parking','system','cop','ai_traffic','keys','await_key'}`.
 Each `open_*` method clears IDs 20–40 and redraws its own button list. Button `40`
@@ -62,7 +169,7 @@ a thread → first key/click emits `new_keybinding` → `MenuSystem._rebind_key`
 it. The left mouse button needs two presses (the first is consumed by the click that
 opened the prompt).
 
-## 4. Settings — `core/settings_manager.py`
+## 5. Settings — `core/settings_manager.py`
 
 `settings.json` next to the executable/project root (`misc.helpers.resolve_path`).
 `SettingsManager._defaults` is the **authoritative list of every setting key**; a key
@@ -86,7 +193,7 @@ call** and prints — fine for menu clicks, never call it from `process()`.
 InSim interval; changing it at runtime has no effect and would also invalidate the
 acceleration calculation (`conventions.md` §3).
 
-## 5. Localisation — `misc/language.py`
+## 6. Localisation — `misc/language.py`
 
 `LanguageManager.get(key, lang)` with an English key, falling back to English.
 Supported: `en, de, it, fr, tr, no, dk, se`.

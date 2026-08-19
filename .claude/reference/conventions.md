@@ -80,7 +80,44 @@ from `settings['assistance_refresh_rate']` (`LFSConnector.connect` passes it as
 `Interval`), so changing the refresh rate to 50 or 200 ms silently scales every
 acceleration value by 2×. Fix this by measuring real Δt if you touch it.
 
-## 4. Performance rules for the hot path
+## 4. Car identification — and why mods break lookup tables
+
+Cars are identified by `CName`, a 4-byte field in `IS_NPL` (and `IS_SLC`). For the ~20
+built-in cars it holds a fixed code: `XFG`, `XRG`, `UF1`, `FZ5`, `FXR`, …
+
+**But LFS also has vehicle mods**, selectable in the garage alongside the standard cars.
+There are unlimited of them, they are downloaded per user, and the set changes over
+time. For a mod, `CName` carries the mod's compressed skin/mod ID instead of a known
+code — an arbitrary value this project has never seen.
+
+Consequence: **any hardcoded table keyed on `CName` silently falls through to a default
+for every modded car.** Two exist today:
+
+| Table | Location | Fallback | Effect on a mod |
+|---|---|---|---|
+| `get_vehicle_size(cname)` → `(length, width)` | `assistance/park_distance_control.py` | `(4.5, 1.8)` | PDC sensor geometry and FCW's car-length term are wrong for anything that is not a mid-size saloon — a bus or a kart gets saloon dimensions |
+| gearbox calibration | `data/gearbox_calibrations.json` | none | handled correctly: the file is keyed by `CName` and the user calibrates each car once, so mods work by construction |
+
+The gearbox is the model to follow: **derive car-specific parameters at runtime instead
+of tabulating them.**
+
+When you need a vehicle parameter, prefer, in this order:
+
+1. **Measure it at runtime** from data LFS already sends (OutGauge rpm/gear, OutSim
+   per-wheel positions and forces, MCI motion) — works for every car including mods.
+2. **Ask the user once and persist it**, keyed by `CName`, like the gearbox calibration.
+3. **Table with an explicit, conservative fallback** — acceptable only when a wrong
+   value is harmless. If the value feeds a warning threshold or a braking calculation,
+   a wrong default is *not* harmless.
+
+Never assume `CName` is one of the built-in codes, never index a dict with it without a
+default, and never let an unknown `CName` raise.
+
+`IS_MAL` / `TINY_MAL` list the mods a host allows, and `IS_SLC` reports when a
+connection selects a car — both are unused here but are the hooks if mod handling ever
+needs to be explicit.
+
+## 5. Performance rules for the hot path
 
 The hot path is: every InSim packet handler, `AssistanceSystem.process()`,
 `UIManager.update_hud()`, and everything they emit into. Budget per assistance cycle is
@@ -105,7 +142,7 @@ Do not:
 If a change adds measurable per-cycle cost, state the cost and the worst-case vehicle
 count in the code comment.
 
-## 5. Physics expectations
+## 6. Physics expectations
 
 LFS is a full simulation: tyre load sensitivity, Kamm circle, per-wheel slip, brake
 balance, aero. Assistance logic must be defensible in those terms.
@@ -121,7 +158,7 @@ balance, aero. Assistance logic must be defensible in those terms.
 - OutSim (`OutSimPack`) can supply per-wheel data and G-forces if a system needs real
   slip/friction information — it is connected but currently unused.
 
-## 6. Code style
+## 7. Code style
 
 - Follow the surrounding file: German docstrings/comments in the older modules,
   English in the newer ones. Do not mass-translate.

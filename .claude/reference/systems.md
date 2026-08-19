@@ -84,6 +84,9 @@ Six virtual ultrasonic sensors (3 front, 3 rear) against layout objects *and* ca
 - Only active below 10 km/h; otherwise all six report `-1` (display removed).
 - Sensor geometry: from the car's four corners plus front/rear midpoints, three nested
   triangular cones per position at 0.1 / 1.4 / 2.8 m, half-angle 25°.
+- `get_vehicle_size` / `get_object_size` are hardcoded tables. For **vehicle mods**
+  `CName` is an unknown value and the size silently falls back to `(4.5, 1.8)` —
+  see `conventions.md` §4.
 - Obstacles come from two sources:
   - **Static** — `IS_AXM` layout objects, converted to rectangles by
     `create_rectangle_for_object` (note the `* 4096` AXM→MCI unit conversion) and
@@ -101,7 +104,8 @@ Applies the handbrake when the car is stopped with the brake pressed.
 - Trigger: `speed < 0.05 km/h and brake > 0.05` and the handbrake dash light is off.
 - Actuation is a **global `pyautogui` keypress** of `user_handbrake_key`. It is
   suppressed while `dialog` or `text_entry` is active — this guard is essential and
-  must not be removed. It does *not* currently check window focus.
+  must not be removed. It does **not** check whether the user is holding Shift, nor
+  whether LFS has focus. Both are required; see `ui.md` §1.4 for the full rule set.
 
 ## Adaptive Lights / Cop Mode — `adaptive_lights.py`
 
@@ -123,8 +127,14 @@ should be driving lights.
 ## Automatic Gearbox — `gearbox.py` (incomplete)
 
 Shifts by injecting `pyautogui` keypresses (clutch down, shift key, release).
+**It applies none of the input-injection guards** — no `text_entry`, no `dialog`, no
+Shift, no focus check — so an automatic shift while the user is typing in chat types
+the clutch and shift keys into the chat line. See `ui.md` §1.4 and
+`known-issues.md` #11.
 
-- **Requires per-car calibration**: idle rpm, redline, max gear. Started from the menu
+- **Requires per-car calibration**: idle rpm, redline, max gear. This is the pattern to
+  copy for any car-specific parameter — it works for vehicle mods by construction
+  (`conventions.md` §4). Started from the menu
   (`gearbox_calibrate`), three 12-second steps, persisted to
   `data/gearbox_calibrations.json` keyed by car name. Without calibration the system
   does nothing.

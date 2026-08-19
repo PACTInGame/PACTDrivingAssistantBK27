@@ -42,7 +42,7 @@ sane, no silent thread death. See `reference/known-issues.md`.
 |---|---|
 | **Python ≤ 3.11** | `pyinsim/core.py` uses `asyncore`, removed in Python 3.12. Do not "modernise" this casually — it means rewriting the transport layer. |
 | **Windows only** | `winsound`, `vjoy`, `pyautogui`, LFS itself. |
-| **LFS must be running** | with InSim enabled on port 29999, OutGauge 30000, OutSim 29998. |
+| **LFS must be running** | with InSim enabled on port 29999 (`/insim 29999`, normally from `autoexec.lfs`) and **OutGauge enabled in `cfg.txt`** on 30000, OutSim on 29998. Without OutGauge every assistance system silently does nothing — `reference/lfs-setup.md`. |
 | Third-party deps | `psutil, pyautogui, pynput, pygame, shapely, numpy, scipy, matplotlib` (see `requirements.txt`) |
 
 Run with: `python main.py` (from project root).
@@ -83,6 +83,8 @@ Read **only** what the task needs. Do not read the whole `reference/` folder.
 | Behaviour/tuning of a specific assistance feature | `reference/systems.md` |
 | AI traffic, routes, MapBuilder, `track_data/*.json`, layouts | `reference/ai-traffic.md` |
 | HUD, menus, button IDs, settings keys, translations | `reference/ui.md` |
+| **Which LFS screen are we on**, when buttons may be drawn, when key injection must be blocked | `reference/ui.md` §1 |
+| App does not connect / connects but nothing happens / `cfg.txt`, OutGauge, `autoexec.lfs`, setup wizard | `reference/lfs-setup.md` |
 | Fixing bugs / hardening / "why is this broken" | `reference/known-issues.md` |
 | Writing or running tests | `reference/testing.md` |
 | Raw LFS protocol truth (when pyinsim seems wrong/incomplete) | `C:\LFS\docs\InSim.txt`, `OutSimPack.txt`, `Commands.txt` — see `reference/insim.md` §6 |
@@ -103,8 +105,18 @@ superseded by these docs but kept for context.
 - **Do not silently widen scope.** Fix what was asked; list other defects you spot.
 - **Never re-enable automatic braking intervention** without being asked — it is
   deliberately disabled (`assistance/collision_warning.py`, `controller_emulator`).
-- **`pyautogui` keypresses are global.** Any code that injects keys must be guarded
-  by the game state (`text_entry`, `dialog`, `on_track`).
+- **`pyautogui` keypresses are global OS input.** Any code that injects keys must be
+  blocked while `text_entry` or `dialog` is set, while the user holds **Shift** (LFS
+  binds SHIFT+key commands), while not `on_track`, and when LFS is not the foreground
+  window. `reference/ui.md` §1.4 has the full table — today only `AutoHold` guards at
+  all, and only partially.
+- **LFS is many screens, not one.** Buttons must not be drawn on the main menu or the
+  multiplayer list, behave differently on the entry screen and in the pit/garage, and
+  vanish by themselves in dialogs and text entry. `ISS_VISIBLE` and `IS_CIM` are the
+  correct signals. `reference/ui.md` §1.
+- **Never key a lookup table on `CName` without a safe fallback.** LFS vehicle mods
+  produce arbitrary car names; derive car-specific parameters at runtime or calibrate
+  them. `reference/conventions.md` §4.
 - Prefer failing loudly at startup over failing silently in the loop.
 
 ---
@@ -120,6 +132,8 @@ Update when:
   `architecture.md`, `systems.md`
 - a convention, unit, coordinate or protocol detail turns out to be different than
   documented → `conventions.md` / `insim.md`
+- LFS screen/state behaviour or a button quirk is discovered → `ui.md` §1
+- an LFS-side configuration requirement changes → `lfs-setup.md`
 - a known issue is fixed, or a new systemic defect is found → `known-issues.md`
 - an architectural or design decision is made → the relevant file, with the *why*
 

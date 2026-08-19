@@ -84,17 +84,48 @@ Sent by this project:
 | `ISP_AIC` | **AI control** — drive an LFS AI car (see `ai-traffic.md`) |
 | `ISP_AII` | AI info response (rpm, gear, physics) — received |
 
+**Not bound but important — `ISP_CIM`.** It reports which LFS screen the connection is
+on (entry screen, garage and its submenus, options, car/track select, SHIFT+U) and is
+the only reliable way to distinguish them. pyinsim already implements `IS_CIM` and every
+`CIM_*` / `GRG_*` / `FVM_*` constant; `lfs/lfs_state.py` even has `in_game_interface`
+and `submode_interface` fields waiting for it. It needs no `ISF_*` flag — LFS sends it
+whenever the mode changes. See `ui.md` §1.
+
+Also not bound: `ISP_BFN` **inbound** (`BFN_USER_CLEAR` / `BFN_REQUEST` — the user
+clearing or re-requesting our buttons, `ui.md` §1.5).
+
 Other useful ones not yet used: `ISP_CON` (car contact), `ISP_OBH` (object hit),
 `ISP_HLV` (hotlap validity), `ISP_NCN`/`ISP_CNL` (online connections),
-`ISP_CIM` (interface mode), `ISP_PLC` (allowed cars).
+`ISP_PLC` (allowed cars), `ISP_SLC` (connection selected a car),
+`ISP_MAL` (mods allowed on a host).
 
 ### Key constants
 
 ```python
 # IS_STA Flags (bit test them, do not compare)
 ISS_GAME 1  ISS_REPLAY 2  ISS_PAUSED 4  ISS_SHIFTU 8  ISS_DIALOG 16
-ISS_FRONT_END 256  ISS_MULTI 512  ISS_VISIBLE 16384  ISS_TEXT_ENTRY 32768
+ISS_SHIFTU_FOLLOW 32  ISS_SHIFTU_NO_OPT 64  ISS_SHOW_2D 128
+ISS_FRONT_END 256 (entry screen)  ISS_MULTI 512  ISS_MPSPEEDUP 1024  ISS_WINDOWED 2048
+ISS_SOUND_MUTE 4096  ISS_VIEW_OVERRIDE 8192
+ISS_VISIBLE 16384 (InSim buttons visible — the authoritative UI-visibility signal)
+ISS_TEXT_ENTRY 32768
 # on_track  ==  (Flags & ISS_GAME) and not (Flags & ISS_FRONT_END)
+
+# IS_CIM Mode — which LFS screen the connection is on
+CIM_NORMAL 0  CIM_OPTIONS 1  CIM_HOST_OPTIONS 2  CIM_GARAGE 3
+CIM_CAR_SELECT 4  CIM_TRACK_SELECT 5  CIM_SHIFTU 6
+# SubMode for CIM_NORMAL : NRM_NORMAL/WHEEL_TEMPS/WHEEL_DAMAGE/LIVE_SETTINGS/PIT_INSTRUCTIONS (F9-F12)
+# SubMode for CIM_GARAGE : GRG_INFO/COLOURS/BRAKE_TC/SUSP/STEER/DRIVE/TYRES/AERO/PASS
+# SubMode for CIM_SHIFTU : FVM_PLAIN 0 / FVM_BUTTONS 1 / FVM_EDIT 2
+
+# IS_BFN SubT — bidirectional
+BFN_DEL_BTN 0 (→LFS: delete one button or a ClickID range)
+BFN_CLEAR 1   (→LFS: clear every button made by this InSim instance, one packet)
+BFN_USER_CLEAR 2 (←LFS: user pressed SHIFT+B and cleared our buttons)
+BFN_REQUEST 3    (←LFS: user pressed SHIFT+B / SHIFT+I asking for buttons back)
+
+# IS_BTN Inst
+INST_ALWAYS_ON 128 (button visible in ALL screens, incl. garage and options)
 
 # IS_MSO UserType
 MSO_SYSTEM 0   MSO_USER 1   MSO_PREFIX 2 (a message starting with the InSim Prefix, '$')   MSO_O 3
@@ -130,9 +161,19 @@ LFS has no overlay API. Everything this add-on draws is `IS_BTN` packets.
 
 - Screen space is **0…200 on both axes**, origin top-left.
   `T` = top (vertical), `L` = left (horizontal), `W` = width, `H` = height.
-  `T < 170` overlaps LFS's own UI.
+- **Recommended area: `L` 0…110, `T` 30…170.** Buttons inside it make LFS keep that
+  rectangle clear of its own UI; buttons outside it get no space reserved and simply
+  overlap. This is the cause of the "LFS menu disappears" effect on the entry screen —
+  see `ui.md` §1.3.
+- Up to 240 buttons, `ClickID` 0…239. `ISF_LOCAL` (set by this project) puts them in the
+  local button area so they cannot collide with a host control system's buttons and the
+  user toggles them with SHIFT+B rather than SHIFT+I.
 - `ClickID` identifies the button. Re-sending the same `ClickID` replaces it;
-  `IS_BFN` with that `ClickID` deletes it.
+  `IS_BFN` with that `ClickID` deletes it. Re-sending with `W = H = 0` updates only the
+  **text** of an existing button, without needing to know its position.
+- `Inst = INST_ALWAYS_ON` (128) makes a button visible in every screen including garage
+  and options. Use only at screen edges. `LFSConnector.send_button()` accepts `inst`
+  but no caller passes it.
 - Styles: `ISB_LIGHT` (light background), `ISB_DARK` (dark), `ISB_LMB` (transparent),
   `| ISB_CLICK` to make it clickable → produces `IS_BTC` with that `ClickID`.
   `ISB_LEFT` / `ISB_RIGHT` control text alignment.
