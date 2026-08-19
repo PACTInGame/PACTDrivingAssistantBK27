@@ -589,3 +589,36 @@ These apply to all ten and are repeated in the agent prompt:
   LFS.
 - **Update the reference docs the change touches** and remove fixed entries from
   `known-issues.md`. Do not write a changelog — git history covers that.
+
+---
+
+## Points that cannot be verified without LFS
+
+Implementation happens on Linux without LFS and without Windows, so `pytest` is the only
+feedback loop. Anything a work package changed that only the running game can prove is
+listed here, per WP, as a manual check list for the author. **Every WP agent appends its
+own subsection before finishing** — one line per item: what to do in the game, and what
+the correct outcome looks like. Remove an item once it has been checked in-game.
+
+### WP1 — test harness and platform-portable imports
+
+The Windows-only modules are now imported lazily through `misc/platform_shim.py`. The
+call sites make the same calls with the same arguments, but only real Windows proves that
+the accessor hands out the real module everywhere it used to be imported.
+
+- **Auto-hold**: stop the car with the brake held; the handbrake must engage once and the
+  "Auto Hold" notification must appear. (`get_keyboard().keyDown/keyUp`)
+- **Automatic gearbox**: enable it and drive; up- and downshifts must happen as before,
+  including the clutch key being held around the shift key.
+- **PDC beep**: reverse towards an obstacle; the front/rear beep patterns must sound.
+  (`get_sound().Beep`)
+- **Warning sounds**: trigger a collision warning; the `.wav` must play.
+  (`get_audio().mixer`)
+- **Key rebinding**: bind a key and a mouse button in the menu; both must be captured and
+  stored. (`get_input_listener()`, i.e. `pynput`)
+- **Setup wizard**: run it on a fresh install (delete `.setup_done`); every step must
+  appear as before. `tkinter` is now resolved per method instead of at import.
+- **Startup on a machine with a missing dependency**: if one of those packages is not
+  installed, the app no longer crashes at import — it logs a warning on first use and that
+  feature silently does nothing. Confirm the warning is visible enough, or let WP2's
+  logging/startup work make it a loud startup check.
