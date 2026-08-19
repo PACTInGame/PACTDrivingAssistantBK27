@@ -1,9 +1,10 @@
 from typing import Dict, Any
-import pyautogui
+
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.language import LanguageManager
+from misc.platform_shim import get_keyboard
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 
@@ -40,8 +41,9 @@ class AutoHold(AssistanceSystem):
                     return {'auto_hold_active': auto_hold}
                 user_handbrake_key = self.settings.get('user_handbrake_key')
                 # Press the handbrake key to activate auto-hold using direct input, right here
-                pyautogui.keyDown(user_handbrake_key)
-                pyautogui.keyUp(user_handbrake_key)
+                keyboard = get_keyboard()
+                keyboard.keyDown(user_handbrake_key)
+                keyboard.keyUp(user_handbrake_key)
                 self.event_bus.emit("notification", {'notification': self.translator.get('Auto Hold', self.settings.get('language'))})
 
         return {

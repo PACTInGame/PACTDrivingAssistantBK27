@@ -1,0 +1,476 @@
+"""Shared fixtures for the whole suite.
+
+Everything here runs without LFS, without Windows, without a display and
+without a socket (``reference/testing.md``).
+
+The factories take **SI-ish units a human can reason about** -- metres,
+degrees, km/h -- and convert to LFS units internally, because mixing the two
+is the most common bug class in this project (``reference/conventions.md`` §1).
+
+Angle convention for every ``heading`` / ``direction`` argument below is the
+LFS one: **0° = +Y (north), counting anticlockwise**, i.e. exactly what
+``CompCar.Heading`` encodes.
+"""
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core.event_bus import EventBus                      # noqa: E402
+from core.settings_manager import SettingsManager        # noqa: E402
+from vehicles.own_vehicle import OwnVehicle              # noqa: E402
+from vehicles.vehicle import Vehicle                     # noqa: E402
+import pyinsim                                           # noqa: E402
+
+
+# ─── Unit conversions (reference/conventions.md §1-§3) ───────────────────────
+
+METRE = 65536.0          # MCI / OutSim position unit per metre
+DEG_TO_LFS_HEADING = 65536.0 / 360.0    # 182.044 heading units per degree
+KMH_TO_MCI_SPEED = 91.02                # CompCar.Speed word per km/h
+KMH_TO_MS = 1.0 / 3.6
+
+# Vehicle.update_position derives acceleration as
+#   (v_kmh - v_prev_kmh) * 2.778,  2.778 = 1 / (3.6 * 0.1 s)
+# and is therefore only correct at a 100 ms MCI interval. The factories use the
+# same constant so a requested acceleration comes back out unchanged.
+KMH_PER_CYCLE_TO_MS2 = 2.778
+
+
+def metres(value: float) -> int:
+    """Metres -> MCI/OutSim position units."""
+    return int(round(value * METRE))
+
+
+def lfs_heading(degrees: float) -> int:
+    """Degrees (0 = +Y, anticlockwise) -> CompCar heading word."""
+    return int(round((degrees % 360.0) * DEG_TO_LFS_HEADING)) % 65536
+
+
+def mci_speed(kmh: float) -> int:
+    """km/h -> CompCar speed word."""
+    return int(round(kmh * KMH_TO_MCI_SPEED))
+
+
+# ─── EventBus and recording ──────────────────────────────────────────────────
+
+class EventRecorder:
+    """Captures ``(event, payload)`` for every event it is subscribed to."""
+
+    def __init__(self, bus: EventBus):
+        self._bus = bus
+        self.calls = []
+
+    def watch(self, *event_types: str) -> "EventRecorder":
+        for event_type in event_types:
+            self._bus.subscribe(event_type, self._make_handler(event_type))
+        return self
+
+    def _make_handler(self, event_type: str):
+        def handler(payload=None):
+            self.calls.append((event_type, payload))
+        return handler
+
+    # --- queries -------------------------------------------------------
+    def payloads(self, event_type: str) -> list:
+        return [payload for name, payload in self.calls if name == event_type]
+
+    def last(self, event_type: str):
+        payloads = self.payloads(event_type)
+        assert payloads, f"no {event_type!r} event was emitted"
+        return payloads[-1]
+
+    def count(self, event_type: str) -> int:
+        return len(self.payloads(event_type))
+
+    def clear(self):
+        self.calls.clear()
+
+
+@pytest.fixture
+def bus() -> EventBus:
+    """A real EventBus -- components are only ever wired through it."""
+    return EventBus()
+
+
+@pytest.fixture
+def recorder(bus):
+    """Factory: ``recorder('a', 'b')`` returns an EventRecorder watching a and b."""
+    def _make(*event_types: str) -> EventRecorder:
+        return EventRecorder(bus).watch(*event_types)
+    return _make
+
+
+# ─── Settings ────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def make_settings(tmp_path):
+    """Factory for a SettingsManager backed by a throwaway file.
+
+    ``make_settings(auto_hold=False)`` starts from the shipped defaults and
+    applies the overrides. Writing straight into the dict keeps the factory
+    free of file I/O per key; ``save()`` still works and targets tmp_path.
+    """
+    counter = {'n': 0}
+
+    def _make(**overrides) -> SettingsManager:
+        counter['n'] += 1
+        path = tmp_path / f"settings_{counter['n']}.json"
+        settings = SettingsManager(settings_file=str(path))
+        settings._settings.update(overrides)
+        return settings
+
+    return _make
+
+
+@pytest.fixture
+def settings(make_settings) -> SettingsManager:
+    """A SettingsManager with the shipped defaults."""
+    return make_settings()
+
+
+# ─── Vehicle factories ───────────────────────────────────────────────────────
+
+def _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration):
+    if direction is None:
+        direction = heading
+    # update_position recomputes acceleration from previous_speed, so seed it.
+    vehicle.previous_speed = speed - acceleration / KMH_PER_CYCLE_TO_MS2
+    vehicle.update_position(
+        metres(x), metres(y), metres(z),
+        lfs_heading(heading), lfs_heading(direction),
+        speed,
+    )
+
+
+@pytest.fixture
+def make_vehicle():
+    """Factory for a foreign :class:`Vehicle`.
+
+    x/y/z in **metres**, heading/direction in **degrees** (0 = +Y, CCW),
+    speed in **km/h**, acceleration in **m/s²** (negative = braking).
+
+    ``cname`` / ``pname`` are **bytes**, because that is what IS_NPL delivers
+    and what the lookup tables are keyed on (``reference/conventions.md`` §4).
+    """
+    def _make(plid: int = 2, x: float = 0.0, y: float = 0.0, z: float = 0.0,
+              heading: float = 0.0, direction: float = None,
+              speed: float = 0.0, acceleration: float = 0.0,
+              cname: bytes = b"XFG", pname: bytes = b"Tester",
+              control_mode: int = 0) -> Vehicle:
+        vehicle = Vehicle(plid)
+        _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration)
+        vehicle.update_model_and_driver(cname, pname, control_mode)
+        return vehicle
+
+    return _make
+
+
+@pytest.fixture
+def make_own_vehicle(make_outgauge_packet):
+    """Factory for the :class:`OwnVehicle`.
+
+    Same units as ``make_vehicle``. The OutGauge half (pedals, gear, lights) is
+    applied through the real ``update_outgauge_data`` so the packet contract is
+    exercised too. ``gear`` is the raw OutGauge value: 0 = reverse,
+    1 = neutral, 2 = first gear.
+    """
+    def _make(plid: int = 1, x: float = 0.0, y: float = 0.0, z: float = 0.0,
+              heading: float = 0.0, direction: float = None,
+              speed: float = 0.0, acceleration: float = 0.0,
+              gear: int = 2, rpm: float = 2000.0,
+              throttle: float = 0.0, brake: float = 0.0, clutch: float = 0.0,
+              cname: bytes = b"XFG", pname: bytes = b"Tester",
+              control_mode: int = 0, **lights) -> OwnVehicle:
+        own = OwnVehicle()
+        _apply_position(own, x, y, z, heading, direction, speed, acceleration)
+        own.update_outgauge_data(make_outgauge_packet(
+            plid=plid, speed=speed, gear=gear, rpm=rpm,
+            throttle=throttle, brake=brake, clutch=clutch, **lights))
+        own.update_model_and_driver(cname, pname, control_mode)
+        return own
+
+    return _make
+
+
+# ─── Fake packets ────────────────────────────────────────────────────────────
+
+class FakePacket:
+    """Namespace object standing in for an unpacked pyinsim packet."""
+
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+    def __repr__(self):
+        fields = ", ".join(f"{k}={v!r}" for k, v in sorted(self.__dict__.items()))
+        return f"{type(self).__name__}({fields})"
+
+
+_SHOW_LIGHT_BITS = {
+    'indicator_left': pyinsim.DL_SIGNAL_L,
+    'indicator_right': pyinsim.DL_SIGNAL_R,
+    'full_beam': pyinsim.DL_FULLBEAM,
+    'low_beam': pyinsim.DL_DIPPED,
+    'tc': pyinsim.DL_TC,
+    'abs': pyinsim.DL_ABS,
+    'handbrake': pyinsim.DL_HANDBRAKE,
+    'battery': pyinsim.DL_BATTERY,
+    'oil': pyinsim.DL_OILWARN,
+    'engine': pyinsim.DL_ENGINE,
+}
+
+
+def show_lights(**flags) -> int:
+    """Build an OutGauge ``ShowLights`` mask from named booleans.
+
+    Known names: indicator_left, indicator_right, full_beam, low_beam, tc, abs,
+    handbrake, battery, oil, engine.
+    """
+    mask = 0
+    for name, on in flags.items():
+        if name not in _SHOW_LIGHT_BITS:
+            raise KeyError(f"unknown ShowLights flag {name!r}")
+        if on:
+            mask |= _SHOW_LIGHT_BITS[name]
+    return mask
+
+
+@pytest.fixture
+def make_outgauge_packet():
+    """Factory for an OutGauge packet. ``speed`` in km/h, pedals 0.0…1.0.
+
+    Light state is given as keywords (``full_beam=True``) or as a raw
+    ``show_lights`` mask.
+    """
+    def _make(plid: int = 1, speed: float = 0.0, gear: int = 2,
+              rpm: float = 2000.0, throttle: float = 0.0, brake: float = 0.0,
+              clutch: float = 0.0, turbo: float = 0.0, fuel: float = 0.5,
+              car: bytes = b"XFG", show_lights_mask: int = 0,
+              **lights) -> FakePacket:
+        return FakePacket(
+            Time=0,
+            Car=car,
+            Flags=0,
+            Gear=gear,
+            PLID=plid,
+            Speed=speed * KMH_TO_MS,      # OutGauge sends m/s
+            RPM=rpm,
+            Turbo=turbo,
+            EngTemp=90.0,
+            Fuel=fuel,
+            OilPress=0.0,
+            OilTemp=90.0,
+            DashLights=0,
+            ShowLights=show_lights_mask | show_lights(**lights),
+            Throttle=throttle,
+            Brake=brake,
+            Clutch=clutch,
+            Display1='',
+            Display2='',
+            ID=0,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def make_compcar():
+    """Factory for one ``CompCar`` entry of an MCI packet (metres/degrees/km/h)."""
+    def _make(plid: int = 2, x: float = 0.0, y: float = 0.0, z: float = 0.0,
+              heading: float = 0.0, direction: float = None,
+              speed: float = 0.0, node: int = 0, lap: int = 0,
+              position: int = 1, info: int = 0, ang_vel: int = 0) -> FakePacket:
+        return FakePacket(
+            Node=node,
+            Lap=lap,
+            PLID=plid,
+            Position=position,
+            Info=info,
+            Sp3=0,
+            X=metres(x),
+            Y=metres(y),
+            Z=metres(z),
+            Speed=mci_speed(speed),
+            Direction=lfs_heading(heading if direction is None else direction),
+            Heading=lfs_heading(heading),
+            AngVel=ang_vel,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def make_mci_packet():
+    """Factory for an ``IS_MCI`` packet from a list of CompCar entries.
+
+    LFS splits more than 16 cars over several packets; build several packets to
+    reproduce that.
+    """
+    def _make(cars) -> FakePacket:
+        cars = list(cars)
+        return FakePacket(
+            Size=4 + 28 * len(cars),
+            Type=pyinsim.ISP_MCI,
+            ReqI=0,
+            NumC=len(cars),
+            Info=cars,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def make_npl_packet():
+    """Factory for an ``IS_NPL`` packet (player joined / left the pits).
+
+    ``ucid=0`` is the local connection, ``ptype`` bit 1 marks an AI driver
+    (``reference/conventions.md`` §5.4).
+    """
+    def _make(plid: int = 1, pname: bytes = b"Tester", cname: bytes = b"XFG",
+              ucid: int = 0, ptype: int = 0, flags: int = 0,
+              plate: bytes = b"        ", sname: bytes = b"XFG") -> FakePacket:
+        return FakePacket(
+            Size=76,
+            Type=pyinsim.ISP_NPL,
+            ReqI=0,
+            PLID=plid,
+            UCID=ucid,
+            PType=ptype,
+            Flags=flags,
+            PName=pname,
+            Plate=plate,
+            CName=cname,
+            SName=sname,
+            Tyres=[0, 0, 0, 0],
+            H_Mass=0,
+            H_TRes=0,
+            Model=0,
+            Pass=0,
+            Spare=0,
+            SetF=0,
+            NumP=1,
+            Sp2=0,
+            Sp3=0,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def make_pll_packet():
+    """Factory for an ``IS_PLL`` packet (player left)."""
+    def _make(plid: int = 2) -> FakePacket:
+        return FakePacket(Size=1, Type=pyinsim.ISP_PLL, ReqI=0, PLID=plid)
+
+    return _make
+
+
+# IS_STA flags, as read by lfs/lfs_state.py (reference/ui.md §1).
+ISS_GAME = 1
+ISS_REPLAY = 2
+ISS_PAUSED = 4
+ISS_SHIFTU = 8
+ISS_DIALOG = 16
+ISS_SHIFTU_FOLLOW = 32
+ISS_SHIFTU_NO_OPT = 64
+ISS_SHOW_2D = 128
+ISS_FRONT_END = 256
+ISS_MULTI = 512
+ISS_MPSPEEDUP = 1024
+ISS_WINDOWED = 2048
+ISS_SOUND_MUTE = 4096
+ISS_VIEW_OVERRIDE = 8192
+ISS_VISIBLE = 16384
+ISS_TEXT_ENTRY = 32768
+
+
+@pytest.fixture
+def make_sta_packet():
+    """Factory for an ``IS_STA`` packet.
+
+    ``on_track=True`` sets ISS_GAME|ISS_VISIBLE and clears ISS_FRONT_END; extra
+    flags can be OR-ed in via ``flags``.
+    """
+    def _make(on_track: bool = True, flags: int = 0, in_game_cam: int = 3,
+              view_plid: int = 0, track: bytes = b"SO6R",
+              num_p: int = 1) -> FakePacket:
+        base = (ISS_GAME | ISS_VISIBLE) if on_track else ISS_FRONT_END
+        return FakePacket(
+            Size=28,
+            Type=pyinsim.ISP_STA,
+            ReqI=0,
+            Zero=0,
+            ReplaySpeed=1.0,
+            Flags=base | flags,
+            InGameCam=in_game_cam,
+            ViewPLID=view_plid,
+            NumP=num_p,
+            NumConns=1,
+            NumFinished=0,
+            RaceInProg=0,
+            QualMins=0,
+            RaceLaps=0,
+            Spare2=0,
+            Spare3=0,
+            Track=track,
+            Weather=0,
+            Wind=0,
+        )
+
+    return _make
+
+
+# ─── Fake InSim connection ───────────────────────────────────────────────────
+
+class FakeInsim:
+    """Records everything that would have gone out over the InSim socket."""
+
+    def __init__(self):
+        self.sent = []
+        self.bindings = {}
+
+    def send(self, packet_type, **fields):
+        self.sent.append((packet_type, fields))
+
+    def sendp(self, packet):
+        self.sent.append((getattr(packet, 'Type', None), packet))
+
+    def bind(self, packet_type, handler):
+        self.bindings[packet_type] = handler
+
+    def close(self):
+        self.sent.append(('close', {}))
+
+    def of_type(self, packet_type) -> list:
+        return [fields for sent_type, fields in self.sent if sent_type == packet_type]
+
+
+class FakeConnector:
+    """The slice of ``LFSConnector`` that StateHandler and MessageSender use."""
+
+    def __init__(self, event_bus: EventBus):
+        self.event_bus = event_bus
+        self.debug = False
+        self.insim = FakeInsim()
+        self.is_connected = True
+        self.outgauge_restarts = 0
+
+    def start_outgauge(self):
+        self.outgauge_restarts += 1
+
+    def start_outsim(self):
+        pass
+
+
+@pytest.fixture
+def fake_insim() -> FakeInsim:
+    return FakeInsim()
+
+
+@pytest.fixture
+def fake_connector(bus) -> FakeConnector:
+    """A connector stub wired to the test EventBus -- no socket involved."""
+    return FakeConnector(bus)

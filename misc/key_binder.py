@@ -1,6 +1,7 @@
 import threading
-from pynput import keyboard, mouse
+
 from misc.language import LanguageManager
+from misc.platform_shim import get_input_listener
 
 
 class Keybinder:
@@ -33,14 +34,16 @@ class Keybinder:
         self._listening = True
         self._mouse_left_first_press = False
 
+        pynput = get_input_listener()
+
         # Start keyboard listener
-        self._keyboard_listener = keyboard.Listener(
+        self._keyboard_listener = pynput.keyboard.Listener(
             on_press=self._on_key_press
         )
         self._keyboard_listener.start()
 
         # Start mouse listener
-        self._mouse_listener = mouse.Listener(
+        self._mouse_listener = pynput.mouse.Listener(
             on_click=self._on_mouse_click
         )
         self._mouse_listener.start()
@@ -90,6 +93,7 @@ class Keybinder:
 
     def _get_mouse_button_name(self, button):
         """Convert mouse button to string representation."""
+        mouse = get_input_listener().mouse
         if button == mouse.Button.left:
             return 'mousel'
         elif button == mouse.Button.right:

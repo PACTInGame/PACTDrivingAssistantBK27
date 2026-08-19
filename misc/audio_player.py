@@ -3,8 +3,8 @@ import time
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.helpers import resolve_path
-# init pygame mixer stuff
-import pygame
+# pygame mixer, imported lazily so this module loads without a sound device
+from misc.platform_shim import get_audio
 
 
 class AudioPlayer():
@@ -16,7 +16,7 @@ class AudioPlayer():
         self.event_bus.subscribe('play_audio', self._update_audio_queue)
         self.last_played_audio = [] # list that stores sounds played withing the last 3 seconds
         self.no_multiple_playback_audios = ["fcw"]
-        pygame.mixer.init()
+        get_audio().mixer.init()
 
     def _update_audio_queue(self, event):
         """Updates the audio playback queue based on events."""
@@ -37,7 +37,7 @@ class AudioPlayer():
     def _play_audio(self, audio_file):
         # Play audio using pygame
         try:
-            sound = pygame.mixer.Sound(resolve_path("audio", f"{audio_file}.wav"))
+            sound = get_audio().mixer.Sound(resolve_path("audio", f"{audio_file}.wav"))
             sound.play()
         except Exception as e:
             print(f"Error playing audio file {audio_file}: {e}")

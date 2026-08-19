@@ -1,10 +1,10 @@
 import time
 from typing import Dict, Any
-import pyautogui
 from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.language import LanguageManager
+from misc.platform_shim import get_keyboard
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 import json
@@ -174,10 +174,11 @@ class Gearbox(AssistanceSystem):
     def _execute_shift(self, direction: str):
         """Führt den Schaltvorgang aus und aktualisiert Tracking"""
         shift_key = self.shift_up_key if direction == 'up' else self.shift_down_key
-        pyautogui.keyDown(self.clutch_key)
-        pyautogui.keyDown(shift_key)
-        pyautogui.keyUp(shift_key)
-        pyautogui.keyUp(self.clutch_key)
+        keyboard = get_keyboard()
+        keyboard.keyDown(self.clutch_key)
+        keyboard.keyDown(shift_key)
+        keyboard.keyUp(shift_key)
+        keyboard.keyUp(self.clutch_key)
         self.time_since_last_gear_change = time.perf_counter()
         self.last_shift_direction = direction
 

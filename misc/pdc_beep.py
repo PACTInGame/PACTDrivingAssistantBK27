@@ -1,7 +1,8 @@
 import threading
 import time
-import winsound
 from typing import Dict, Optional
+
+from misc.platform_shim import get_sound
 
 
 class PDCBeepController:
@@ -35,7 +36,7 @@ class PDCBeepController:
         # Intermittent beep pattern
         try:
             # Play beep
-            winsound.Beep(frequency, pattern["beep_duration"])
+            get_sound().Beep(frequency, pattern["beep_duration"])
 
 
 

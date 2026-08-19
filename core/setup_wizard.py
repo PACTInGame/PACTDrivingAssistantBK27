@@ -7,12 +7,11 @@ import glob
 import os
 import re
 import shutil
-import tkinter as tk
-from tkinter import filedialog, messagebox
 
 import psutil
 
 from misc.helpers import resolve_path
+from misc.platform_shim import get_tkinter
 
 # --- Constants ---
 
@@ -168,6 +167,7 @@ class SetupWizard:
     """A simple, step-by-step Tkinter wizard for first-time LFS configuration."""
 
     def __init__(self):
+        tk = get_tkinter()
         self.root = tk.Tk()
         self.root.title("LFS Assistant – First-Time Setup")
         self.root.geometry("520x260")
@@ -245,14 +245,14 @@ class SetupWizard:
         else:
             self.status_label.config(text="LFS installation not found.")
             self.info_label.config(text="Please select your cfg.txt manually.")
-            btn = tk.Button(
+            btn = get_tkinter().Button(
                 self.button_frame, text="Browse…", width=18,
                 command=self._browse_cfg
             )
             btn.pack()
 
     def _browse_cfg(self):
-        path = filedialog.askopenfilename(
+        path = get_tkinter().filedialog.askopenfilename(
             title="Select cfg.txt",
             filetypes=[("LFS Config", "cfg.txt"), ("All files", "*.*")]
         )
@@ -269,7 +269,7 @@ class SetupWizard:
         """Step: Show button to check/apply cfg.txt changes."""
         self._clear_buttons()
         self.info_label.config(text="")
-        btn = tk.Button(
+        btn = get_tkinter().Button(
             self.button_frame, text="Check and change cfg.txt", width=26,
             command=self._confirm_apply_cfg
         )
@@ -277,6 +277,7 @@ class SetupWizard:
 
     def _confirm_apply_cfg(self):
         """Ask for confirmation, then apply."""
+        messagebox = get_tkinter().messagebox
         proceed = messagebox.askyesno(
             "Confirm",
             "Changing OutGauge and OutSim configuration in cfg.txt now. Proceed?"
@@ -294,6 +295,7 @@ class SetupWizard:
         self.status_label.config(text="cfg.txt updated successfully!")
         self.path_var.set("")
 
+        messagebox = get_tkinter().messagebox
         result = messagebox.askyesno(
             "Auto-enable InSim",
             "Do you want to automatically enable InSim when you start LFS?\n\n"
@@ -312,6 +314,7 @@ class SetupWizard:
         self._clear_buttons()
         self.path_var.set("")
 
+        messagebox = get_tkinter().messagebox
         result = messagebox.askyesno(
             "Install AI Traffic Layouts",
             "Do you want to install the AI traffic layouts?\n\n"
@@ -343,7 +346,7 @@ class SetupWizard:
         self._clear_buttons()
         self.status_label.config(text="Alright, you are all set!")
         self.info_label.config(text="Close this window to start the LFS Assistant.")
-        btn = tk.Button(
+        btn = get_tkinter().Button(
             self.button_frame, text="Close", width=14,
             command=self.root.destroy
         )
@@ -371,6 +374,14 @@ def run_setup_if_needed() -> bool:
     Returns True if setup was performed, False if it was skipped.
     """
     if not is_first_run():
+        return False
+
+    if not get_tkinter():
+        # No Tk on this machine: the wizard cannot be shown. Say so instead of
+        # silently doing nothing -- LFS still has to be configured by hand
+        # (reference/lfs-setup.md).
+        print("Setup wizard unavailable: tkinter could not be imported. "
+              "Configure LFS manually, see reference/lfs-setup.md.")
         return False
 
     wizard = SetupWizard()

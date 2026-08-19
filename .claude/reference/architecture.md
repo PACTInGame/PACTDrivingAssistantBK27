@@ -111,6 +111,7 @@ ui/
   menu_system.py           In-game menu tree built from InSim buttons
 
 misc/
+  platform_shim.py         Lazy accessors for pyautogui / winsound / pynput / pygame / tkinter / vjoy
   helpers.py               resolve_path, is_lfs_running, geometry helpers (calc_polygon_points, point_in_rectangle)
   language.py              LanguageManager: 8-language translation table
   key_binder.py            pynput listener to capture a key/mouse button for rebinding
@@ -119,6 +120,7 @@ misc/
   spacial_hash_grid.py     SpatialHashGrid: broad-phase + polygon overlap for PDC
   vjoy.py                  Raw vJoy ctypes binding
 
+tests/                     pytest suite + shared fixtures — see reference/testing.md
 pyinsim/                   Forked & extended pyinsim 2.1.0 — see reference/insim.md
 Controls/wheel.py          vJoy brake actuation (currently unreachable, see known-issues)
 

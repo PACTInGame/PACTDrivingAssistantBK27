@@ -103,6 +103,13 @@ one of them). One owner should hold the state and publish it.
 **#18 — `sat_nav` has no settings key**, so `NavigationSystem.is_enabled()` is always
 `False`. Either add the key or remove the system from `_init_systems`.
 
+**#34 — `point_in_rectangle` judges by cross-product sign only.** For a proper rectangle
+it is correct, but a **degenerate** one (zero width or all four corners equal) contains
+the entire line it lies on, or the whole plane. Every caller currently builds its
+rectangle from a non-zero vehicle or object size, so nothing is broken today — it is a
+trap for the next caller that computes a size from packet data.
+`tests/test_helpers.py` carries two `xfail` cases for it.
+
 ## LFS integration, screen context and car data
 
 **#24 — OutGauge misconfiguration is undetectable and fatal.** If `cfg.txt` has
@@ -192,8 +199,6 @@ container that nothing constructs. Either adopt it or delete it.
 
 **#22 — Dead local variable** `adaptive_lights` in `LightAssists.process` — assigned in
 some branches, never read; the method returns a literal.
-
-**#23 — No automated tests at all.** See `reference/testing.md`.
 
 ## Deliberately disabled — leave alone unless asked
 

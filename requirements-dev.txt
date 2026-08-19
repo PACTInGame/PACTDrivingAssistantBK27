@@ -1,0 +1,14 @@
+# PACT Driving Assistant — test dependencies
+#
+# Everything `python -m pytest` needs, on any platform. Deliberately NOT a
+# superset of requirements.txt: the Windows-only and hardware-bound runtime
+# modules (pyautogui, winsound, pynput, pygame, tkinter, vJoy) are reached
+# through misc/platform_shim.py and fall back to a recording no-op when they
+# are missing, so the test suite runs without them.
+#
+# Python 3.11 (3.12+ breaks pyinsim: `asyncore` was removed).
+
+pytest>=7.0        # needs the `pythonpath` ini option
+psutil             # imported by misc/helpers.py
+shapely            # imported by assistance/blind_spot_warning.py
+numpy              # imported by misc/vjoy.py and the map tooling

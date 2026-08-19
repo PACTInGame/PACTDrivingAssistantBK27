@@ -46,6 +46,8 @@ sane, no silent thread death. See `reference/known-issues.md`.
 | Third-party deps | `psutil, pyautogui, pynput, pygame, shapely, numpy, scipy, matplotlib` (see `requirements.txt`) |
 
 Run with: `python main.py` (from project root).
+Test with: `pip install -r requirements-dev.txt && python -m pytest` — the suite runs on
+any OS, without LFS (`reference/testing.md`).
 
 ---
 
@@ -110,6 +112,10 @@ superseded by these docs but kept for context.
 - **`OutGauge` describes the car the *camera* is on, not necessarily the player's car.**
   Fine for the HUD and warnings, wrong for anything that actuates. Never actuate on a
   PLID you have not confirmed is the local driver. `reference/conventions.md` §5.
+- **Windows-only modules go through `misc/platform_shim.py`.** Never `import pyautogui /
+  winsound / pynput / pygame / tkinter / misc.vjoy` at module level again: the shim
+  imports them lazily and returns a recording no-op where they are missing. That is what
+  keeps the code importable — and therefore testable — off Windows.
 - **`pyautogui` keypresses are global OS input.** Any code that injects keys must be
   blocked while `text_entry` or `dialog` is set, while the user holds **Shift** (LFS
   binds SHIFT+key commands), while not `on_track`, and when LFS is not the foreground
