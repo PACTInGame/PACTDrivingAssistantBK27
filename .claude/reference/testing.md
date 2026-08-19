@@ -44,9 +44,13 @@ tests/
   test_imports.py          every module imports; no module-level Windows imports
   test_platform_shim.py    accessor caching, null-module recording, real-module passthrough
   test_helpers.py          calc_polygon_points / point_in_rectangle, rotated + degenerate
-  test_language.py         8 languages complete, fallbacks, code literals vs. table, latin-1
+  test_language.py         8 languages complete, fallbacks, code literals vs. table, LFS encoding
   test_settings.py         SettingsManager storage; every system name has a settings key
   test_fixtures.py         the factories themselves, incl. a VehicleManager/StateHandler round trip
+  test_error_isolation.py  EventBus / ThreadManager / AssistanceManager error isolation,
+                           the ErrorThrottle rate limiter and the task watchdog
+  test_lifecycle.py        connection-test timeout and retry, shutdown order, signal path
+  test_insim_output.py     thread-safe send buffer, button registry, LFS text encoding
 ```
 
 ### Fixtures (`tests/conftest.py`)
@@ -76,7 +80,6 @@ marker then.
 | Test | Waiting for |
 |---|---|
 | `test_settings.py::test_every_system_name_is_a_settings_key` | `sat_nav` has no settings key (`known-issues.md` #18) |
-| `test_language.py::test_every_string_is_encodable_for_lfs_buttons` | 52 Turkish + 1 Swedish string are not latin-1; the button encoder needs LFS code-page escapes |
 | `test_helpers.py` degenerate-rectangle cases | `point_in_rectangle` judges by cross-product sign only, so a zero-area rectangle swallows its whole line |
 
 ## Guiding constraint

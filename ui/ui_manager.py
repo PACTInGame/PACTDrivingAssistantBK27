@@ -1,4 +1,5 @@
 # ui/ui_manager.py
+import logging
 import time
 from typing import Dict, List
 
@@ -7,6 +8,8 @@ from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from lfs.message_sender import MessageSender
 from misc.pdc_beep import PDCBeepController
+
+logger = logging.getLogger(__name__)
 
 
 class UIManager:
@@ -113,7 +116,7 @@ class UIManager:
 
     def _update_notifications(self, data):
         self.notifications.append(data['notification'])
-        print(self.notifications)
+        logger.debug("Notification queued (%d pending).", len(self.notifications))
 
     def show_notifications(self):
         x = self.settings.get("hud_width")

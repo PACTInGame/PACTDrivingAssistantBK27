@@ -20,6 +20,7 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `button_clicked` | `IS_BTC` packet | `UIManager`, `MenuSystem`, `LightAssists` |
 | `message_received` | `IS_MSO` packet | `ChatCommandHandler` |
 | `layout_received` | `IS_AXM` packet | `ParkDistanceControl` |
+| `buttons_cleared` | `{sub_type: BFN_USER_CLEAR\|BFN_REQUEST}` | `MessageSender` |
 | `AI_Controller_initialized` | `AICarController` instance | `AIDriver` |
 
 ## Derived state
@@ -32,6 +33,12 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `player_name_changed` | `{player_name, control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem`, `ControllerEmulator`\* |
 | `player_data_updated` | `Dict[plid, {PName, CName, ControlMode}]` | `VehicleManager` | *(none — dead)* |
 | `assistance_results` | `{system_key: result_dict}` | `AssistanceManager` | *(none — dead)* |
+
+`buttons_cleared` is emitted when LFS tells us the user wiped our buttons (SHIFT+B,
+`BFN_USER_CLEAR`) or asked for them back (`BFN_REQUEST`). `MessageSender` drops its
+button registry on it so the next repaint really sends. Anything that only draws on
+change — the menu, PDC, notifications — has to redraw itself on this event
+(`known-issues.md` #26).
 
 `state_data` is the widest-reaching event in the app. Changing its shape touches seven
 subscribers — grep before editing.
@@ -73,7 +80,7 @@ payload shapes and different subscribers. This is a trap — see `known-issues.m
 
 | Event | Payload | Emitters | Subscriber |
 |---|---|---|---|
-| `notification` | `{notification: str}` (may carry `type`, `icon` from navigation) | ~27 call sites across most systems | `UIManager` |
+| `notification` | `{notification: str}` (may carry `type`, `icon` from navigation) | ~27 call sites across most systems, plus `ThreadManager` / `AssistanceManager` when they disable a failing task or system | `UIManager` |
 | `play_audio` | `{audio_file: str}` — basename without `.wav`, resolved under `audio/` | `UIManager` | `AudioPlayer` |
 | `show_siren_ui` | `{ui: bool}` | `LightAssists` | `UIManager` |
 | `siren_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |

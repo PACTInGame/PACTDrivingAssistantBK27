@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 import time
@@ -11,6 +12,8 @@ from misc.helpers import calc_polygon_points
 from misc.spacial_hash_grid import SpatialHashGrid
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
+
+logger = logging.getLogger(__name__)
 
 def get_vehicle_size(cname) -> tuple:
     car_sizes = {
@@ -221,8 +224,8 @@ def save_rectangles_as_json(rectangles: list, filename: str):
                 json.dump(existing_data, f, indent=4)
 
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Error reading existing JSON file: {e}")
-            print("Creating new file with current data...")
+            logger.warning("Error reading existing JSON file: %s: %s - "
+                           "creating a new one.", type(e).__name__, e)
             # If there's an error reading the file, create a new one
             with open(filename, 'w') as f:
                 json.dump(rectangles, f, indent=4)
@@ -264,7 +267,7 @@ class ParkDistanceControl(AssistanceSystem):
     def _update_axm(self, axm):
         """Aktualisiert die AXM-Daten"""
         if axm.PMOAction == pyinsim.PMO_ADD_OBJECTS or axm.PMOAction == pyinsim.PMO_TINY_AXM:
-            print("Updating AXM objects...")
+            logger.debug("Updating AXM objects...")
             self._update_axm_track_boundaries(axm)
         elif axm.PMOAction == pyinsim.PMO_DEL_OBJECTS:
             for o in axm.Info:
@@ -296,7 +299,7 @@ class ParkDistanceControl(AssistanceSystem):
             if rect[0] != -1:
                 index = int(str(object.Index) + str(abs(object.X)) + str(abs(object.Y)) + str(abs(object.Zbyte)))
                 rects.append([rect, index])
-        print(f"Inserting {len(rects)} AXM objects into spatial grid...")
+        logger.debug("Inserting %d AXM objects into the spatial grid.", len(rects))
         for i, rectangle in enumerate(rects):
             rect = rectangle[0]
             self.park_grid.insert_object(rectangle[1], [rect[0], rect[1], rect[2], rect[3]], is_static=True)

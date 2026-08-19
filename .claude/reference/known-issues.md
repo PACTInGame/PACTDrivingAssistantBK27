@@ -11,19 +11,6 @@ discover. Do not log one-off bugs that were fixed in the same session.
 
 ## Robustness
 
-**#1 — Exception handling is switched off in all three loops.** `EventBus.emit`,
-`ThreadManager._run_cycle` and `AssistanceManager.process_all_systems` all have their
-`try/except` commented out. Consequences: one malformed packet or one bad subscriber
-raises out of a worker thread, that thread dies permanently, and the app keeps running
-with a silently dead assistance or UI loop. In a packet handler the same exception
-propagates into `asyncore` and can tear down the connection.
-Fixing this properly means per-task isolation plus rate-limited error logging — not
-just re-adding bare `except: pass`, which is what hid these bugs originally.
-
-**#2 — Shutdown is a no-op.** `LFSAssistantApp.shutdown()` stops the thread manager but
-its InSim cleanup branch is `pass`. Buttons stay on screen in LFS, the socket is not
-closed, and `pyinsim.closeall()` is never called.
-
 **#3 — Dead events.** `assistance_results`, `outsim_data` and `player_data_updated` are
 emitted every cycle (or every packet) with no subscribers. `outsim_data` in particular
 means the whole OutSim pipeline runs for nothing.
@@ -60,7 +47,7 @@ size during iteration` is reachable.
 ## Performance
 
 **#5 — `navigation.py` is unusable as written.** Dozens of `print()` calls per 100 ms
-cycle, and `_get_closest_road` walks every segment of every road each cycle. It is
+cycle (the only `print()` calls left in a hot path), and `_get_closest_road` walks every segment of every road each cycle. It is
 currently inert because `sat_nav` has no settings key and `sat_nav_active` is `False` —
 both the logging and the nearest-road lookup (spatial index or last-road-first search)
 must be fixed before it can be switched on.
@@ -73,10 +60,6 @@ before any cheap rejection. Add a squared-distance gate first.
 `get_closest_index_on_route` scans the full route for each controlled car, and
 `analyze_upcoming_track` runs twice per car (normal + 120 m long-straight lookahead).
 Cache the previous index and search a local window around it.
-
-**#10 — Off-track cleanup sends 239 button packets at once.**
-`UIManager._state_change` calls `remove_button(0..238)` on every track exit.
-`MessageSender` already tracks live button IDs — delete only those.
 
 **#14 — PDC beep spawns a thread per beep** running a blocking `winsound.Beep`.
 
@@ -131,10 +114,12 @@ the entry screen, the garage and its nine submodes, options, or car/track select
 own `in_game_interface` / `submode_interface` fields are initialised to 0 and never
 written; pyinsim already has `IS_CIM` and every constant. See `ui.md` §1.
 
-**#26 — The user can clear our buttons and they never come back.** `BFN_USER_CLEAR`
-(SHIFT+B) and `BFN_REQUEST` (SHIFT+B / SHIFT+I) arrive as inbound `IS_BFN` packets and
-neither is bound. The HUD recovers because it repaints every 50 ms, but the menu, PDC
-and notification buttons stay gone until something else redraws them. `ui.md` §1.5.
+**#26 — Buttons cleared by the user do not all come back.** `IS_BFN` is now bound
+inbound and republished as `buttons_cleared`, and `MessageSender` drops its registry on
+it, so anything that repaints (the HUD, every 50 ms) reappears. The menu, PDC and
+notification buttons are only drawn on change, so they still stay gone until the next
+state change redraws them — `UIManager` / `MenuSystem` have to react to
+`buttons_cleared` themselves. `ui.md` §1.5.
 
 **#27 — HUD position can break the LFS entry screen.** Buttons inside
 `L 0…110, T 30…170` make LFS keep that rectangle clear of its own UI. `hud_width` /

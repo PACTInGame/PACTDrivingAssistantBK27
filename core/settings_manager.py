@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 from typing import Any, Dict
 from misc.helpers import resolve_path
+
+logger = logging.getLogger(__name__)
 
 class SettingsManager:
     """Verwaltet alle Einstellungen mit Persistierung"""
@@ -60,7 +63,7 @@ class SettingsManager:
 
     def set(self, key: str, value: Any):
         """Setzt einen Einstellungswert"""
-        print(f"Setting {key} to {value}")
+        logger.debug("Setting %s to %r", key, value)
         self._settings[key] = value
         self.save()
 
@@ -71,7 +74,8 @@ class SettingsManager:
                 with open(self.settings_file, 'r') as f:
                     self._settings = json.load(f)
             except Exception as e:
-                print(f"Error loading settings: {e}")
+                logger.error("Error loading settings from %s: %s: %s",
+                             self.settings_file, type(e).__name__, e)
                 self._settings = self._defaults.copy()
         else:
             self._settings = self._defaults.copy()
@@ -82,4 +86,5 @@ class SettingsManager:
             with open(self.settings_file, 'w') as f:
                 json.dump(self._settings, f, indent=2)
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            logger.error("Error saving settings to %s: %s: %s",
+                         self.settings_file, type(e).__name__, e)

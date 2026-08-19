@@ -622,3 +622,51 @@ the accessor hands out the real module everywhere it used to be imported.
   installed, the app no longer crashes at import — it logs a warning on first use and that
   feature silently does nothing. Confirm the warning is visible enough, or let WP2's
   logging/startup work make it a loud startup check.
+
+### WP2 — error isolation, logging and lifecycle
+
+Everything here is exercised by `tests/test_error_isolation.py` and
+`tests/test_lifecycle.py`, but the loops it protects only exist while LFS is feeding
+packets, and the shutdown only matters inside the game.
+
+- **Shutdown leaves no trace**: start the app, join a track so the HUD and menu are on
+  screen, then close the app (window close, Ctrl+C, or the console `X`). Every PACT
+  button must disappear from LFS immediately, and LFS must report the InSim connection
+  as closed — nothing left over, and no need to restart LFS before starting the app
+  again.
+- **Ctrl+C while driving**: the app must print "Shutting down LFS Assistant..." and exit
+  within about a second, not hang in the asyncore loop.
+- **Retry on startup**: start the app *before* LFS is up, or with InSim off. It must keep
+  logging "No answer on InSim port 29999 …" every few seconds and then connect by itself
+  once `/insim 29999` is typed — the old build hung on the first attempt forever.
+- **The log file**: `pact_assistant.log` must appear next to the executable and contain
+  the startup lines. Chat messages must **not** appear in it at default level (they used
+  to be printed for every message).
+- **A failing system disables itself**: hard to trigger deliberately; if any assistance
+  system ever stops working, check for a `^1… disabled - see log` notification and the
+  traceback in the log rather than assuming the app is fine.
+- **Frame-rate impact**: with the error handling and the button registry in place, watch
+  for any change in LFS's frame rate on a busy track (~40 cars). It should be the same or
+  slightly better.
+
+### WP3 — InSim output path
+
+- **The disconnect that never happens**: drive a long session (>10 minutes) with the HUD,
+  PDC and menu in use. The connection must not drop by itself — the unlocked send buffer
+  losing the keep-alive reply was the most likely cause of that.
+- **Turkish (and other) menus**: set the language to `tr` in the menu. Every label must
+  read correctly — `Sürüş Ayarları`, `Çarpışma Uyarısı` — not as `SÃ¼rÃ¼Å` mojibake.
+  Check `de`, `se`, `no`, `dk` and `fr` too, and the periodic chat tooltips as well as
+  the buttons.
+- **Button text capacity**: the truncation constant in `lfs/text_encoding.py`
+  (`button_text_capacity`) is calibrated from one shipped string, not from an LFS font
+  metric. Watch for any notification or menu label ending in `..` that used to be
+  complete — if that happens the constant is too small and should be raised.
+- **Repaint after SHIFT+B**: press SHIFT+B in game to clear all InSim buttons. The HUD
+  must come back within one UI cycle. The menu, PDC and notification buttons will still
+  stay away until the next state change — that part is WP5's.
+- **Leaving the track**: drive out to the entry screen. The HUD must vanish and the
+  "PACT Driving Assist Active." banner appear, with no visible flicker (this path used to
+  send 239 delete packets in one go).
+- **Colour codes**: the coloured warning labels (`^1`, `^3`, `^7`) must still be
+  coloured — the encoder deliberately leaves carets alone.

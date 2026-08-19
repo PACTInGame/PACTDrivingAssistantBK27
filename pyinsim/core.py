@@ -294,12 +294,27 @@ def closeall():
 
 
 class _TcpSocket(asyncore.dispatcher):
-    """Class to handle a TCP socket."""
+    """Class to handle a TCP socket.
+
+    The outbound buffer is guarded by a lock. Producers are the UI worker
+    thread (buttons), the assistance worker thread (light/siren/AI packets)
+    and any packet handler, while the drain runs on the asyncore thread. The
+    unlocked `self._send_buff += data` / `self._send_buff = self._send_buff[sent:]`
+    pair silently lost whatever was appended between the read and the
+    assignment; because InSim is a length-prefixed stream, losing any byte
+    desynchronises the protocol for good, and losing the keep-alive reply
+    (see `_InSim._handle_insim_packet`) makes LFS drop the connection after
+    ~70 s.
+
+    The lock is re-entrant on purpose: `asyncore.dispatcher.send` can call
+    `handle_close`, whose event callbacks may send again on the same thread.
+    """
 
     def __init__(self, dispatch_to):
         asyncore.dispatcher.__init__(self)
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self._dispatch_to = dispatch_to
+        self._send_lock = threading.RLock()
         self._send_buff = b''
         self._recv_buff = b''
 
@@ -313,14 +328,50 @@ class _TcpSocket(asyncore.dispatcher):
         self._dispatch_to._handle_close()
 
     def send(self, data):
-        self._send_buff += data
+        with self._send_lock:
+            self._send_buff += data
 
     def writable(self):
-        return bool(self._send_buff)
+        with self._send_lock:
+            return bool(self._send_buff)
 
     def handle_write(self):
-        sent = asyncore.dispatcher.send(self, self._send_buff)
-        self._send_buff = self._send_buff[sent:]
+        with self._send_lock:
+            buff = self._send_buff
+            if not buff:
+                return
+            sent = asyncore.dispatcher.send(self, buff)
+            # Re-read rather than slicing `buff`: a re-entrant send() during
+            # the syscall above may have appended to the buffer.
+            self._send_buff = self._send_buff[sent:]
+
+    def pending(self):
+        """Number of bytes still waiting to go out."""
+        with self._send_lock:
+            return len(self._send_buff)
+
+    def flush(self, timeout=1.0):
+        """Write the outbound buffer out now, without the event loop.
+
+        Only for shutdown: once `run()` has returned nobody calls
+        `handle_write()` any more, so the goodbye packets (BFN_CLEAR,
+        TINY_CLOSE) would sit in the buffer and LFS would keep the app's
+        buttons on screen. Returns True if the buffer was drained.
+        """
+        deadline = time.time() + timeout
+        with self._send_lock:
+            while self._send_buff:
+                if time.time() >= deadline:
+                    return False
+                try:
+                    sent = asyncore.dispatcher.send(self, self._send_buff)
+                except Exception:
+                    return False
+                if sent:
+                    self._send_buff = self._send_buff[sent:]
+                else:
+                    time.sleep(0.005)
+            return True
 
     def handle_read(self):
         data = self.recv(_TCP_BUFFER_SIZE)
@@ -479,6 +530,14 @@ class _InSim(_Binding):
         self.connected = False
         self._tcp.close()
         self._udp.close()
+
+    def flush(self, timeout=1.0):
+        """Push everything still buffered to LFS. See `_TcpSocket.flush`."""
+        return self._tcp.flush(timeout)
+
+    def pending(self):
+        """Bytes still waiting to be sent."""
+        return self._tcp.pending()
 
     def send(self, type_, **kwargs):
         """Send a packet to InSim.

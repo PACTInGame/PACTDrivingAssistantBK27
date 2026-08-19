@@ -1,3 +1,5 @@
+import logging
+
 import pyinsim
 from typing import Dict, Any, Callable
 import time
@@ -6,7 +8,11 @@ from AI_Control import AICarController
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from lfs.lfs_state import StateHandler
+from lfs.text_encoding import (MSL_TEXT_MAX_BYTES, MST_TEXT_MAX_BYTES,
+                               encode_button_text, encode_lfs_text)
 from misc import helpers
+
+logger = logging.getLogger(__name__)
 
 
 class LFSConnector:
@@ -29,7 +35,9 @@ class LFSConnector:
 
 
     def _siren_state_changed(self, data):
-        siren = data['siren_active']
+        if not (self.insim and self.is_connected):
+            return
+        siren = data.get('siren_active', False)
         siren_config =  (pyinsim.LCS_SET_SIREN, pyinsim.LCS_Mask_Siren)
 
 
@@ -40,6 +48,8 @@ class LFSConnector:
 
     def _request_axm_update(self, data):
         """Fordert ein AXM-Layout-Update an"""
+        if not (self.insim and self.is_connected):
+            return
         self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
 
     def _setup_handlers(self):
@@ -55,6 +65,7 @@ class LFSConnector:
             pyinsim.ISP_MSO: self._handle_message,
             pyinsim.ISP_MCI: self._handle_mci,
             pyinsim.ISP_AXM: self._handle_layout,
+            pyinsim.ISP_BFN: self._handle_button_function,
         }
 
     def connect(self):
@@ -86,7 +97,8 @@ class LFSConnector:
             self.event_bus.emit('AI_Controller_initialized', self.AIController)
 
         except Exception as e:
-            print(f"Failed to connect to LFS: {e}")
+            logger.error("Failed to connect to LFS: %s: %s", type(e).__name__, e,
+                         exc_info=True)
             self.is_connected = False
 
     def start_outgauge(self):
@@ -94,14 +106,14 @@ class LFSConnector:
         try:
             self.outgauge = pyinsim.outgauge('127.0.0.1', 30000, self._outgauge_handler, 30.0)
         except Exception as e:
-            print(f"Failed to connect OutGauge: {e}")
+            logger.error("Failed to connect OutGauge: %s: %s", type(e).__name__, e)
 
     def start_outsim(self):
         """Startet OutSim-Verbindung"""
         try:
             self.outsim = pyinsim.outsim('127.0.0.1', 29998, self._outsim_handler, 30.0)
         except Exception as e:
-            print(f"Failed to connect OutSim: {e}")
+            logger.error("Failed to connect OutSim: %s: %s", type(e).__name__, e)
 
     def _handle_mci(self, insim, mci):
         """Verarbeitet MCI (Multi Car Info) Pakete"""
@@ -126,12 +138,25 @@ class LFSConnector:
 
     def _handle_message(self, insim, mso):
         """Verarbeitet Chat-Nachrichten"""
-        print(mso.Msg)
+        logger.debug("MSO: %r", getattr(mso, 'Msg', b''))
         self.event_bus.emit('message_received', mso)
 
     def _handle_layout(self, insim, axm):
         """Verarbeitet Layout-Pakete"""
         self.event_bus.emit('layout_received', axm)
+
+    def _handle_button_function(self, insim, bfn):
+        """Verarbeitet eingehende IS_BFN-Pakete
+
+        LFS schickt BFN_USER_CLEAR (der Nutzer hat mit SHIFT+B alle Buttons
+        geloescht) und BFN_REQUEST (er will sie zurueck). Beides bedeutet:
+        was wir gesendet haben, ist nicht mehr auf dem Schirm. Die
+        Button-Registry im MessageSender muss das erfahren, sonst unterdrueckt
+        sie den naechsten Repaint als 'unveraendert'.
+        """
+        subtype = getattr(bfn, 'SubT', None)
+        if subtype in (pyinsim.BFN_USER_CLEAR, pyinsim.BFN_REQUEST):
+            self.event_bus.emit('buttons_cleared', {'sub_type': subtype})
 
     def _outgauge_handler(self, outgauge, packet):
         """Handler für OutGauge-Pakete (hochfrequent)"""
@@ -142,16 +167,34 @@ class LFSConnector:
         self.event_bus.emit('outsim_data', packet)
 
     def send_command_to_lfs(self, command: str):
-        """Sendet einen Befehl an LFS"""
-        command = command.encode()
-        self.insim.send(pyinsim.ISP_MST,
-                        Msg=command)
+        """Sendet einen Befehl an LFS (IS_MST, max. 63 Zeichen)"""
+        if not (self.insim and self.is_connected):
+            logger.warning("Not connected - dropping command %r", command)
+            return False
+        try:
+            self.insim.send(pyinsim.ISP_MST,
+                            Msg=encode_lfs_text(command, max_bytes=MST_TEXT_MAX_BYTES))
+        except Exception as e:
+            logger.error("Sending command %r failed: %s: %s", command, type(e).__name__, e)
+            return False
+        return True
 
     def send_local_message_to_lfs(self, message: str):
-        """Sendet einen Befehl an LFS"""
-        message = message.encode()
-        self.insim.send(pyinsim.ISP_MSL,
-                        Msg=message)
+        """Sendet eine lokale Chat-Nachricht (IS_MSL, max. 127 Zeichen)
+
+        Gleiche Kodierung wie bei Buttons: LFS liest kein UTF-8, und die
+        Tooltips kommen uebersetzt aus misc/language.py.
+        """
+        if not (self.insim and self.is_connected):
+            logger.warning("Not connected - dropping message %r", message)
+            return False
+        try:
+            self.insim.send(pyinsim.ISP_MSL,
+                            Msg=encode_lfs_text(message, max_bytes=MSL_TEXT_MAX_BYTES))
+        except Exception as e:
+            logger.error("Sending message failed: %s: %s", type(e).__name__, e)
+            return False
+        return True
 
     def send_light_command(self, data):
         """Schaltet ein Licht ein oder aus
@@ -161,8 +204,10 @@ class LFSConnector:
                    4=Nebelschlussleuchte, 5=Extra, 6=Blinker links, 7=Blinker rechts, 8=Warnblinkanlage
             on: True zum Einschalten, False zum Ausschalten
         """
-        light = data['light']
-        on = data['on']
+        if not (self.insim and self.is_connected):
+            return
+        light = data.get('light')
+        on = data.get('on', False)
         # Mapping: light_id -> (SET_flag, MASK_flag)
         light_config = {
             0: (pyinsim.LCL_SET_LIGHTS, pyinsim.LCL_Mask_SideLight),      # Standlicht
@@ -177,7 +222,7 @@ class LFSConnector:
         }
 
         if light not in light_config:
-            print("DEBUG: CAUTION: Invalid light ID")
+            logger.warning("Ignoring light command with unknown light id %r", light)
             return
 
         set_flag, mask_flag = light_config[light]
@@ -185,14 +230,19 @@ class LFSConnector:
 
         self.insim.send(pyinsim.ISP_SMALL, SubT=pyinsim.SMALL_LCL, UVal=UVal)
 
-    def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text: str, inst: int = 0):
-        """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)"""
-        # print(f"ClickID: {click_id}, Style: {style}, Position: ({t}, {l}), Size: ({w}, {h}), Text: '{text}'")
+    def send_button(self, click_id: int, style: int, t: int, l: int, w: int, h: int, text, inst: int = 0):
+        """Sendet einen Button an LFS (T < 170 überlappt UI von LFS)
+
+        ``text`` kommt normalerweise schon kodiert (bytes) vom MessageSender,
+        der als einziger die Registry fuehrt. Ein str wird hier noch einmal
+        durch denselben Encoder geschickt, damit ein direkter Aufruf nicht in
+        UTF-8 rausgeht - LFS liest kein UTF-8 (siehe lfs/text_encoding.py).
+        """
+        if not (self.insim and self.is_connected):
+            return False
+        if not isinstance(text, (bytes, bytearray)):
+            text = encode_button_text(text)
         try:
-            text = text.encode("latin-1")
-        except UnicodeEncodeError:
-            text = text.encode()
-        if self.insim and self.is_connected:
             self.insim.send(
                 pyinsim.ISP_BTN,
                 ReqI=255,
@@ -200,11 +250,78 @@ class LFSConnector:
                 BStyle=style | 3,
                 Inst=inst,
                 T=t, L=l, W=w, H=h,
-                Text=text,
+                Text=bytes(text),
                 TypeIn=0
             )
+        except Exception as e:
+            logger.error("Sending button %s failed: %s: %s", click_id, type(e).__name__, e)
+            return False
+        return True
 
     def delete_button(self, click_id: int):
         """Löscht einen Button in LFS"""
-        if self.insim and self.is_connected:
-            self.insim.send(pyinsim.ISP_BFN, ReqI=255, ClickID=click_id)
+        if not (self.insim and self.is_connected):
+            return False
+        try:
+            self.insim.send(pyinsim.ISP_BFN, ReqI=255, SubT=pyinsim.BFN_DEL_BTN,
+                            ClickID=click_id, MaxClick=click_id)
+        except Exception as e:
+            logger.error("Deleting button %s failed: %s: %s", click_id, type(e).__name__, e)
+            return False
+        return True
+
+    def clear_all_buttons(self):
+        """Löscht alle Buttons dieser InSim-Verbindung mit einem Paket (BFN_CLEAR)"""
+        if not (self.insim and self.is_connected):
+            return False
+        try:
+            self.insim.send(pyinsim.ISP_BFN, ReqI=255, SubT=pyinsim.BFN_CLEAR)
+        except Exception as e:
+            logger.error("Clearing buttons failed: %s: %s", type(e).__name__, e)
+            return False
+        return True
+
+    def disconnect(self):
+        """Meldet die InSim-Verbindung sauber ab und schliesst alle Sockets.
+
+        Reihenfolge zaehlt: erst ISP_TINY/TINY_CLOSE, damit LFS die Verbindung
+        selbst aufraeumt (und mit ihr alle unsere Buttons), dann die UDP-Sockets,
+        dann pyinsim.closeall(). Vorher war das ein `pass` - Buttons blieben in
+        LFS stehen und der Socket blieb offen (known-issues #2).
+        """
+        if self.insim is not None:
+            try:
+                self.insim.send(pyinsim.ISP_TINY, ReqI=0, SubT=pyinsim.TINY_CLOSE)
+            except Exception as e:
+                logger.warning("TINY_CLOSE could not be sent: %s: %s", type(e).__name__, e)
+
+        self.is_connected = False
+
+        # Der asyncore-Loop laeuft hier nicht mehr - ohne dieses Flush blieben
+        # BFN_CLEAR und TINY_CLOSE im Sendepuffer liegen und die Buttons in LFS
+        # stehen.
+        if self.insim is not None and hasattr(self.insim, 'flush'):
+            try:
+                if not self.insim.flush(1.0):
+                    logger.warning("Not everything could be sent to LFS before closing.")
+            except Exception as e:
+                logger.warning("Flushing the InSim buffer failed: %s: %s",
+                               type(e).__name__, e)
+
+        for name in ('outgauge', 'outsim', 'insim'):
+            connection = getattr(self, name, None)
+            if connection is None:
+                continue
+            try:
+                connection.close()
+            except Exception as e:
+                logger.warning("Closing %s failed: %s: %s", name, type(e).__name__, e)
+
+        try:
+            pyinsim.closeall()
+        except Exception as e:
+            logger.warning("pyinsim.closeall() failed: %s: %s", type(e).__name__, e)
+
+        self.insim = None
+        self.outgauge = None
+        self.outsim = None

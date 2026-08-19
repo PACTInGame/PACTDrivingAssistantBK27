@@ -3,12 +3,13 @@
 ## 1. Startup sequence (`main.py`)
 
 ```
+setup_logging()                # console + rotating file handler, once, from __main__
 run_setup_if_needed()          # blocking Tkinter wizard on first run only (.setup_done flag)
 EventBus()                     # created first, everything else receives it
 SettingsManager()              # loads settings.json, falls back to hardcoded defaults
 ThreadManager(event_bus)
 wait for LFS.exe process       # exponential backoff, sys.exit after ~60 s
-LfsConnectionTest().run_test() # opens a throwaway InSim conn, waits for IS_STA, closes all
+LfsConnectionTest().run_test() # fresh InSim conn per attempt, 5 s timeout, then closes all
 LFSConnector(bus, settings)    # the real connection: InSim + OutGauge + OutSim
 MessageSender(connector)
 VehicleManager(bus)
@@ -18,9 +19,21 @@ MenuSystem(ui_manager, settings)
 AudioPlayer(bus, settings)
 ScheduledTask("assistance_processing", assistance_manager.process_all_systems, 100 ms)
 ScheduledTask("ui_updates",            ui_manager.update_hud,                   50 ms)
-thread_manager.start()
+thread_manager.start()         # one thread per interval + a watchdog thread
+install_signal_handlers()      # SIGINT/SIGTERM/SIGBREAK -> KeyboardInterrupt
 pyinsim.run()                  # BLOCKS the main thread in the asyncore loop
+shutdown()                     # threads -> BFN_CLEAR -> TINY_CLOSE -> flush -> closeall
 ```
+
+**Shutdown order matters.** The worker threads stop first, or they keep painting buttons
+while the cleanup runs. Then `MessageSender.remove_all()` (one `BFN_CLEAR`) and
+`LFSConnector.disconnect()` (`TINY_CLOSE`, a bounded `flush()` straight to the socket,
+then `close()` and `pyinsim.closeall()`). The flush is not optional: after
+`pyinsim.run()` has returned, nobody calls `handle_write()`, so the goodbye packets would
+sit in the send buffer and LFS would keep the buttons on screen. This is also why the
+signal handler raises `KeyboardInterrupt` instead of calling `closeall()` — asyncore
+re-raises exactly that exception, and it leaves the socket open long enough to say
+goodbye.
 
 Component construction order matters: every subscriber must exist before the events it
 cares about are first emitted. Because subscription happens in `__init__`, adding a
@@ -33,12 +46,15 @@ component late in `main.py` can silently miss early events (e.g. the first `IS_S
 | main | `asyncore` loop → **all InSim/OutGauge/OutSim packet handlers**, and therefore every `event_bus.emit` that originates from a packet | `pyinsim.run()` |
 | worker (100 ms) | `AssistanceManager.process_all_systems` | `ThreadManager` |
 | worker (50 ms) | `UIManager.update_hud` | `ThreadManager` |
+| watchdog | checks every task's `last_execution` once a second | `ThreadManager` |
 | ad-hoc | `PDCBeepController` spawns a thread per beep; `Keybinder` spawns a listener thread | — |
 
 `ThreadManager` groups tasks by interval: **one thread per distinct `interval_ms`**,
 tasks in that group run sequentially. Adding a task with a new interval creates a new
-thread. `_run_cycle` measures elapsed time and sleeps the remainder — it does not
-catch up on overruns, it just runs late.
+thread. `_run_cycle` measures elapsed time and waits the remainder on a stop event — it
+does not catch up on overruns, it just runs late, and it logs an overrun at most once
+per 30 s per interval group. The watchdog thread reports a task that has not run for
+more than 5× its interval (once, until it runs again).
 
 **Concurrency reality:** packet handlers (main thread) mutate `VehicleManager.vehicles`
 and `OwnVehicle` while assistance systems (worker thread) read them. There is no lock
@@ -55,17 +71,36 @@ bus.emit('event_name', data)            # synchronous, in the caller's thread
 
 - **Emission is synchronous.** `emit` returns only after every subscriber has run.
   A slow subscriber directly delays the packet handler or the worker cycle that
-  emitted the event. A subscriber that raises propagates into the emitter.
+  emitted the event.
+- **A subscriber that raises is isolated.** The other subscribers still run, the
+  emitting thread survives, and the failure is logged through a shared
+  `ErrorThrottle` — first few in full, then at most one line per source per 30 s.
+  Nothing propagates into the asyncore loop.
 - Subscribers are copied under a lock, then invoked outside the lock.
 - There is no unsubscribe-on-shutdown, no priority, no async queue. Handlers must be
   fast and total.
 - Event names are plain strings — typos fail silently (the event simply has no
   subscribers). Always cross-check `reference/events.md` when adding one.
 
-The `try/except` around handler invocation is **commented out** in `emit`, in
-`ThreadManager._run_cycle` and in `AssistanceManager.process_all_systems`. This was
-done to surface bugs during development. It means one bad packet can kill a worker
-thread permanently and silently. See `known-issues.md` #1.
+## 3a. Failure policy (`misc/logging_setup.py`)
+
+All three loops — `EventBus.emit`, `ThreadManager._run_task`,
+`AssistanceManager.process_all_systems` — share one policy, implemented by
+`ErrorThrottle`:
+
+- log the first 3 failures of a *source* in full, with traceback;
+- afterwards at most one line per source per 30 s, carrying how many were suppressed;
+- 5 **consecutive** failures disable that task / assistance system, log it and emit a
+  `notification` so the driver sees something happened. `AssistanceManager.enable_system`
+  clears that state again.
+
+A source is a stable string: the subscriber's `Class.method`, the task name, the
+assistance system key. The cost on the success path is zero — nothing is called unless
+an exception was raised.
+
+Consequence for the rest of the app: **an event handler that raises is not a crash any
+more, it is a silent degradation with a log line.** Do not rely on exceptions
+propagating out of `emit()`.
 
 ## 4. Module map
 
@@ -78,12 +113,13 @@ core/
   settings_manager.py      settings.json persistence + the authoritative default table
   thread_manager.py        ScheduledTask + one thread per interval
   setup_wizard.py          First-run Tkinter wizard: patches LFS cfg.txt, autoexec.lfs, copies layouts
-  connection_test.py       Throwaway InSim connection used to probe that LFS is reachable
+  connection_test.py       Throwaway InSim connection used to probe that LFS is reachable (per-attempt, with timeout)
 
 lfs/
   connector.py             Owns InSim/OutGauge/OutSim; binds packets → emits events; sends buttons, lights, commands
   lfs_state.py             StateHandler: parses IS_STA flags into the `state_data` event (on_track, dialog, text_entry, track, cam)
-  message_sender.py        Thin wrapper over connector for buttons/messages; tracks which button IDs are live
+  message_sender.py        Button registry (sends only on change) + chat/command wrapper over the connector
+  text_encoding.py         LFS code-page encoding of button and chat text (^L/^T/…), truncation
 
 vehicles/
   vehicle.py               Vehicle + VehicleData dataclass; position, heading, distance/angle to player
@@ -112,6 +148,7 @@ ui/
 
 misc/
   platform_shim.py         Lazy accessors for pyautogui / winsound / pynput / pygame / tkinter / vjoy
+  logging_setup.py         setup_logging() (console + rotating file) and the ErrorThrottle rate limiter
   helpers.py               resolve_path, is_lfs_running, geometry helpers (calc_polygon_points, point_in_rectangle)
   language.py              LanguageManager: 8-language translation table
   key_binder.py            pynput listener to capture a key/mouse button for rebinding

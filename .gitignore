@@ -17,6 +17,8 @@ env/
 settings.json
 .setup_done
 data/gearbox_calibrations.json
+pact_assistant.log
+pact_assistant.log.*
 
 # OS
 Thumbs.db

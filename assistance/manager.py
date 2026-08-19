@@ -1,3 +1,4 @@
+import logging
 from typing import Dict, Optional
 
 from assistance.AI_Driver import AIDriver
@@ -13,16 +14,28 @@ from assistance.navigation import NavigationSystem
 from assistance.park_distance_control import ParkDistanceControl
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.logging_setup import ErrorThrottle
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
+
+logger = logging.getLogger(__name__)
+
+# Ein System, das k Zyklen hintereinander wirft, schaltet sich selbst ab.
+# Vorher riss die erste Exception den 100-ms-Thread mit - alle folgenden
+# Systeme liefen danach nie wieder, ohne jede Meldung.
+MAX_CONSECUTIVE_FAILURES = 5
 
 
 class AssistanceManager:
     """Verwaltet alle Fahrerassistenzsysteme"""
 
-    def __init__(self, event_bus: EventBus, settings: SettingsManager):
+    def __init__(self, event_bus: EventBus, settings: SettingsManager,
+                 error_throttle: ErrorThrottle = None):
         self.event_bus = event_bus
         self.settings = settings
+        self._errors = error_throttle or ErrorThrottle(logger)
+        # Systeme, die sich nach wiederholten Fehlern selbst deaktiviert haben.
+        self.failed_systems = set()
         self.systems: Dict[str, AssistanceSystem] = {}
         self.own_vehicle: Optional[OwnVehicle] = None
         self.vehicles: Dict[int, Vehicle] = {}
@@ -56,7 +69,7 @@ class AssistanceManager:
         # Weitere Systeme hier hinzufügen
 
     def _update_state_data(self, data):
-        self.on_track = data['on_track']
+        self.on_track = data.get('on_track', False)
 
     def _on_own_vehicle_updated(self, own_vehicle: OwnVehicle):
         """Updates own vehicle data"""
@@ -74,17 +87,39 @@ class AssistanceManager:
         results = {}
         if self.on_track:
             for name, system in self.systems.items():
-                if system.is_enabled():
-                    # try:
+                if name in self.failed_systems:
+                    continue
+                if not system.is_enabled():
+                    continue
+                # Fehler-Isolation pro System: ein defektes System deaktiviert
+                # sich selbst, statt den gemeinsamen 100-ms-Thread zu killen.
+                # Kosten im Gutfall: null.
+                try:
                     result = system.process(self.own_vehicle, self.vehicles)
+                except Exception as e:
+                    self._handle_system_failure(name, e)
+                else:
                     results[name] = result
-                # except Exception as e:
-                # print(f"Error in assistance system {name}: {e}")
+                    self._errors.succeeded(name)
 
         self.event_bus.emit('assistance_results', results)
         # Check for periodic tooltip messages
-        self.chat_commands.check_tooltip()
+        try:
+            self.chat_commands.check_tooltip()
+        except Exception as e:
+            self._errors.report('chat_commands.check_tooltip', e)
         return results
+
+    def _handle_system_failure(self, name: str, exc: Exception):
+        """Meldet einen Systemfehler ratenbegrenzt und deaktiviert Dauerfehler"""
+        consecutive = self._errors.report(name, exc, context='in process()')
+        if consecutive < MAX_CONSECUTIVE_FAILURES:
+            return
+        self.failed_systems.add(name)
+        logger.error("Assistance system '%s' disabled after %d consecutive failures.",
+                     name, consecutive)
+        self.event_bus.emit('notification',
+                            {'notification': f"^1{name.upper()} disabled - see log"})
 
     def get_system(self, name: str) -> Optional[AssistanceSystem]:
         """Gibt ein spezifisches Assistenzsystem zurück"""
@@ -94,3 +129,7 @@ class AssistanceManager:
         """Aktiviert/deaktiviert ein System"""
         if name in self.systems:
             self.systems[name].enabled = enabled
+            if enabled:
+                # Manuelles Wiedereinschalten hebt eine Selbst-Deaktivierung auf.
+                self.failed_systems.discard(name)
+                self._errors.forget(name)

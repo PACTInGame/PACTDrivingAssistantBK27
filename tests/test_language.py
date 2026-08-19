@@ -7,9 +7,11 @@ shows up as English text -- or as mojibake in LFS.
 
 import ast
 import os
+import unicodedata
 
 import pytest
 
+from lfs.text_encoding import decode_button_text, encode_button_text
 from misc.language import LanguageManager
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -110,17 +112,29 @@ def test_the_scan_actually_finds_call_sites():
     assert len(_literal_translation_keys()) > 20
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "LFS button text is latin-1; 52 Turkish strings and one Swedish string are "
-    "not encodable and render as mojibake. WP3 replaces the encoder with LFS "
-    "code-page escapes (^E, ^T, ...) -- this test passes once it does."))
-def test_every_string_is_encodable_for_lfs_buttons(translator, languages):
-    unencodable = []
+def test_every_string_survives_the_lfs_button_encoder(translator, languages):
+    """WP3: every translation must reach LFS as the text it was written as.
+
+    The old encoder tried latin-1 and fell back to UTF-8, which LFS does not
+    read -- 52 Turkish strings and one Swedish one rendered as mojibake. The
+    replacement switches LFS code pages inline (``^T`` and friends), so the
+    round trip must be lossless.
+    """
+    broken = []
     for key, entry in translator.translations.items():
         for lang in languages:
-            try:
-                entry[lang].encode('latin-1')
-            except (UnicodeEncodeError, AttributeError):
-                unencodable.append((key, lang, entry[lang]))
+            original = entry[lang]
+            rendered = decode_button_text(encode_button_text(original))
+            if rendered != original:
+                broken.append((key, lang, original, rendered))
 
-    assert unencodable == []
+    # One Swedish string carries a stray combining diaeresis on an already
+    # accented vowel (a typo). No LFS code page can encode it; the encoder
+    # drops the mark, which is exactly the text the author meant.
+    expected_difference = [
+        (key, lang, original, rendered) for key, lang, original, rendered in broken
+        if unicodedata.normalize('NFC', rendered)
+        == unicodedata.normalize('NFC', original.replace('\u0308', ''))
+    ]
+
+    assert [item[:2] for item in broken] == [item[:2] for item in expected_difference]

@@ -88,6 +88,7 @@ Bound in `LFSConnector._setup_handlers`:
 | `ISP_BTC` | button clicked | `button_clicked` |
 | `ISP_MSO` | chat/system message received | `message_received` |
 | `ISP_AXM` | autocross layout added/removed/cleared | `layout_received` |
+| `ISP_BFN` | inbound: the user cleared (SHIFT+B) or re-requested our buttons | `buttons_cleared` |
 
 Sent by this project:
 
@@ -104,15 +105,17 @@ Sent by this project:
 | `ISP_AIC` | **AI control** — drive an LFS AI car (see `ai-traffic.md`) |
 | `ISP_AII` | AI info response (rpm, gear, physics) — received |
 
+`ISP_BFN` is bidirectional: we send `BFN_DEL_BTN` / `BFN_CLEAR`, LFS sends
+`BFN_USER_CLEAR` / `BFN_REQUEST`. The inbound half is republished as `buttons_cleared`
+because `MessageSender` only sends a button when it *changed*, and a button LFS has
+thrown away has not changed as far as the registry is concerned.
+
 **Not bound but important — `ISP_CIM`.** It reports which LFS screen the connection is
 on (entry screen, garage and its submenus, options, car/track select, SHIFT+U) and is
 the only reliable way to distinguish them. pyinsim already implements `IS_CIM` and every
 `CIM_*` / `GRG_*` / `FVM_*` constant; `lfs/lfs_state.py` even has `in_game_interface`
 and `submode_interface` fields waiting for it. It needs no `ISF_*` flag — LFS sends it
 whenever the mode changes. See `ui.md` §1.
-
-Also not bound: `ISP_BFN` **inbound** (`BFN_USER_CLEAR` / `BFN_REQUEST` — the user
-clearing or re-requesting our buttons, `ui.md` §1.5).
 
 Other useful ones not yet used: `ISP_CON` (car contact), `ISP_OBH` (object hit),
 `ISP_HLV` (hotlap validity), `ISP_NCN`/`ISP_CNL` (online connections),
@@ -214,6 +217,69 @@ In this project always go through `MessageSender.create_button(id, x, y, w, h, t
 (note the argument order: **x = L, y = T**) and `remove_button(id)`. The button ID
 allocation map is in `reference/ui.md` — respect it, IDs collide silently.
 
+### The button registry (`lfs/message_sender.py`)
+
+`MessageSender` remembers `(style, T, L, W, H, encoded text, Inst)` per `ClickID` and
+**sends only on change**. That matters because `UIManager.update_hud` repaints
+everything every 50 ms; without it the socket carries a continuous stream of identical
+`IS_BTN` packets.
+
+| Method | Does |
+|---|---|
+| `create_button(id, x, y, w, h, text, style, inst=0)` | encodes the text, compares, sends at most one `IS_BTN` |
+| `remove_button(id)` | one `IS_BFN` **only if that id is live** |
+| `remove_range(first, last)` | one `IS_BFN` per live id in the range — replaces `for i in range(0, 239)` loops (same packets, one call) |
+| `remove_all()` | a single `BFN_CLEAR`; also clears ids the registry lost track of |
+| `invalidate(id=None)` | forget without sending — for when LFS cleared the buttons itself |
+| `active_buttons` / `is_live(id)` | what is on screen right now |
+
+Counters `buttons_sent` / `buttons_suppressed` / `deletes_sent` / `deletes_suppressed`
+exist for tests and diagnosis.
+
+**Consequence for callers:** drawing an unchanged button is now free, so repaint freely —
+but a button LFS removed behind our back stays missing until someone calls
+`invalidate()`. The `buttons_cleared` event does that for SHIFT+B; the `lfs_connected`
+event does it for a reconnect.
+
+### Text encoding (`lfs/text_encoding.py`)
+
+LFS does not read UTF-8. Button and chat text is bytes in an LFS **code page**, switched
+inline by a caret escape:
+
+| Escape | Code page | | Escape | Code page |
+|---|---|---|---|---|
+| `^L` | cp1252 Latin (default) | | `^C` | cp1251 Cyrillic |
+| `^E` | cp1250 Central European | | `^G` | cp1253 Greek |
+| `^T` | cp1254 Turkish | | `^J` | cp932 Japanese |
+| `^B` | cp1257 Baltic | | `^S` | cp936 simplified Chinese |
+| | | | `^H` / `^K` | cp950 traditional Chinese / cp949 Korean |
+
+The table lives in `pyinsim/strmanip.py` (`_ENCODING_MAP`); note that `strmanip`'s own
+`toUnicode` / `fromUnicode` are Python 2 code and do not run.
+
+`encode_button_text(text, max_chars=None)` is the only place text becomes bytes:
+
+- normalises to NFC and drops combining marks and control characters no code page can
+  carry (a NUL would truncate the button text inside LFS);
+- picks a code page per character, preferring the one already active, and looking a
+  little ahead so a Turkish string does not ping-pong between two pages;
+- emits `?` for a character no page holds, rather than failing;
+- **passes `^` through untouched.** The UI puts colour codes (`^1`…`^7`) directly into
+  button text, so escaping carets would break every coloured label. A literal caret in
+  user text is therefore still a control character.
+- truncates at a character boundary, never inside a multi-byte character or an escape,
+  never leaving a dangling `^`, and marks the cut with `..`.
+
+`encode_lfs_text(text, max_chars, max_bytes)` is the same encoder for the chat packets:
+`IS_MST` holds 63 bytes, `IS_MSL` 127, `IS_BTN` 239 (pyinsim's `struct` formats would
+truncate those silently, mid-character).
+
+The character capacity used for buttons (`button_text_capacity(w, h)`) is **calibrated,
+not documented by LFS** — InSim.txt gives no font metric. It is anchored on the widest
+text the app itself ships (27 characters in W=25, H=5) with a factor-2 margin, so only
+runaway text is ever cut. If truncation ever bites a legitimate string, that constant is
+the thing to adjust.
+
 ## 5. The pyinsim fork (`pyinsim/`)
 
 Forked from pyinsim 2.1.0 (Alex McBride, LGPL) and extended locally because upstream is
@@ -232,6 +298,18 @@ InSim 0.7F+), `SMALL_LCS` / `SMALL_LCL` constants, `ISP_MAL`/`ISP_PLH`/`ISP_IPB`
 enum entries, `INSIM_VERSION = 10`, and the 0.7A `Size = bytes/4` packet framing.
 
 Things to know before editing:
+- **The outbound buffer is shared between threads and is locked.** `_TcpSocket.send()`
+  is called from the UI worker (buttons), the assistance worker (lights, siren, AI
+  control) and from packet handlers on the asyncore thread, while `handle_write()`
+  drains it on the asyncore thread. Both take the same `RLock`; `handle_write` re-reads
+  `self._send_buff` after the syscall rather than slicing the copy it read, because a
+  re-entrant `send()` (a close callback, same thread) may have appended in between.
+  Do not "optimise" the lock away: InSim is a length-prefixed stream, so a single lost
+  byte desynchronises it permanently, and a lost keep-alive reply makes LFS drop the
+  connection after ~70 s.
+- `_TcpSocket.flush(timeout)` / `_InSim.flush(timeout)` write the buffer out **without
+  the event loop**. Only for shutdown, after `run()` has returned — see
+  `architecture.md` §1.
 - Packet **size byte is bytes / 4** (InSim 0.7A+). `IS_AIC.pack()` computes
   `Size = 1 + len(inputs)`; get this wrong and LFS drops or desyncs the stream.
 - `_handle_insim_packet` auto-replies to the `TINY_NONE` keep-alive. Do not break it.
