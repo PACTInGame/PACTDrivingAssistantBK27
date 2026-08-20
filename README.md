@@ -21,6 +21,7 @@ LFS ──OutGauge/OutSim──►  Fahrzeugzustand (50 ms)  ─────┘
 | `lfs_link.py` | Anbindung an LFS: InSim/OutGauge/OutSim, Datenmodell, Fahrereingabe, Maus-Achsen, 50-ms-Regeltakt | nein |
 | `harness/orchestrator.py` | Ablauf, Messung, Bewertung, Codeprüfung | nein (nicht Teil des KI-Workspace) |
 | `harness/input_recorder.py` | Aufzeichnen und Abspielen von Tastatur/Maus | nein (nicht Teil des KI-Workspace) |
+| `harness/selbsttest.py` | prüft den Prüfstand selbst — ohne LFS, ohne Windows | nein (nicht Teil des KI-Workspace) |
 | `AUFGABE.md` | Der Prompt, den die KI bekommt | — |
 
 **Vor dem Klonen für einen Benchmark-Lauf:** den Ordner `harness/` aus dem
@@ -125,7 +126,20 @@ Prüfen mit `python harness/orchestrator.py --nur-cfg`.
 
 ---
 
-## 5. Benchmark-Lauf
+## 5. Selbsttest des Prüfstands
+
+```
+python harness/selbsttest.py
+```
+
+Läuft ohne LFS und ohne Windows in ca. 6 s und prüft Paketaufbau,
+Zustandsberechnung, Rollradius-Schätzer, Rampen, den kompletten Regelkreis gegen
+einen simulierten Telemetriestrom, alle Kennwerte, die Normierung, die
+Punktevergabe und den AST-Vergleich der Codeprüfung. Nach jeder Änderung an
+`lfs_link.py` oder am Harness ausführen — eine still kaputte Bewertung ist
+schlimmer als gar keine.
+
+## 6. Benchmark-Lauf
 
 ```
 python harness/orchestrator.py --lauf
@@ -136,7 +150,7 @@ Messschriebe schneiden → bewerten → `harness/ergebnisse/ergebnis_<zeit>.json
 
 ---
 
-## 6. Bewertung
+## 7. Bewertung
 
 **Kennwerte je Szenario** (aus dem Messfenster, `berechne_metriken`):
 
@@ -171,7 +185,7 @@ ausgewiesen.
 
 ---
 
-## 7. Fallstricke
+## 8. Fallstricke
 
 | Symptom | Ursache |
 |---|---|

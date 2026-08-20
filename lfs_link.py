@@ -1138,8 +1138,12 @@ def _pruefen() -> int:
         print("OutSim     : FEHLT (cfg.txt: OutSim Mode 2, Port 29998, Opts 1ff)")
     if og:
         print(f"Fahrzeug   : {og.auto}   Gang {og.gang}   {og.geschwindigkeit_mps * 3.6:5.1f} km/h")
-    print(f"LFS-Zustand: {'fahrbereit' if anbindung.insim.zustand.fahrbereit else 'nicht fahrbereit'} "
-          f"(Strecke '{anbindung.insim.zustand.strecke}')")
+    z = anbindung.insim.zustand
+    if not z.sta_empfangen:
+        print("LFS-Zustand: unbekannt (kein IS_STA empfangen)")
+    else:
+        print(f"LFS-Zustand: {'fahrbereit' if z.fahrbereit else 'nicht fahrbereit'}, "
+              f"Strecke '{z.strecke}', Kamera {z.kamera}")
     print(f"Kalibrierung Maus: {'vorhanden' if os.path.exists(KALIBRIERUNGSDATEI) else 'FEHLT (--kalibrieren)'}")
     anbindung.insim.trenne()
     anbindung.telemetrie.stoppe()

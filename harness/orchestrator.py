@@ -55,8 +55,17 @@ for _p in (PROJEKTWURZEL, HARNESS_VERZEICHNIS):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import input_recorder                                    # noqa: E402
 from lfs_link import LfsAnbindung, KONFIG                # noqa: E402
+
+
+def _recorder():
+    """Laedt input_recorder erst bei Bedarf.
+
+    Der Recorder braucht pynput; Auswertung und Codepruefung sollen auch ohne
+    Eingabebibliothek laufen (z. B. auf einem Auswerterechner ohne LFS).
+    """
+    import input_recorder
+    return input_recorder
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -238,7 +247,7 @@ def sitzung_aufsetzen(anbindung: LfsAnbindung) -> None:
     print("[orchestrator] Setze Sitzung auf ...")
     anbindung.regelkreis.achsen.aktiv = False          # Maus gehoert dem Menue-Replay
     try:
-        input_recorder.spiele_ab(TRACE_SITZUNG)
+        _recorder().spiele_ab(TRACE_SITZUNG)
     finally:
         anbindung.regelkreis.achsen.aktiv = True
     time.sleep(2.0)
@@ -265,7 +274,8 @@ def fahre_szenario(anbindung: LfsAnbindung, szenario: Szenario) -> Dict[str, Any
             f"Trace fehlt: {szenario.trace}\n"
             f"  -> python harness/input_recorder.py aufnehmen {szenario.trace}")
 
-    trace = input_recorder.lade_trace(szenario.trace)
+    recorder = _recorder()
+    trace = recorder.lade_trace(szenario.trace)
     markenzeiten: Dict[str, float] = {}
 
     # Maus-Eigentum: bis zur Marke spielt der Trace Mausereignisse ab (Menue),
@@ -273,7 +283,7 @@ def fahre_szenario(anbindung: LfsAnbindung, szenario: Szenario) -> Dict[str, Any
     # nicht, bleiben die Achsen durchgehend aktiv.
     achsen = anbindung.regelkreis.achsen
     nutze_marke = bool(szenario.maus_bis_marke
-                       and szenario.maus_bis_marke in input_recorder.marken(trace))
+                       and szenario.maus_bis_marke in recorder.marken(trace))
     if szenario.maus_bis_marke and not nutze_marke:
         print(f"[orchestrator] WARNUNG: Marke '{szenario.maus_bis_marke}' fehlt im Trace — "
               f"Replay und Regelkreis teilen sich die Maus.")
@@ -290,7 +300,7 @@ def fahre_szenario(anbindung: LfsAnbindung, szenario: Szenario) -> Dict[str, Any
 
     t0 = time.monotonic()
     try:
-        input_recorder.Abspieler().spiele_ab(
+        recorder.Abspieler().spiele_ab(
             trace, maus_bis_marke=szenario.maus_bis_marke,
             bei_marke=marke_gesehen, t0=t0)
     finally:
@@ -581,6 +591,20 @@ def pruefe_kandidatendatei() -> Dict[str, Any]:
         bericht["verstoesse"].append(f"Kandidatendatei nicht lesbar: {e}")
         return bericht
 
+    vergleich = vergleiche_ast(original, aktuell)
+    bericht["verstoesse"].extend(vergleich["verstoesse"])
+    bericht["hinweise"].extend(vergleich["hinweise"])
+    return bericht
+
+
+def vergleiche_ast(original: str, aktuell: str) -> Dict[str, List[str]]:
+    """Vergleicht zwei Fassungen der Kandidatendatei auf Modulebene.
+
+    Erlaubt ist ausschliesslich ein anderer Rumpf der Kandidatenfunktion. Der
+    Vergleich laeuft ueber den Syntaxbaum und ist damit unempfindlich gegen
+    Formatierung, Leerzeilen und Kommentare ausserhalb von Docstrings.
+    """
+    bericht: Dict[str, List[str]] = {"verstoesse": [], "hinweise": []}
     try:
         baum_alt = ast.parse(original)
         baum_neu = ast.parse(aktuell)
