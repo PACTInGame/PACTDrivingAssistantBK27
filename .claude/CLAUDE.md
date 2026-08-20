@@ -110,8 +110,9 @@ superseded by these docs but kept for context.
   deliberately disabled (`assistance/collision_warning.py`, `controller_emulator`).
   If asked, read `reference/control-intervention.md` first.
 - **`OutGauge` describes the car the *camera* is on, not necessarily the player's car.**
-  Fine for the HUD and warnings, wrong for anything that actuates. Never actuate on a
-  PLID you have not confirmed is the local driver. `reference/conventions.md` §5.
+  Fine for the HUD gauges, wrong for anything that actuates. Gate actuation on
+  `own_vehicle.is_local_driver`; the PLID itself comes from `IS_NPL`, not OutGauge.
+  `reference/conventions.md` §5.
 - **Windows-only modules go through `misc/platform_shim.py`.** Never `import pyautogui /
   winsound / pynput / pygame / tkinter / misc.vjoy` at module level again: the shim
   imports them lazily and returns a recording no-op where they are missing. That is what
@@ -121,10 +122,10 @@ superseded by these docs but kept for context.
   binds SHIFT+key commands), while not `on_track`, and when LFS is not the foreground
   window. `reference/ui.md` §1.4 has the full table — today only `AutoHold` guards at
   all, and only partially.
-- **LFS is many screens, not one.** Buttons must not be drawn on the main menu or the
-  multiplayer list, behave differently on the entry screen and in the pit/garage, and
-  vanish by themselves in dialogs and text entry. `ISS_VISIBLE` and `IS_CIM` are the
-  correct signals. `reference/ui.md` §1.
+- **LFS is many screens, not one.** `StateHandler` derives the context from `IS_STA` +
+  `IS_CIM`; branch on `state_data['buttons_allowed']` (and `['screen']`), never on
+  `on_track` alone. Anything that draws only on change must also subscribe to
+  `buttons_cleared`. `reference/ui.md` §1.
 - **Never key a lookup table on `CName` without a safe fallback.** LFS vehicle mods
   produce arbitrary car names; derive car-specific parameters at runtime or calibrate
   them. `reference/conventions.md` §4.

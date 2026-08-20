@@ -27,19 +27,31 @@ screen, race setup screen, in game, and SHIFT+U mode.**
 ### 1.2 `ISS_VISIBLE` is the authoritative answer
 
 `IS_STA.Flags & ISS_VISIBLE` (16384) means *"InSim buttons are visible right now"*.
-It is the single reliable signal for whether our UI is actually on screen, and it is
-**not currently read anywhere in the project**. Prefer it over inferring visibility from
-`ISS_GAME`/`ISS_FRONT_END`/`ISS_DIALOG` combinations.
+`StateHandler` publishes it as `state_data['ui_visible']`.
 
-`lfs/lfs_state.py` currently derives only `on_track = ISS_GAME and not ISS_FRONT_END`,
-plus `text_entry` and `dialog`. Its `in_game_interface` and `submode_interface` fields
-are placeholders that are **initialised to 0 and never updated** — they were clearly
-meant for `IS_CIM`. Wiring `ISP_CIM` in `LFSConnector` and filling those two fields
-(then widening the `state_data` payload) is the intended fix.
+**What the UI should actually branch on is `state_data['buttons_allowed']`**, not
+`ui_visible`: it is derived from the screen context and is false exactly where LFS
+shows no normal buttons (main menu / server list and the options / car-select /
+track-select screens). `ui_visible` is kept as raw information, but gating drawing on
+it would blank the whole UI the moment LFS reports it for a reason we did not predict.
+
+`StateHandler` (`lfs/lfs_state.py`) derives, from `IS_STA` **and** `IS_CIM`:
+
+| Field | Source |
+|---|---|
+| `on_track` | `ISS_GAME` and not `ISS_FRONT_END` |
+| `text_entry` / `dialog` | `ISS_TEXT_ENTRY` / `ISS_DIALOG` |
+| `ui_visible` / `shift_u` / `multiplayer` | `ISS_VISIBLE` / `ISS_SHIFTU` / `ISS_MULTI` |
+| `in_game_interface` / `submode_interface` / `select_type` | `IS_CIM.Mode` / `.SubMode` / `.SelType` |
+| `screen` | derived — one of `main_menu`, `entry`, `garage`, `options`, `shiftu`, `game` |
+| `buttons_allowed` | `screen` is neither `main_menu` nor `options` |
 
 `IS_CIM` needs no `ISF_*` flag: LFS sends it whenever the local connection's interface
-mode changes. pyinsim already has the `IS_CIM` class and every `CIM_*` / `NRM_*` /
-`GRG_*` / `FVM_*` constant — only the binding is missing.
+mode changes. It is bound in `LFSConnector._handle_interface_mode` and republished as
+`interface_mode_changed`; `StateHandler` re-emits `state_data` on it, so `state_data`
+now has **two** sources. A CIM packet arriving before the first `IS_STA` is stored but
+not published — publishing a screen context from flags we have never seen would be a
+guess.
 
 ### 1.3 The entry-screen space-clearing quirk
 
@@ -62,7 +74,15 @@ break the entry screen without understanding why.
 
 Practical rules:
 - Keep persistent HUD elements **outside** `0–110 × 30–170` unless the intent really is
-  to take over the screen.
+  to take over the screen. `ui/ui_manager.py` exposes `hud_overlaps_reserved_area()`
+  for this; the system menu's "HUD Position" label turns `^1` red while the HUD sits
+  inside the rectangle. It is deliberately **not** clamped out of it — the shipped
+  default (90, 119) is inside, so enforcing it would relocate every existing user's
+  HUD (`known-issues.md` #27).
+- `clamp_hud_position()` **is** enforced: it keeps the whole block — HUD, PDC column,
+  siren buttons and notification line, i.e. `x-3 … x+29` by `y-6 … y+13` — inside
+  `0…200`. Every draw site goes through `UIManager.hud_origin()`, so a hand-edited
+  `settings.json` cannot push anything off screen.
 - The menu (IDs 20–40, drawn at x 0–50, y 70–120) sits **inside** the reserved area —
   that is correct for a menu, and is why it is drawn only while on track.
 - `INST_ALWAYS_ON` (128, the `Inst` byte of `IS_BTN`) makes a button visible in *all*
@@ -101,16 +121,18 @@ something else entirely.
 
 ### 1.5 The user can clear our buttons — and we never notice
 
-`IS_BFN` is bidirectional. Two subtypes arrive **from** LFS and neither is bound:
+`IS_BFN` is bidirectional. Two subtypes arrive **from** LFS, both bound:
 
 - `BFN_USER_CLEAR` (2) — the user pressed SHIFT+B and cleared this InSim instance's
-  buttons. Our UI is gone until something redraws it.
-- `BFN_REQUEST` (3) — the user pressed SHIFT+B / SHIFT+I asking for buttons back. This
-  is the signal to redraw everything.
+  buttons.
+- `BFN_REQUEST` (3) — the user pressed SHIFT+B / SHIFT+I asking for buttons back.
 
-Because the HUD is repainted every 50 ms it recovers by itself, but the menu, PDC and
-notification buttons do not. Binding `ISP_BFN` and forcing a full redraw on both
-subtypes is the correct handling.
+Both are republished as `buttons_cleared`. `MessageSender` drops its registry (so the
+next repaint really sends), `UIManager` redraws the idle banner and `MenuSystem`
+redraws the menu page that is open. Everything else `UIManager` owns — HUD, PDC, siren
+buttons, the notification line — is repainted every UI pass and comes back on its own;
+the registry makes those repeats free on the wire. **A new UI element that only draws
+on change must subscribe to `buttons_cleared` itself.**
 
 Conversely, `BFN_CLEAR` (1) sent **to** LFS clears every button this instance created in
 a single packet — the right replacement for the current 239-packet delete loop
@@ -121,9 +143,12 @@ a single packet — the right replacement for the current 239-packet delete loop
 IDs are global and collide silently. `UIManager` owns the authoritative comment block;
 this is the same map:
 
+The constants live at the top of `ui/ui_manager.py` (`BTN_*`, `*_RANGE`) — import them
+rather than writing literals.
+
 | Range | Owner | Contents |
 |---|---|---|
-| 1–10 | `UIManager` | HUD: `1` speed, `2` rpm, `3` gear. Also `1` is reused for the "PACT Driving Assist Active" banner while **off** track. |
+| 1–10 | `UIManager` | HUD: `1` speed, `2` rpm, `3` gear, `4` the "PACT Driving Assist Active." idle banner (its own slot since WP5 — it used to share id `1` with the speed field) |
 | 11–12 | `UIManager` | Forward collision warning *(reserved; the warning currently repaints the HUD instead)* |
 | 13–14 | `UIManager` | Blind spot warning: `13` left, `14` right |
 | 20–40 | `MenuSystem` | `20` floating "Main Menu" opener, `21` title, `22`–`31` entries, `40` close/cancel |
@@ -146,13 +171,24 @@ Both subscribe to `button_clicked`, so their two booleans can drift apart.
 - Position comes from settings `hud_width` (**horizontal / L**) and `hud_height`
   (**vertical / T**) — the names are misleading, they are coordinates, not sizes.
   Everything else (PDC, notifications, siren buttons) is positioned relative to them.
+- Position always comes from `UIManager.hud_origin()`, which clamps (§1.3).
 - Warning presentation is a repaint of the HUD itself: FCW replaces speed/rpm with
   `^1- - -` and alternates `ISB_DARK`/`ISB_LIGHT` at level ≥ 2 to flash. CTW does the
   same with `^1< < <` / `^1> > >`, but only when FCW is not active (FCW has priority).
-- Leaving the track (`state_data.on_track == False`) deletes button IDs `0…238` in one
-  burst and shows the idle banner. That is 239 packets — see `known-issues.md` #10.
-- Notifications: `notification` events queue in a list; one is shown for 3 s on ID 61.
-  A burst therefore drains at 3 s each.
+- **The blink phase has one owner**: `UIManager._advance_blink()`, a
+  `WARNING_BLINK_INTERVAL_S` (0.25 s) timer. It used to be a toggle-per-call, so the
+  rate depended on `ui_refresh_rate` and level 2 never flashed at all (the same pass
+  toggled the colour and then reset it).
+- **The rpm readout turns red from LFS's own shift light** (`OutGauge.ShowLights &
+  DL_SHIFT`), not from a "highest rpm ever seen" heuristic. That is per car, correct
+  for mods, and recovers after a car change. A car without a shift light simply never
+  shows red.
+- Leaving the track (`state_data.on_track == False`) removes every live button via the
+  registry and shows the idle banner — but **only on the entry screen**; the main menu
+  and the server list get nothing (§1.1).
+- Notifications: `notification` events queue in a `deque(maxlen=MAX_QUEUED_NOTIFICATIONS)`
+  (8); one is shown for 3 s on ID 61 and the queue is cleared on track exit. Overflow
+  drops the oldest and logs a warning.
 - Audio: `UIManager` emits `play_audio` (three times, to lengthen the tone) when a
   warning crosses level 2. `AudioPlayer` suppresses repeats of `fcw` within 3 s.
 

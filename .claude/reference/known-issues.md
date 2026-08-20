@@ -20,12 +20,6 @@ means the whole OutSim pipeline runs for nothing.
 `{'command': str}`, subscriber `UIManager`). Different shapes, different routes, same
 purpose. Should be unified into one event with one payload shape.
 
-**#6 — MCI frame reassembly is fragile.** `VehicleManager._handle_vehicle_data` decides
-a frame is complete when `received_cars_count == len(self.players)`. If the players
-dict is stale or a player is missing, `vehicles_updated` never fires and every
-assistance system freezes on old data. `CompCar.Info` carries `CCI_FIRST` / `CCI_LAST`
-bits for exactly this purpose — use them (`insim.md` §2).
-
 **#8 — `Controls/wheel.py` cannot work.** Its `try` block raises `ImportError`
 unconditionally *after* the import, so `vj` and `setJoy` are never bound and
 `press_wheel_brake` would raise `NameError`. Currently unreachable only because
@@ -39,10 +33,15 @@ whether LFS is the foreground window (so the app can type into the user's browse
 Shift state is available as `OutGaugePack.Flags & OG_SHIFT` and is simply not read.
 Full rule set in `ui.md` §1.4.
 
-**#12 — No shared-state locking.** Packet handlers (main thread) mutate the vehicle
-dict while assistance systems (worker thread) iterate it. `ParkDistanceControl` works
-around this with `vehicles.copy()`; others do not. `RuntimeError: dictionary changed
-size during iteration` is reachable.
+**#12 — `own_vehicle` is still mutated while workers read it.** The vehicle
+dict is safe now: `VehicleManager` publishes a fresh snapshot dict per MCI frame
+and swaps each `VehicleData` object instead of mutating it (`Vehicle.begin_frame`
+/ `commit_frame`), so `vehicles_updated` payloads never change under an iterating
+worker. `own_vehicle` is different: `own_vehicle_updated` hands out the live
+`OwnVehicle` object and OutGauge writes into it at ~30 Hz on the packet thread.
+A system that reads `own_vehicle.data.x` and `own_vehicle.data.speed` on
+separate lines can still straddle a packet. Bind `data = own_vehicle.data` once
+per `process()` call, or give `OwnVehicle` the same swap treatment.
 
 ## Performance
 
@@ -100,36 +99,27 @@ OutGauge off or on the wrong port, InSim still connects, the startup connection 
 passes, and buttons still draw — but `own_vehicle_updated` never fires, so
 `AssistanceManager.own_vehicle` stays `None` and `process_all_systems()` returns
 immediately forever. Every assistance system silently does nothing, with no diagnostic.
-`own_vehicle.data.player_id` also comes only from OutGauge, so the app cannot even
-identify the player's car. An LFS update or reinstall can reset `cfg.txt`, and the setup
+(`own_vehicle.data.player_id` itself now comes from `IS_NPL` and survives this,
+but without OutGauge there is no speed, rpm or pedal data at all.) An LFS update or reinstall can reset `cfg.txt`, and the setup
 wizard never re-runs because of the `.setup_done` flag. Needs a startup validation of
 `cfg.txt` plus a "no OutGauge data after N seconds" warning — or, better, dropping the
 `cfg.txt` dependency entirely via `SMALL_SSG` (`lfs-setup.md` §5).
 
-**#25 — Screen context is detected far too crudely.** `StateHandler` derives only
-`on_track = ISS_GAME and not ISS_FRONT_END`, plus `text_entry` and `dialog`. It ignores
-`ISS_VISIBLE` (the authoritative "are our buttons on screen" flag), `ISS_SHIFTU` and
-`ISS_MULTI`, and it never binds `ISP_CIM` — so the app cannot distinguish the main menu,
-the entry screen, the garage and its nine submodes, options, or car/track select. Its
-own `in_game_interface` / `submode_interface` fields are initialised to 0 and never
-written; pyinsim already has `IS_CIM` and every constant. See `ui.md` §1.
-
-**#26 — Buttons cleared by the user do not all come back.** `IS_BFN` is now bound
-inbound and republished as `buttons_cleared`, and `MessageSender` drops its registry on
-it, so anything that repaints (the HUD, every 50 ms) reappears. The menu, PDC and
-notification buttons are only drawn on change, so they still stay gone until the next
-state change redraws them — `UIManager` / `MenuSystem` have to react to
-`buttons_cleared` themselves. `ui.md` §1.5.
-
-**#27 — HUD position can break the LFS entry screen.** Buttons inside
-`L 0…110, T 30…170` make LFS keep that rectangle clear of its own UI. `hud_width` /
-`hud_height` are user-adjustable in 2-unit steps with no constraint, so a user can move
-the HUD into that area and make LFS's own entry-screen menus vanish, with no way to
-understand why. Either clamp the HUD out of the reserved area or warn. `ui.md` §1.3.
+**#27 — The HUD may still sit in the area LFS reserves for its own UI.**
+`clamp_hud_position()` (`ui/ui_manager.py`) now keeps the whole block — HUD, PDC
+column, siren buttons and notification line — inside `0…200` in both axes, so
+the arrows can no longer push anything off screen. The second half is
+deliberately *not* enforced: the shipped default (`hud_width` 90,
+`hud_height` 119) sits inside `L 0…110, T 30…170`, so clamping the HUD out of
+that rectangle would relocate every existing user's HUD. Instead the system
+menu's "HUD Position" label turns `^1` red while the block overlaps it, and the
+move is logged. Whether the default should move out of the rectangle is a
+product decision, not a bug fix. `ui.md` §1.3.
 
 **#28 — Vehicle mods fall through hardcoded car tables.** `get_vehicle_size()` returns
 `(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary `CName`
-values. PDC sensor geometry and FCW's car-length term are then wrong for every modded
+values. (`CName` is a decoded `str` since WP4 and the lookup accepts both, so the
+fall-through is now the only remaining half of this.) PDC sensor geometry and FCW's car-length term are then wrong for every modded
 car. `conventions.md` §4 has the preferred alternatives.
 
 **#29 — OutGauge stops in any external camera view, freezing all assistance.** LFS only
@@ -139,21 +129,6 @@ returns immediately every cycle. Same silent-freeze mechanism as #24, but trigge
 ordinary user actions rather than misconfiguration. The 30-second
 `start_outgauge()` re-init in `StateHandler.start_game_insim` is a partial workaround.
 `conventions.md` §5.3.
-
-**#30 — Own PLID is derived only from OutGauge, so it follows the camera.**
-`OwnVehicle.update_outgauge_data` sets `data.player_id = packet.PLID`, but that field is
-the **viewed** player. Pressing TAB or spectating silently repoints the entire
-`OwnVehicle` object at somebody else's car. Harmless (arguably correct) for the HUD and
-warnings; actively wrong for anything that actuates — auto-hold, gearbox, light and
-siren commands act on the local car while the data describes another one.
-`IS_NPL` carries `UCID` and `PType`, which identify the local human driver
-camera-independently, but `VehicleManager._handle_player_joined` discards both.
-`conventions.md` §5.
-
-**#31 — AI drivers are detected by substring match on the player name.**
-`AIDriver._is_local_ai_vehicle` returns true for `b'AI' in pname`, so a human called
-MAIK, RAID or CAIN is adopted by the traffic controller and driven by it. `IS_NPL.PType`
-bit 1 is the authoritative AI flag and is not read. `conventions.md` §5.5.
 
 **#32 — Key bindings are guessed, never asserted.** The `user_*_key` settings are the
 app's assumption about what the user bound in LFS; nothing verifies them, so a mismatch

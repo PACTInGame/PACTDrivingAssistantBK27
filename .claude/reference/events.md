@@ -20,28 +20,55 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `button_clicked` | `IS_BTC` packet | `UIManager`, `MenuSystem`, `LightAssists` |
 | `message_received` | `IS_MSO` packet | `ChatCommandHandler` |
 | `layout_received` | `IS_AXM` packet | `ParkDistanceControl` |
-| `buttons_cleared` | `{sub_type: BFN_USER_CLEAR\|BFN_REQUEST}` | `MessageSender` |
+| `buttons_cleared` | `{sub_type: BFN_USER_CLEAR\|BFN_REQUEST}` | `MessageSender`, `UIManager`, `MenuSystem` |
+| `interface_mode_changed` | `IS_CIM` packet | `lfs.lfs_state.StateHandler` |
 | `AI_Controller_initialized` | `AICarController` instance | `AIDriver` |
 
 ## Derived state
 
 | Event | Payload | Emitter | Subscribers |
 |---|---|---|---|
-| `state_data` | `{on_track, text_entry, dialog, track, in_game_cam, in_game_interface, submode_interface}` | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `AutoHold`, `LightAssists`, `ChatCommandHandler`, `AIDriver` |
-| `vehicles_updated` | `Dict[plid, Vehicle]` (excludes own car) | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
+| `state_data` | see below | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `AutoHold`, `LightAssists`, `ChatCommandHandler`, `AIDriver` |
+| `vehicles_updated` | `Dict[plid, Vehicle]` (excludes own car) — a **fresh dict per MCI frame** | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
 | `own_vehicle_updated` | `OwnVehicle` | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
-| `player_name_changed` | `{player_name, control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem`, `ControllerEmulator`\* |
-| `player_data_updated` | `Dict[plid, {PName, CName, ControlMode}]` | `VehicleManager` | *(none — dead)* |
+| `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem`, `ControllerEmulator`\* |
+| `player_data_updated` | `Dict[plid, {PName, CName, PNameBytes, CNameBytes, UCID, PType, Flags, IsAI, IsRemote, ControlMode}]` | `VehicleManager` | *(none — dead)* |
 | `assistance_results` | `{system_key: result_dict}` | `AssistanceManager` | *(none — dead)* |
 
 `buttons_cleared` is emitted when LFS tells us the user wiped our buttons (SHIFT+B,
 `BFN_USER_CLEAR`) or asked for them back (`BFN_REQUEST`). `MessageSender` drops its
-button registry on it so the next repaint really sends. Anything that only draws on
-change — the menu, PDC, notifications — has to redraw itself on this event
-(`known-issues.md` #26).
+button registry on it so the next repaint really sends. `UIManager` redraws the idle
+banner (everything else it owns is repainted every UI pass anyway) and `MenuSystem`
+redraws the menu page that is currently open. Anything new that only draws on change
+must subscribe too.
 
-`state_data` is the widest-reaching event in the app. Changing its shape touches seven
-subscribers — grep before editing.
+`vehicles_updated` carries an **immutable snapshot**: the dict is freshly built for
+each MCI frame and every `Vehicle.data` object in it is replaced, never mutated, by
+the next frame. A consumer may iterate it on a worker thread while packets keep
+arriving. `own_vehicle_updated` does **not** give this guarantee — it hands out the
+live `OwnVehicle`, which OutGauge keeps writing to (`known-issues.md` #12).
+
+### `state_data` payload
+
+| Key | Type | Meaning |
+|---|---|---|
+| `on_track` | bool | `ISS_GAME` and not `ISS_FRONT_END` |
+| `text_entry` | bool | `ISS_TEXT_ENTRY` — chat is open, block key injection |
+| `dialog` | bool | `ISS_DIALOG` |
+| `track` | **`str`** | `IS_STA.Track`, decoded (`SO6R`) — was raw bytes before WP4/WP5 |
+| `in_game_cam` | int | `IS_STA.InGameCam` |
+| `in_game_interface` | int | `IS_CIM.Mode` — `CIM_NORMAL/OPTIONS/HOST_OPTIONS/GARAGE/CAR_SELECT/TRACK_SELECT/SHIFTU` |
+| `submode_interface` | int | `IS_CIM.SubMode` — `NRM_*` / `GRG_*` / `FVM_*` |
+| `select_type` | int | `IS_CIM.SelType` |
+| `screen` | str | derived context: `main_menu`, `entry`, `garage`, `options`, `shiftu`, `game` (constants in `lfs/lfs_state.py`) |
+| `ui_visible` | bool | `ISS_VISIBLE` — LFS is showing InSim buttons |
+| `shift_u` | bool | `ISS_SHIFTU` |
+| `multiplayer` | bool | `ISS_MULTI` |
+| `buttons_allowed` | bool | **the one flag the UI needs**: false on `main_menu` and `options`, where LFS shows no normal buttons |
+
+`state_data` is the widest-reaching event in the app and is now emitted from two
+sources — `IS_STA` **and** `IS_CIM`. Changing its shape touches seven subscribers —
+grep before editing. Keys may be added, never removed or renamed.
 
 ## Assistance system outputs
 

@@ -464,8 +464,14 @@ def make_sta_packet():
     """
     def _make(on_track: bool = True, flags: int = 0, in_game_cam: int = 3,
               view_plid: int = 0, track: bytes = b"SO6R",
-              num_p: int = 1) -> FakePacket:
-        base = (ISS_GAME | ISS_VISIBLE) if on_track else ISS_FRONT_END
+              num_p: int = 1, base_flags: int = None) -> FakePacket:
+        # base_flags replaces the derived base entirely -- that is the only
+        # way to build the main-menu / server-list signature, which sets
+        # neither ISS_GAME nor ISS_FRONT_END (reference/ui.md §1.1).
+        if base_flags is not None:
+            base = base_flags
+        else:
+            base = (ISS_GAME | ISS_VISIBLE) if on_track else (ISS_FRONT_END | ISS_VISIBLE)
         return FakePacket(
             Size=28,
             Type=pyinsim.ISP_STA,
@@ -517,7 +523,11 @@ class FakeInsim:
 
 
 class FakeConnector:
-    """The slice of ``LFSConnector`` that StateHandler and MessageSender use."""
+    """The slice of ``LFSConnector`` that StateHandler and MessageSender use.
+
+    The button half records what would have gone out, so a test can ask what
+    is currently on screen without a socket.
+    """
 
     def __init__(self, event_bus: EventBus):
         self.event_bus = event_bus
@@ -525,12 +535,62 @@ class FakeConnector:
         self.insim = FakeInsim()
         self.is_connected = True
         self.outgauge_restarts = 0
+        self.buttons = []        # (click_id, style, t, l, w, h, text, inst)
+        self.deletes = []        # click_id
+        self.clears = 0
+        self.commands = []
+        self.messages = []
 
     def start_outgauge(self):
         self.outgauge_restarts += 1
 
     def start_outsim(self):
         pass
+
+    # --- button path ---------------------------------------------------
+    def send_button(self, click_id, style, t, l, w, h, text, inst=0):
+        self.buttons.append((click_id, style, t, l, w, h, text, inst))
+        return True
+
+    def delete_button(self, click_id):
+        self.deletes.append(click_id)
+        return True
+
+    def clear_all_buttons(self):
+        self.clears += 1
+        return True
+
+    def send_command_to_lfs(self, command):
+        self.commands.append(command)
+        return True
+
+    def send_local_message_to_lfs(self, message):
+        self.messages.append(message)
+        return True
+
+    # --- queries -------------------------------------------------------
+    def drawn_ids(self) -> set:
+        """Every ClickID an IS_BTN was sent for."""
+        return {entry[0] for entry in self.buttons}
+
+    def last_button(self, click_id):
+        """The most recent IS_BTN for one ClickID, or None."""
+        for entry in reversed(self.buttons):
+            if entry[0] == click_id:
+                return entry
+        return None
+
+    def reset(self):
+        self.buttons.clear()
+        self.deletes.clear()
+        self.clears = 0
+
+
+@pytest.fixture
+def message_sender(fake_connector):
+    """A real :class:`MessageSender` on top of the recording connector."""
+    from lfs.message_sender import MessageSender
+    return MessageSender(fake_connector)
 
 
 @pytest.fixture

@@ -1,10 +1,17 @@
+import logging
 from typing import List
 
 import pyinsim
 from core.settings_manager import SettingsManager
 from misc import key_binder
 from misc.language import LanguageManager
-from ui.ui_manager import UIManager
+from ui.ui_manager import (MENU_RANGE, UIManager, clamp_hud_position,
+                           hud_overlaps_reserved_area)
+
+logger = logging.getLogger(__name__)
+
+# Schrittweite der HUD-Pfeile im Systemmenue.
+HUD_STEP = 2
 
 
 class MenuSystem:
@@ -16,6 +23,7 @@ class MenuSystem:
         self.current_menu = 'none'
         self.menu_stack: List[str] = []
         self.on_track = False
+        self.buttons_allowed = False
         self.set_language = settings.get('language')
         self.translator = LanguageManager()
         self.keybinder = key_binder.Keybinder(self.ui_manager.event_bus, self.settings)
@@ -26,16 +34,45 @@ class MenuSystem:
         self.ui_manager.event_bus.subscribe('player_name_changed', self._handle_player_change)
         self.ui_manager.event_bus.subscribe('new_keybinding', self._rebind_key)
         self.ui_manager.event_bus.subscribe('ai_traffic_state_changed', self._on_ai_traffic_state_changed)
+        self.ui_manager.event_bus.subscribe('buttons_cleared', self._on_buttons_cleared)
 
     def _on_ai_traffic_state_changed(self, data):
         """Callback from AIDriver when traffic state changes."""
         self.ai_traffic_active = data.get('active', False)
 
+    def _on_buttons_cleared(self, data=None):
+        """SHIFT+B: LFS hat unsere Buttons geworfen (reference/ui.md §1.5)
+
+        Das Menue wird nur bei Aenderungen gezeichnet, kaeme also erst beim
+        naechsten Zustandswechsel zurueck. Die Registry im MessageSender ist
+        an dieser Stelle bereits verworfen, der Repaint geht also wirklich
+        raus.
+        """
+        if not self.on_track:
+            return
+        self._repaint_current_menu()
+
+    def _repaint_current_menu(self):
+        painters = {
+            'main': self.open_main_menu,
+            'driving': self.open_driving_menu,
+            'parking': self.open_parking_menu,
+            'system': self.open_system_settings,
+            'cop': self.open_cop_menu,
+            'ai_traffic': self.open_ai_traffic_menu,
+            'keys': self.open_keys_settings,
+        }
+        painter = painters.get(self.current_menu)
+        if painter is not None:
+            painter()
+        elif self.current_menu == 'none':
+            self.create_open_menu_button()
+
     def _rebind_key(self, data):
         setting = data['setting']
         new_key = data['button']
         self.settings.set(setting, new_key)
-        print(f"Rebound {setting} to {new_key}")
+        logger.info("Rebound %s to %r", setting, new_key)
         if self.current_menu == 'await_key':
             self.open_keys_settings()
 
@@ -44,7 +81,10 @@ class MenuSystem:
         self.settings.set('own_control_mode', control_mode)
 
     def _state_change(self, data):
-        new_on_track = data['on_track']
+        # Im Hauptmenue und in der Serverliste darf nichts gezeichnet werden
+        # (reference/ui.md §1.1); dort ist on_track ohnehin False.
+        self.buttons_allowed = bool(data.get('buttons_allowed', True))
+        new_on_track = bool(data.get('on_track', False))
         if new_on_track != self.on_track:
             self.on_track = new_on_track
             if new_on_track and self.current_menu == 'none':
@@ -178,8 +218,14 @@ class MenuSystem:
         unit_text = "^2" + self.translator.get("Metric", self.set_language) if unit == "metric" else "^2" + self.translator.get("Imperial", self.set_language)
         hud_on = self.settings.get('hud_active')
         hud_text = "^2" if hud_on else "^1"
-        hud_h = self.settings.get('hud_height')
-        hud_w = self.settings.get('hud_width')
+        hud_w, hud_h = clamp_hud_position(self.settings.get('hud_width'),
+                                          self.settings.get('hud_height'))
+        # Rot heisst: der HUD liegt im von LFS reservierten Rechteck
+        # (L 0…110, T 30…170). LFS raeumt dort seine eigene UI weg, also
+        # verschwinden Einstiegs- und Garagenmenues (reference/ui.md §1.3).
+        # Verschoben wird nichts - die ausgelieferte Standardposition liegt
+        # selbst in diesem Bereich.
+        hud_position_colour = "^1" if hud_overlaps_reserved_area(hud_w, hud_h) else "^7"
 
         buttons = [
             (21, 0, 75, 25, 5, self.translator.get("System Settings", self.set_language),
@@ -190,7 +236,9 @@ class MenuSystem:
              pyinsim.ISB_LIGHT),
             (24, 0, 85, 20, 5, hud_text + self.translator.get("Head-Up Display", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 90, 25, 5, f"^7{self.translator.get('HUD Position', self.set_language)}  (V:{hud_h}  H:{hud_w})",
+            (25, 0, 90, 25, 5,
+             f"{hud_position_colour}{self.translator.get('HUD Position', self.set_language)}"
+             f"  (V:{hud_h}  H:{hud_w})",
              pyinsim.ISB_LIGHT),
             (26, 25, 90, 5, 5, "^7" + self.translator.get("Up", self.set_language),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
@@ -318,9 +366,12 @@ class MenuSystem:
     # ─── Helpers ──────────────────────────────────────────────────────
 
     def _clear_menu_buttons(self):
-        """Löscht alle Menü-Buttons"""
-        for button_id in range(20, 41):
-            self.ui_manager.message_sender.remove_button(button_id)
+        """Löscht alle Menü-Buttons
+
+        Ueber die Button-Registry: es geht genau ein Paket pro wirklich
+        sichtbarem Button raus, nicht 21 Aufrufe.
+        """
+        self.ui_manager.message_sender.remove_range(*MENU_RANGE)
 
     def create_open_menu_button(self):
         self.ui_manager.message_sender.create_button(
@@ -334,6 +385,23 @@ class MenuSystem:
         self.current_menu = 'none'
         self._clear_menu_buttons()
         self.create_open_menu_button()
+
+    def _move_hud(self, dx: int, dy: int):
+        """Verschiebt den HUD und haelt ihn dabei auf dem Schirm
+
+        Vorher wurden nur die Eckwerte 0 und 200 begrenzt - der HUD-Block
+        reicht aber von x-3 bis x+29 und von y-6 bis y+13, also fielen
+        PDC-Anzeige, Sirenen-Buttons und die Notification-Zeile heraus
+        (known-issues #27).
+        """
+        x, y = clamp_hud_position(self.settings.get('hud_width') + dx,
+                                  self.settings.get('hud_height') + dy)
+        self.settings.set('hud_width', x)
+        self.settings.set('hud_height', y)
+        if hud_overlaps_reserved_area(x, y):
+            logger.info("HUD at (%d, %d) is inside the area LFS reserves for its "
+                        "own UI (L 0-110, T 30-170).", x, y)
+        self.open_system_settings()
 
     def change_language(self):
         """Wechselt die Sprache"""
@@ -469,21 +537,13 @@ class MenuSystem:
                 self.settings.set('hud_active', not current)
                 self.open_system_settings()
             elif button_id == 26:  # HUD Up
-                current = self.settings.get('hud_height')
-                self.settings.set('hud_height', max(0, current - 2))
-                self.open_system_settings()
+                self._move_hud(0, -HUD_STEP)
             elif button_id == 27:  # HUD Down
-                current = self.settings.get('hud_height')
-                self.settings.set('hud_height', min(200, current + 2))
-                self.open_system_settings()
+                self._move_hud(0, HUD_STEP)
             elif button_id == 28:  # HUD Left
-                current = self.settings.get('hud_width')
-                self.settings.set('hud_width', max(0, current - 2))
-                self.open_system_settings()
+                self._move_hud(-HUD_STEP, 0)
             elif button_id == 29:  # HUD Right
-                current = self.settings.get('hud_width')
-                self.settings.set('hud_width', min(200, current + 2))
-                self.open_system_settings()
+                self._move_hud(HUD_STEP, 0)
 
         # ── Cop Mode Menu ──
         elif self.current_menu == 'cop':

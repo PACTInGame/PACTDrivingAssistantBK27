@@ -670,3 +670,66 @@ packets, and the shutdown only matters inside the game.
   send 239 delete packets in one go).
 - **Colour codes**: the coloured warning labels (`^1`, `^3`, `^7`) must still be
   coloured — the encoder deliberately leaves carets alone.
+
+### WP4 — vehicle data model, identity and MCI reassembly
+
+The frame logic, the snapshot contract, the `PIF_*` control modes and the identity
+rules are covered by `tests/test_vehicle_model.py`. What only LFS can prove:
+
+- **More than 16 cars**: put 20+ AI cars on track (SO City or an oval). The HUD, FCW,
+  BSW and PDC must keep updating smoothly — before, a stale `players` dict froze every
+  assistance system on old data with no error. Watch for `MCI frame still incomplete`
+  in `pact_assistant.log`: it should never appear.
+- **TAB / spectating**: drive, then press TAB to look at an AI car. The HUD gauges
+  (rpm, gear) follow the viewed car as before, but warnings must keep referring to
+  *your* car and must not jump. Back on your own car, nothing should have shifted.
+- **Own PLID in the garage**: enter the pits/garage, where OutGauge stops. The app must
+  still know your PLID (it now comes from `IS_NPL`), so nothing needs a track re-entry
+  to recover.
+- **Multiplayer as a guest**: join someone else's host. `UCID` 0 is the *host* there,
+  not you — the local driver is identified by `PType` instead. Check that the HUD and
+  the cop-mode siren UI still attach to your own car and not to the host's.
+- **Cop tag**: rename yourself to `[COP] Something`. The siren/strobe buttons must
+  appear. Before WP4 the check ran against the string `"b'[COP] Something'"`, so it
+  worked by accident; make sure it still works now that the name is decoded properly.
+- **Gearbox calibration file**: calibrate a car, then check
+  `data/gearbox_calibrations.json`. The key must be the plain car code (`XFG`). An
+  entry written by an older build uses the same key, so old calibrations keep working —
+  confirm one does.
+- **AI traffic adoption**: start AI traffic with a human on track whose name contains
+  "AI" (e.g. MAIK). That car must **not** be taken over by the traffic controller any
+  more, while the real AI cars still are.
+- **A modded car**: drive a vehicle mod. Nothing may raise; PDC falls back to the
+  default size as before.
+
+### WP5 — screen context and UI lifecycle
+
+`tests/test_screen_context.py` drives the state machine from fake `IS_STA`/`IS_CIM`/
+`IS_BFN` packets, but only the game shows what LFS actually sends.
+
+- **Main menu and the multiplayer server list**: start the app there, or leave a race
+  back to the main menu. **No PACT button may appear** — in particular the
+  "PACT Driving Assist Active." banner, which is now restricted to the single-player
+  entry screen.
+- **Entry screen**: the banner must still appear there, at the bottom left as before.
+- **Garage / options / car select / track select**: `IS_CIM` should be arriving. Check
+  the log at debug level for `IS_CIM: Mode=…`. In the garage our buttons stay; in
+  options and car/track select LFS hides them and the app now stops sending them.
+- **SHIFT+B then SHIFT+I**: the HUD, the menu, the PDC display and the notification line
+  must all come back — the menu is the one that used to stay away until the next state
+  change.
+- **Level-2 collision warning**: it must now actually flash. Level 2 never flashed
+  before. The rate is a 0.25 s toggle (about 2 Hz) driven by a timer, so it no longer
+  changes with `ui_refresh_rate` — confirm it looks right and is not too fast or slow.
+- **The rpm readout**: it turns red from LFS's own shift light instead of "highest rpm
+  ever seen". Rev a car with a shift light: red must appear at the same point the
+  in-car shift light does, and must go away again. A car without a shift light shows
+  no red at all — confirm that is acceptable.
+- **HUD position**: move the HUD to each screen edge with the menu arrows. Nothing —
+  PDC column, siren buttons, notification line — may leave the screen. While the HUD
+  sits inside LFS's reserved rectangle the menu's "HUD Position" label is red; check
+  in the garage and on the entry screen whether LFS's own menus are being pushed
+  around, and decide whether the shipped default (90, 119) should move out of it.
+- **Notification burst**: run the gearbox calibration, which emits several messages in
+  a row. They must appear one at a time, and the queue caps at 8 — with more than that
+  the oldest are dropped and logged. Leaving the track must clear the queue.

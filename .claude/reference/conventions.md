@@ -85,6 +85,15 @@ acceleration value by 2×. Fix this by measuring real Δt if you touch it.
 Cars are identified by `CName`, a 4-byte field in `IS_NPL` (and `IS_SLC`). For the ~20
 built-in cars it holds a fixed code: `XFG`, `XRG`, `UF1`, `FZ5`, `FXR`, …
 
+**`CName`, `PName` and `IS_STA.Track` are decoded exactly once, at ingress.**
+`VehicleManager._handle_player_joined` decodes `CName` with `latin-1` (byte-exact and
+reversible, so it stays a safe dict key) and `PName` with
+`lfs.text_encoding.decode_button_text` (player names carry LFS code-page escapes and
+colour codes); `StateHandler` decodes `Track`. `Vehicle.data.cname` / `.pname` are
+therefore **`str`**, with the raw bytes kept alongside in `.cname_bytes` / `.pname_bytes`.
+Nothing downstream should do `str(cname)[2:-1]` any more — that repr arithmetic was the
+source of the `"b'[COP] Name'"` cop-tag bug.
+
 **But LFS also has vehicle mods**, selectable in the garage alongside the standard cars.
 There are unlimited of them, they are downloaded per user, and the set changes over
 time. For a mod, `CName` carries the mod's compressed skin/mod ID instead of a known
@@ -141,18 +150,18 @@ the dashboard data of **whatever car the camera is on**, which TAB cycles throug
 
 Consequences:
 
-- **On track, driving your own car, OutGauge `PLID` is your PLID.** This is the
-  simplest way to learn it and is what `OwnVehicle.update_outgauge_data` relies on
-  (`self.data.player_id = packet.PLID`).
-- **While spectating, or after pressing TAB, it is somebody else's PLID.** The whole
-  `OwnVehicle` object then describes the observed car.
-- For most systems that is **the desired behaviour**: the HUD shows the observed car's
-  speed, and collision warnings refer to the car you are actually looking at. Do not
-  "fix" this reflexively.
-- It is wrong wherever the intent is genuinely *the local driver* — anything that
-  actuates (auto-hold, gearbox, light commands, siren) acts on **your** car via
-  `SMALL_LCL`/`SMALL_LCS`/keypresses while the *data* describes someone else's. Braking
-  or shifting based on a spectated car is a real hazard.
+- **On track, driving your own car, OutGauge `PLID` is your PLID.** It is stored as
+  `own_vehicle.viewed_plid` and is the fallback for `data.player_id` until `IS_NPL`
+  has identified the local driver.
+- **While spectating, or after pressing TAB, it is somebody else's PLID.** Since WP4
+  that no longer repoints the whole `OwnVehicle`: `data.player_id` stays on
+  `local_plid` and `own_vehicle.is_local_driver` goes False.
+- The *gauge* fields (rpm, gear, pedals, dash lights, fuel) still follow the camera —
+  that is **the desired behaviour** for the HUD. Do not "fix" that reflexively.
+- Anything that **actuates** (auto-hold, gearbox, light commands, siren) acts on
+  **your** car via `SMALL_LCL`/`SMALL_LCS`/keypresses. Gate it on
+  `own_vehicle.is_local_driver`; shifting or braking on a spectated car's rpm is a
+  real hazard.
 
 `IS_STA.ViewPLID` carries the same information over InSim and is unpacked by pyinsim,
 but is not read anywhere in this project.
@@ -184,22 +193,42 @@ The camera-independent way is `IS_NPL`, which carries both:
 - `UCID` — connection id, **0 = local**;
 - `PType` — bit 0 female, **bit 1 = AI**, **bit 2 = remote**.
 
-Your own player is the `IS_NPL` with `UCID == 0` and `PType & 2 == 0`. That works in the
-garage, in menus, and regardless of camera, and it distinguishes "the car I drive" from
-"the car I am watching" — which OutGauge alone cannot.
+Your own player is the `IS_NPL` that is **neither AI (`PType & 2`) nor remote
+(`PType & 4`)**; `UCID == 0` corroborates it. Note `UCID == 0` alone is *not* enough:
+InSim.txt defines `UCID` 0 as **the host**, which is you in single player but somebody
+else when you join a multiplayer host as a guest. `PType` covers both cases, so
+`VehicleManager._consider_local_driver` scores candidates: not-AI-and-not-remote wins,
+`UCID == 0` wins harder, and the first candidate keeps the title at equal score.
 
-`VehicleManager._handle_player_joined` currently stores only `PName`, `CName` and a
-derived control mode, **discarding `UCID` and `PType`**. Both should be kept; see
-`known-issues.md` #30.
+This works in the garage, in menus, and regardless of camera, and it distinguishes "the
+car I drive" from "the car I am watching" — which OutGauge alone cannot.
+
+### 5.4.1 What the code exposes
+
+| Field | Where | Meaning |
+|---|---|---|
+| `own_vehicle.local_plid` | `OwnVehicle` | PLID of the local driver, from `IS_NPL`. `0` = not yet known |
+| `own_vehicle.viewed_plid` | `OwnVehicle` | PLID OutGauge is currently describing — follows TAB |
+| `own_vehicle.is_local_driver` | `OwnVehicle` | **gate every actuation on this.** True when the OutGauge data really is our car. Returns `True` while `local_plid` is still `0`, i.e. an unknown identity keeps the old behaviour rather than disabling features |
+| `vehicle.data.ucid` / `.ptype` | `VehicleData` | raw `IS_NPL` identity |
+| `vehicle.data.is_ai` | `VehicleData` | `PType` bit 1 — the authoritative AI flag |
+| `vehicle.data.is_remote` | `VehicleData` | `PType` bit 2 |
+
+`own_vehicle.data.player_id` follows `local_plid` once it is known, so pressing TAB no
+longer repoints the whole object. `data.speed` is only taken from OutGauge while
+`is_local_driver` holds — otherwise it stays the MCI value of our own car. The *gauge*
+fields (`rpm`, `gear`, pedals, dash lights) deliberately keep following the camera,
+because that is what the HUD is supposed to show.
 
 Note `IS_NPL` is also sent when a player *leaves the pits*, not only on joining — do not
 treat it as a one-shot "player created" event.
 
 ### 5.5 Do not detect AI drivers by name
 
-`PType` bit 1 is the authoritative AI flag. `AIDriver._is_local_ai_vehicle` instead
-tests `b'AI' in pname`, which matches any human called MAIK, RAID or CAIN and hands
-their car to the traffic controller. See `known-issues.md` #31.
+`PType` bit 1 is the authoritative AI flag, exposed as `vehicle.data.is_ai`.
+`AIDriver._is_local_ai_vehicle` reads it. Do not go back to a name substring test — the
+old `b'AI' in pname` matched any human called MAIK, RAID or CAIN and handed their car to
+the traffic controller.
 
 ## 6. Performance rules for the hot path
 
@@ -225,6 +254,12 @@ Do not:
 
 If a change adds measurable per-cycle cost, state the cost and the worst-case vehicle
 count in the code comment.
+
+**The `vehicles_updated` payload is a snapshot, not the live dict.** `VehicleManager`
+builds a fresh dict per MCI frame and swaps each `VehicleData` object rather than
+mutating it, so iterating it on a worker thread is safe. Cost: one `copy.copy` of a flat
+dataclass per vehicle per cycle (<40 µs at 40 cars). `own_vehicle` has no such
+guarantee — bind `data = own_vehicle.data` once instead of re-reading it per line.
 
 ## 7. Physics expectations
 

@@ -56,10 +56,19 @@ does not catch up on overruns, it just runs late, and it logs an overrun at most
 per 30 s per interval group. The watchdog thread reports a task that has not run for
 more than 5× its interval (once, until it runs again).
 
-**Concurrency reality:** packet handlers (main thread) mutate `VehicleManager.vehicles`
-and `OwnVehicle` while assistance systems (worker thread) read them. There is no lock
-around vehicle state. `EventBus` only locks its subscriber dict, not the payloads.
-Several systems defensively copy dicts (`vehicles.copy()` in PDC) — this is why.
+**Concurrency reality:** packet handlers run on the main thread while assistance
+systems read the same state on worker threads. `EventBus` only locks its subscriber
+dict, not the payloads.
+
+- **Foreign vehicles are safe.** `vehicles_updated` carries a snapshot: a fresh dict per
+  MCI frame, and each `VehicleData` object is *replaced* at the end of the frame rather
+  than written to (`Vehicle.begin_frame` / `commit_frame`). Iterating it while packets
+  keep arriving cannot raise and cannot see a half-updated car. `VehicleManager.vehicles`
+  itself is the live dict and must not be handed out.
+- **`own_vehicle` is not.** `own_vehicle_updated` passes the live `OwnVehicle`, and
+  OutGauge writes into it at ~30 Hz. Bind `data = own_vehicle.data` once per `process()`
+  call instead of re-reading it line by line (`known-issues.md` #12).
+
 When you add state that both sides touch, assume it can change mid-iteration.
 
 ## 3. EventBus (`core/event_bus.py`)
@@ -117,14 +126,14 @@ core/
 
 lfs/
   connector.py             Owns InSim/OutGauge/OutSim; binds packets → emits events; sends buttons, lights, commands
-  lfs_state.py             StateHandler: parses IS_STA flags into the `state_data` event (on_track, dialog, text_entry, track, cam)
+  lfs_state.py             StateHandler: IS_STA + IS_CIM → the `state_data` event (on_track, dialog, text_entry, track, cam, screen context, buttons_allowed)
   message_sender.py        Button registry (sends only on change) + chat/command wrapper over the connector
   text_encoding.py         LFS code-page encoding of button and chat text (^L/^T/…), truncation
 
 vehicles/
-  vehicle.py               Vehicle + VehicleData dataclass; position, heading, distance/angle to player
-  own_vehicle.py           OwnVehicle(Vehicle): adds OutGauge data (rpm, gear, pedals, dash lights)
-  vehicle_manager.py       Consumes MCI/NPL/PLL/OutGauge → maintains the vehicle dict → emits vehicles_updated / own_vehicle_updated
+  vehicle.py               Vehicle + VehicleData dataclass; position, heading, distance/angle to player, decoded names, IS_NPL identity; frame staging (begin_frame/commit_frame)
+  own_vehicle.py           OwnVehicle(Vehicle): OutGauge data (rpm, gear, pedals, dash lights) + local_plid / viewed_plid / is_local_driver
+  vehicle_manager.py       Consumes MCI/NPL/PLL/OutGauge → reassembles MCI frames on CCI_FIRST/CCI_LAST → emits an immutable vehicles_updated snapshot / own_vehicle_updated
   VehicleInfo.py           Legacy/unused data container — not wired into anything
 
 assistance/
@@ -177,8 +186,9 @@ audio/*.wav                Warning sounds
 IS_MCI (all car positions, every `Interval` ms, possibly split over several packets)
   → LFSConnector._handle_mci → emit 'vehicle_data_received'
   → VehicleManager._handle_vehicle_data
-        updates Vehicle positions, computes distance/angle to player
-        when it believes all cars for this frame arrived → emit 'vehicles_updated'
+        accumulates cars until CCI_LAST (or a 0.5 s timeout) closes the frame
+        updates staged Vehicle positions, computes distance/angle to player,
+        commits every touched Vehicle → emit 'vehicles_updated' (fresh dict)
   → AssistanceManager caches the dict
 
 OutGauge packet (high rate, own car only: speed, rpm, gear, pedals, dash lights)

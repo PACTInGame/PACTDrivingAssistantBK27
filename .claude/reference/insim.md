@@ -70,10 +70,18 @@ there** and re-publish them as events rather than binding elsewhere.
 **Multi-packet responses.** `IS_MCI` carries at most `MCI_MAX_CARS = 16` cars and
 `IS_AXM` at most 60 objects. With more cars/objects, LFS sends **several packets per
 request**. Never assume one packet = complete picture. `CompCar.Info` carries
-`CCI_FIRST` (64) and `CCI_LAST` (128) bits marking the packet set boundaries — these
-are the reliable way to reassemble a frame. `VehicleManager` currently reassembles by
-counting cars against `len(self.players)` instead, which is fragile
-(`known-issues.md` #6).
+`CCI_FIRST` (64) and `CCI_LAST` (128) bits marking the packet set boundaries, and
+`VehicleManager._handle_vehicle_data` reassembles on them:
+
+* a `CompCar` with `CCI_FIRST` starts a frame, one with `CCI_LAST` closes it and
+  publishes `vehicles_updated`;
+* if `CCI_LAST` never arrives, the partial frame is published after
+  `FRAME_TIMEOUT_S` (0.5 s) — a stale update beats a frozen one;
+* a stream that sets **neither** bit (older LFS, a mod) falls back to
+  "one packet = one frame", unless the packet is full (16 cars), in which case more
+  are expected.
+
+`IS_AXM` is still handled one packet at a time in `ParkDistanceControl`.
 
 ## 3. Packets actually used here
 
@@ -89,6 +97,7 @@ Bound in `LFSConnector._setup_handlers`:
 | `ISP_MSO` | chat/system message received | `message_received` |
 | `ISP_AXM` | autocross layout added/removed/cleared | `layout_received` |
 | `ISP_BFN` | inbound: the user cleared (SHIFT+B) or re-requested our buttons | `buttons_cleared` |
+| `ISP_CIM` | which LFS screen the local connection is on (garage, options, car/track select, SHIFT+U) | `interface_mode_changed` |
 
 Sent by this project:
 
@@ -110,12 +119,10 @@ Sent by this project:
 because `MessageSender` only sends a button when it *changed*, and a button LFS has
 thrown away has not changed as far as the registry is concerned.
 
-**Not bound but important — `ISP_CIM`.** It reports which LFS screen the connection is
-on (entry screen, garage and its submenus, options, car/track select, SHIFT+U) and is
-the only reliable way to distinguish them. pyinsim already implements `IS_CIM` and every
-`CIM_*` / `GRG_*` / `FVM_*` constant; `lfs/lfs_state.py` even has `in_game_interface`
-and `submode_interface` fields waiting for it. It needs no `ISF_*` flag — LFS sends it
-whenever the mode changes. See `ui.md` §1.
+`ISP_CIM` needs no `ISF_*` flag — LFS sends it whenever the local connection's
+interface mode changes. It is the only reliable way to tell the garage from the options
+screen from car/track select. `StateHandler` turns it into `state_data['screen']` and
+`['buttons_allowed']`; see `ui.md` §1.2.
 
 Other useful ones not yet used: `ISP_CON` (car contact), `ISP_OBH` (object hit),
 `ISP_HLV` (hotlap validity), `ISP_NCN`/`ISP_CNL` (online connections),

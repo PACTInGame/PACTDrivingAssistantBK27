@@ -51,6 +51,10 @@ tests/
                            the ErrorThrottle rate limiter and the task watchdog
   test_lifecycle.py        connection-test timeout and retry, shutdown order, signal path
   test_insim_output.py     thread-safe send buffer, button registry, LFS text encoding
+  test_vehicle_model.py    MCI frame reassembly, snapshot immutability, PIF_* control
+                           modes, own-PLID identity and the PType AI flag
+  test_screen_context.py   IS_STA/IS_CIM screen contexts, main-menu suppression, SHIFT+B
+                           repaint, HUD clamp, warning blink, notification queue
 ```
 
 ### Fixtures (`tests/conftest.py`)
@@ -61,15 +65,31 @@ tests/
 | `recorder` | `recorder('a', 'b')` → `EventRecorder` with `.payloads(e)`, `.last(e)`, `.count(e)` |
 | `settings` / `make_settings(**overrides)` | `SettingsManager` on a `tmp_path` file |
 | `make_vehicle(...)` / `make_own_vehicle(...)` | `Vehicle` / `OwnVehicle` from **metres, degrees, km/h, m/s²** |
-| `make_compcar`, `make_mci_packet`, `make_npl_packet`, `make_pll_packet`, `make_sta_packet`, `make_outgauge_packet` | namespace packets with the real field names |
-| `fake_insim`, `fake_connector` | recording stand-ins for the InSim socket and `LFSConnector` |
+| `make_compcar`, `make_mci_packet`, `make_npl_packet`, `make_pll_packet`, `make_sta_packet`, `make_outgauge_packet`, `make_cim_packet`, `make_bfn_packet` | namespace packets with the real field names |
+| `make_mci_frame(cars, chunk=16, mark=True)` | splits cars into MCI packets and sets `CCI_FIRST`/`CCI_LAST` the way LFS does; `mark=False` reproduces a stream that sets neither |
+| `fake_insim`, `fake_connector` | recording stand-ins for the InSim socket and `LFSConnector`. `fake_connector` also records the button path: `.buttons`, `.deletes`, `.drawn_ids()`, `.last_button(id)`, `.reset()` |
+| `message_sender` | a real `MessageSender` on top of `fake_connector` — enough to drive `UIManager` and `MenuSystem` without a socket |
 
 Module-level helpers `metres()`, `lfs_heading()`, `mci_speed()` and `show_lights()` do the
 unit conversions; import them from `conftest` when a test needs raw LFS units.
 
 Angle convention for every factory argument is the LFS one: **0° = +Y (north),
 anticlockwise** — the same encoding as `CompCar.Heading` (`reference/conventions.md` §2).
-`cname`/`pname` are **bytes**, as IS_NPL delivers them.
+`cname`/`pname` are passed in as **bytes**, as IS_NPL delivers them; what comes back out
+of `vehicle.data.cname` / `.pname` is a decoded `str` (`conventions.md` §4).
+
+Two traps in the packet factories:
+
+- `make_npl_packet()` defaults to `ucid=0, ptype=0`, which describes **the local
+  driver**. `VehicleManager` adopts that player as the own car, so it will not show up
+  in `manager.vehicles`. Build foreign cars with `ptype=PTYPE_AI` or
+  `ucid=1, ptype=PTYPE_REMOTE`.
+- `make_sta_packet(base_flags=…)` is the only way to build the main-menu / server-list
+  signature, which sets neither `ISS_GAME` nor `ISS_FRONT_END`.
+
+Anything driven by a wall clock (`UIManager`'s blink phase, the notification timer)
+needs a fake clock — `tests/test_screen_context.py` monkeypatches
+`ui.ui_manager.time.perf_counter`.
 
 ### Tests that are expected to fail
 
@@ -142,8 +162,8 @@ Byte-exact tests against `C:\LFS\docs\InSim.txt`:
 - `pack()` output length equals `Size * 4` for every outgoing packet type.
 - `IS_AIC` with n inputs → `Size == 1 + n`; more than `AIC_MAX_INPUTS` raises.
 - `unpack()` of a recorded `IS_MCI` yields the expected `NumC` and per-car fields.
-- `IS_MCI` with more than 16 cars arrives as several packets — assert the reassembly
-  logic in `VehicleManager` handles the split (this is `known-issues.md` #6).
+- `IS_MCI` with more than 16 cars arrives as several packets — the reassembly logic in
+  `VehicleManager` is covered by `test_vehicle_model.py`.
 - `OutGaugePack` / `OutSimPack` accept both documented packet sizes.
 
 ## Layer 4 — replay harness (the big win)
