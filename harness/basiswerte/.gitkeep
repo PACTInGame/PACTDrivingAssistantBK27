@@ -1,0 +1,3 @@
+Hier liegen die Basislaeufe (orchestrator.py --basiswerte ...):
+  <szenario>_ohne_abs.json    unveraenderte Durchreich-Funktion, Fahrhilfen aus
+  <szenario>_referenz.json    Fahrzeug/Einstellung mit funktionierendem ABS

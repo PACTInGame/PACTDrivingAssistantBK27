@@ -1,0 +1,5 @@
+Hier liegen die aufgezeichneten Traces (input_recorder.py aufnehmen ...):
+  sitzung_start.json          Menuefuehrung bis "fahrbereit auf der Strecke"
+  szenario_1_asphalt.json     Vollbremsung auf Asphalt
+  szenario_2_niedrig_mue.json Vollbremsung auf niedrigem Reibwert
+  szenario_3_kurve.json       Vollbremsung in der Kurve

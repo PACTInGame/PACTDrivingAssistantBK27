@@ -1,19 +1,6 @@
-# PACT Driving Assistant — runtime dependencies
+# ABS-Benchmark — Laufzeitabhaengigkeiten
 #
-# Python 3.11 REQUIRED (3.12+ breaks pyinsim: `asyncore` was removed).
-# Windows only: the app also uses the stdlib modules winsound and tkinter,
-# and ctypes bindings to vJoy (misc/vjoy.py).
-#
-# Versions are intentionally unpinned; the project has been run on Python 3.11.3.
+# Python 3.11, Windows.
+# Alles Weitere (socket, struct, ctypes, json) ist Standardbibliothek.
 
-# --- Core runtime ---
-psutil            # detect whether LFS.exe is running
-pygame            # warning sound playback (pygame.mixer)
-pyautogui         # global key injection for auto-hold and the automatic gearbox
-pynput            # key/mouse capture for rebinding
-shapely           # polygon intersection for the blind spot warning
-
-# --- Offline map tooling (MapBuilder.py, test.py) — not needed to run the app ---
-numpy
-scipy             # KDTree / distance_matrix for road ordering and junction detection
-matplotlib        # debug plots for MapBuilder and SpatialHashGrid
+pynput            # globale Tastatur-/Mauserfassung und -wiedergabe
