@@ -184,11 +184,16 @@ def make_own_vehicle(make_outgauge_packet):
               gear: int = 2, rpm: float = 2000.0,
               throttle: float = 0.0, brake: float = 0.0, clutch: float = 0.0,
               cname: bytes = b"XFG", pname: bytes = b"Tester",
-              control_mode: int = 0, **lights) -> OwnVehicle:
+              control_mode: int = 0, local_plid: int = None,
+              viewed_plid: int = None, **lights) -> OwnVehicle:
         own = OwnVehicle()
+        if local_plid is not None:
+            # As IS_NPL would: the camera-independent own PLID (WP4).
+            own.set_local_driver(local_plid)
         _apply_position(own, x, y, z, heading, direction, speed, acceleration)
         own.update_outgauge_data(make_outgauge_packet(
-            plid=plid, speed=speed, gear=gear, rpm=rpm,
+            plid=plid if viewed_plid is None else viewed_plid,
+            speed=speed, gear=gear, rpm=rpm,
             throttle=throttle, brake=brake, clutch=clutch, **lights))
         own.update_model_and_driver(cname, pname, control_mode)
         return own
@@ -323,11 +328,74 @@ def make_mci_packet():
 
 
 @pytest.fixture
+def make_mci_frame(make_mci_packet):
+    """Splits cars into MCI packets and sets CCI_FIRST/CCI_LAST like LFS does.
+
+    LFS carries at most ``MCI_MAX_CARS`` (16) cars per packet and marks the
+    first CompCar of the set with ``CCI_FIRST`` and the last one with
+    ``CCI_LAST`` (``reference/insim.md`` §2). ``mark=False`` reproduces a
+    stream that sets neither bit.
+    """
+    def _make(cars, chunk: int = 16, mark: bool = True) -> list:
+        cars = list(cars)
+        if mark and cars:
+            cars[0].Info = getattr(cars[0], 'Info', 0) | pyinsim.CCI_FIRST
+            cars[-1].Info = getattr(cars[-1], 'Info', 0) | pyinsim.CCI_LAST
+        return [make_mci_packet(cars[i:i + chunk])
+                for i in range(0, len(cars), chunk)] or [make_mci_packet([])]
+
+    return _make
+
+
+@pytest.fixture
+def make_cim_packet():
+    """Factory for an ``IS_CIM`` packet (connection interface mode)."""
+    def _make(mode: int = 0, sub_mode: int = 0, sel_type: int = 0,
+              ucid: int = 0) -> FakePacket:
+        return FakePacket(
+            Size=8,
+            Type=pyinsim.ISP_CIM,
+            ReqI=0,
+            UCID=ucid,
+            Mode=mode,
+            SubMode=sub_mode,
+            SelType=sel_type,
+            Sp3=0,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def make_bfn_packet():
+    """Factory for an inbound ``IS_BFN`` packet (LFS cleared our buttons)."""
+    def _make(sub_t: int = pyinsim.BFN_USER_CLEAR, ucid: int = 0,
+              click_id: int = 0, max_click: int = 0) -> FakePacket:
+        return FakePacket(
+            Size=8,
+            Type=pyinsim.ISP_BFN,
+            ReqI=0,
+            SubT=sub_t,
+            UCID=ucid,
+            ClickID=click_id,
+            ClickMax=max_click,
+            Inst=0,
+        )
+
+    return _make
+
+
+@pytest.fixture
 def make_npl_packet():
     """Factory for an ``IS_NPL`` packet (player joined / left the pits).
 
-    ``ucid=0`` is the local connection, ``ptype`` bit 1 marks an AI driver
-    (``reference/conventions.md`` §5.4).
+    ``ucid=0`` is the local connection, ``ptype`` bit 1 marks an AI driver and
+    bit 2 a remote player (``reference/conventions.md`` §5.4).
+
+    Note the defaults describe **the local driver**: since WP4 the
+    ``VehicleManager`` adopts the first ``ucid=0``/``ptype=0`` player as the
+    own car, so it will not appear in ``manager.vehicles``. Build foreign
+    players with ``ptype=PTYPE_AI`` or ``ucid=1, ptype=PTYPE_REMOTE``.
     """
     def _make(plid: int = 1, pname: bytes = b"Tester", cname: bytes = b"XFG",
               ucid: int = 0, ptype: int = 0, flags: int = 0,

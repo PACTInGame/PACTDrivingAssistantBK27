@@ -48,7 +48,9 @@ def test_make_vehicle_stores_lfs_units_and_metadata(make_vehicle):
     assert vehicle.data.y == metres(-4.0)
     assert vehicle.data.heading == lfs_heading(90.0)
     assert vehicle.data.speed == 50.0          # km/h, as everywhere else
-    assert (vehicle.data.cname, vehicle.data.pname) == (b'FZ5', b'Ben')
+    # WP4: names are decoded once at ingress; the raw bytes stay alongside.
+    assert (vehicle.data.cname, vehicle.data.pname) == ('FZ5', 'Ben')
+    assert (vehicle.data.cname_bytes, vehicle.data.pname_bytes) == (b'FZ5', b'Ben')
 
 
 def test_make_vehicle_defaults_to_zero_acceleration(make_vehicle):
@@ -116,7 +118,8 @@ def test_mci_and_npl_packets_drive_the_vehicle_manager(
 
     other = manager.vehicles[2]
     assert other.data.speed == pytest.approx(0.0, abs=0.02)
-    assert other.data.cname == b'FZ5'  # NPL delivers bytes
+    assert other.data.cname == 'FZ5'          # NPL delivers bytes, WP4 decodes
+    assert other.data.cname_bytes == b'FZ5'
     assert other.data.distance_to_player == pytest.approx(25.0, abs=0.01)
     assert seen.count('vehicles_updated') == 1
 
@@ -150,6 +153,6 @@ def test_sta_packet_drives_the_state_handler(bus, recorder, fake_connector,
     bus.emit('game_state_changed', make_sta_packet(on_track=True, track=b'SO6R'))
     state = seen.last('state_data')
     assert state['on_track'] is True
-    assert state['track'] == b'SO6R'
+    assert state['track'] == 'SO6R'           # WP5 decodes IS_STA.Track
     assert state['text_entry'] is False
     assert state['dialog'] is False

@@ -12,6 +12,18 @@ from pathlib import Path
 from misc.helpers import resolve_path
 
 
+def _calibration_key(cname) -> str:
+    """Schluessel fuer data/gearbox_calibrations.json
+
+    CName kommt seit WP4 dekodiert als str aus dem VehicleManager. bytes
+    werden weiter akzeptiert, damit ein direkter Aufruf mit Rohdaten nicht
+    unter einem anderen Schluessel landet.
+    """
+    if isinstance(cname, (bytes, bytearray)):
+        return bytes(cname).split(b'\x00', 1)[0].decode('latin-1', errors='replace')
+    return "" if cname is None else str(cname)
+
+
 class Gearbox(AssistanceSystem):
     """Automatic Gearbox"""
 
@@ -69,9 +81,7 @@ class Gearbox(AssistanceSystem):
 
     def save_calibrations_for_cars(self, cname):
         """Speichert Kalibrierungen pro Autos"""
-        cname = str(cname)
-        cname = cname[2:-1]
-        print(cname)
+        cname = _calibration_key(cname)
         calibration_file = Path(resolve_path("data", "gearbox_calibrations.json"))
         calibration_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -92,8 +102,7 @@ class Gearbox(AssistanceSystem):
     def load_calibrations_for_cars(self, cname):
         """Lädt Kalibrierungen pro Autos"""
         calibration_file = Path(resolve_path("data", "gearbox_calibrations.json"))
-        cname = str(cname)
-        cname = cname[2:-1]
+        cname = _calibration_key(cname)
 
         if not calibration_file.exists():
             return

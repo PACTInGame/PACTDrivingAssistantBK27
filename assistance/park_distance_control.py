@@ -15,25 +15,32 @@ from vehicles.vehicle import Vehicle
 
 logger = logging.getLogger(__name__)
 
+# CName kommt seit WP4 als str aus dem VehicleManager; bytes werden weiter
+# akzeptiert, damit ein direkter Aufruf mit Rohdaten nicht still auf den
+# Standardwert faellt (reference/conventions.md §4).
+_CAR_SIZES = {
+    'UF1': (2.95, 1.5),
+    'XFG': (3.7, 1.7),
+    'XRG': (4.5, 1.8),
+    'LX4': (3.6, 1.7),
+    'LX6': (3.6, 1.7),
+    'RB4': (4.5, 1.9),
+    'FXO': (4.5, 1.9),
+    'XRT': (4.5, 1.9),
+    'RAC': (4.1, 1.8),
+    'FZ5': (4.6, 2),
+    'UFR': (3.2, 1.6),
+    'XFR': (3.9, 1.9),
+    'FXR': (5.0, 2.1),
+    'XRR': (5.0, 2.1),
+    'FZR': (5.0, 2.1),
+}
+
+
 def get_vehicle_size(cname) -> tuple:
-    car_sizes = {
-        b'UF1': (2.95, 1.5),
-        b'XFG': (3.7, 1.7),
-        b'XRG': (4.5, 1.8),
-        b'LX4': (3.6, 1.7),
-        b'LX6': (3.6, 1.7),
-        b'RB4': (4.5, 1.9),
-        b'FXO': (4.5, 1.9),
-        b'XRT': (4.5, 1.9),
-        b'RAC': (4.1, 1.8),
-        b'FZ5': (4.6, 2),
-        b'UFR': (3.2, 1.6),
-        b'XFR': (3.9, 1.9),
-        b'FXR': (5.0, 2.1),
-        b'XRR': (5.0, 2.1),
-        b'FZR': (5.0, 2.1),
-    }
-    return car_sizes.get(cname, (4.5, 1.8))  # Standardgröße falls Index nicht gefunden wird
+    if isinstance(cname, (bytes, bytearray)):
+        cname = bytes(cname).split(b'\x00', 1)[0].decode('latin-1', errors='replace')
+    return _CAR_SIZES.get(cname, (4.5, 1.8))  # Standardgröße falls Index nicht gefunden wird
 def get_object_size(index: int) -> tuple:
     """Gibt die Größe des Objekts basierend auf dem Index zurück"""
     object_sizes = {

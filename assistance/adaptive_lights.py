@@ -111,8 +111,12 @@ class LightAssists(AssistanceSystem):
                             {'notification': f'{color}{self.translator.get("Strobe", lang)}: {status}'})
 
     def _on_player_name_changed(self, data):
+        # PName kommt seit WP4 dekodiert als str. Das fruehere str(bytes) hat
+        # aus b'[COP] Bob' den Text "b'[COP] Bob'" gemacht - die Rollenpruefung
+        # lief also gegen eine repr-Darstellung.
         player_name = data.get('player_name', '')
-        player_name = str(player_name)
+        if isinstance(player_name, (bytes, bytearray)):
+            player_name = bytes(player_name).decode('latin-1', errors='replace')
         self.player_name = player_name
         if ('[cop]' in player_name.lower() or '[tow]' in player_name.lower() or '[res]' in player_name.lower()) and self.settings.get('cop_assistance'):
             self.is_siren_enabled_role = True

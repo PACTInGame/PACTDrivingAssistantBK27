@@ -66,6 +66,7 @@ class LFSConnector:
             pyinsim.ISP_MCI: self._handle_mci,
             pyinsim.ISP_AXM: self._handle_layout,
             pyinsim.ISP_BFN: self._handle_button_function,
+            pyinsim.ISP_CIM: self._handle_interface_mode,
         }
 
     def connect(self):
@@ -157,6 +158,16 @@ class LFSConnector:
         subtype = getattr(bfn, 'SubT', None)
         if subtype in (pyinsim.BFN_USER_CLEAR, pyinsim.BFN_REQUEST):
             self.event_bus.emit('buttons_cleared', {'sub_type': subtype})
+
+    def _handle_interface_mode(self, insim, cim):
+        """Verarbeitet IS_CIM (Conn Interface Mode)
+
+        Sagt, in welchem LFS-Bildschirm die lokale Verbindung gerade ist
+        (Optionen, Garage samt Untermenues, Auto-/Streckenwahl, SHIFT+U).
+        Braucht kein ISF_*-Flag - LFS schickt es bei jedem Moduswechsel.
+        Nur der StateHandler wertet es aus (reference/ui.md §1.2).
+        """
+        self.event_bus.emit('interface_mode_changed', cim)
 
     def _outgauge_handler(self, outgauge, packet):
         """Handler für OutGauge-Pakete (hochfrequent)"""

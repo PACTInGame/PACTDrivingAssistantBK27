@@ -295,13 +295,13 @@ class AIDriver(AssistanceSystem):
     STATE_STOPPING = 2
 
     # Allowed track configurations for AI traffic
-    ALLOWED_TRACKS = {b'BL1X', b'SO7', b'KY1X'}
+    ALLOWED_TRACKS = {'BL1X', 'SO7', 'KY1X'}
 
     # Track-specific layout hint notifications (matched by track prefix)
     TRACK_LAYOUT_HINTS = {
-        b'BL': '^7Select GP Track X',
-        b'SO': '^7Select City',
-        b'KY': '^7Select Oval X',
+        'BL': '^7Select GP Track X',
+        'SO': '^7Select City',
+        'KY': '^7Select Oval X',
     }
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
@@ -381,7 +381,11 @@ class AIDriver(AssistanceSystem):
 
     def _on_state_data(self, data):
         """Listen for track changes to reset AI traffic."""
+        # state_data['track'] is a decoded str since WP5; bytes stay accepted
+        # so a direct emit with raw packet data cannot silently mismatch.
         track = data.get('track')
+        if isinstance(track, (bytes, bytearray)):
+            track = bytes(track).split(b'\x00', 1)[0].decode('latin-1', errors='replace')
         if track != self.current_track:
             self.current_track = track
             if self.state != self.STATE_INACTIVE:
@@ -400,7 +404,7 @@ class AIDriver(AssistanceSystem):
             return
 
         # --- Validate track data file exists ---
-        trackname = str(self.current_track[:2])[2:4]
+        trackname = (self.current_track or "")[:2]
         file_path = resolve_path("track_data", f"track_data_{trackname}.json")
         if not os.path.isfile(file_path):
             lang = self.settings.get('language')
@@ -456,8 +460,7 @@ class AIDriver(AssistanceSystem):
     def _load_routes(self):
         """Load routes and markers from file (once)."""
         if self.routes is None:
-            print(self.current_track)
-            trackname = str(self.current_track[:2])[2:4] if self.current_track else None
+            trackname = self.current_track[:2] if self.current_track else None
 
             if trackname is not None:
                 roads_list, markers_list = load_routes_from_file(resolve_path("track_data", f"track_data_{trackname}.json"))
@@ -643,17 +646,13 @@ class AIDriver(AssistanceSystem):
         print("[AIDriver] AI traffic fully stopped.")
 
     def _is_local_ai_vehicle(self, vehicle) -> bool:
-        """Check whether a vehicle is a local AI driver by its player name.
+        """Check whether a vehicle is an AI driver.
 
-        LFS default AI driver names contain 'AI' (e.g. 'AI 1', 'AI 2').
-        The pname field can be bytes or str depending on the source.
+        IS_NPL.PType bit 1 is the authoritative AI flag; VehicleManager stores
+        it as ``data.is_ai`` (reference/conventions.md §5.5). The old name
+        substring test adopted every human called MAIK, RAID or CAIN.
         """
-        pname = vehicle.data.pname
-        if isinstance(pname, bytes):
-            return b'AI' in pname
-        if isinstance(pname, str):
-            return 'AI' in pname
-        return False
+        return bool(getattr(vehicle.data, 'is_ai', False))
 
     def _process_active(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Normal active processing: assign routes and drive vehicles."""
