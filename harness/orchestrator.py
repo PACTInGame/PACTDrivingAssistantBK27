@@ -268,14 +268,33 @@ def fahre_szenario(anbindung: LfsAnbindung, szenario: Szenario) -> Dict[str, Any
     trace = input_recorder.lade_trace(szenario.trace)
     markenzeiten: Dict[str, float] = {}
 
+    # Maus-Eigentum: bis zur Marke spielt der Trace Mausereignisse ab (Menue),
+    # ab der Marke ist die Maus die Fahrzeugachse. Enthaelt der Trace die Marke
+    # nicht, bleiben die Achsen durchgehend aktiv.
+    achsen = anbindung.regelkreis.achsen
+    nutze_marke = bool(szenario.maus_bis_marke
+                       and szenario.maus_bis_marke in input_recorder.marken(trace))
+    if szenario.maus_bis_marke and not nutze_marke:
+        print(f"[orchestrator] WARNUNG: Marke '{szenario.maus_bis_marke}' fehlt im Trace — "
+              f"Replay und Regelkreis teilen sich die Maus.")
+    achsen.aktiv = not nutze_marke
+
+    def marke_gesehen(name: str, t: float) -> None:
+        markenzeiten[name] = t
+        if nutze_marke and name == szenario.maus_bis_marke:
+            achsen.aktiv = True
+
     anbindung.regelkreis.setze_regler_zurueck()
     anbindung.regelkreis.leere_abtastungen()
     time.sleep(szenario.vorlauf_s)
 
     t0 = time.monotonic()
-    input_recorder.Abspieler().spiele_ab(
-        trace, maus_bis_marke=szenario.maus_bis_marke,
-        bei_marke=lambda name, t: markenzeiten.__setitem__(name, t), t0=t0)
+    try:
+        input_recorder.Abspieler().spiele_ab(
+            trace, maus_bis_marke=szenario.maus_bis_marke,
+            bei_marke=marke_gesehen, t0=t0)
+    finally:
+        achsen.aktiv = True
     time.sleep(szenario.nachlauf_s)
 
     # Bezugspunkt des Messfensters bestimmen.

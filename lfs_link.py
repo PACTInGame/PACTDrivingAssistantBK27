@@ -358,6 +358,7 @@ class LfsZustand:
     sicht_plid: int = 0
     strecke: str = ""
     verbunden: bool = False
+    sta_empfangen: bool = False
 
     @property
     def im_spiel(self) -> bool:
@@ -373,7 +374,15 @@ class LfsZustand:
 
     @property
     def fahrbereit(self) -> bool:
-        """Nur dann duerfen Achsen geschrieben werden."""
+        """Nur dann duerfen Achsen geschrieben werden.
+
+        Solange noch kein IS_STA angekommen ist, gilt bewusst "fahrbereit":
+        ein stiller Zustand duerfte sonst dazu fuehren, dass waehrend eines
+        Messlaufs ueberhaupt nicht gebremst wird. LFS schickt IS_STA auf
+        Anforderung (TINY_SST) und bei jeder Aenderung.
+        """
+        if not self.sta_empfangen:
+            return True
         return self.verbunden and self.im_spiel and not self.dialog_offen and not self.pausiert
 
 
@@ -476,6 +485,7 @@ class InSimVerbindung:
                 self._sende(self._tiny.pack(1, ISP_TINY, paket[2], TINY_REPLY))
         elif typ == ISP_STA and len(paket) >= self._sta.size:
             f = self._sta.unpack(paket[:self._sta.size])
+            self.zustand.sta_empfangen = True
             self.zustand.flags = f[5]
             self.zustand.kamera = f[6]
             self.zustand.sicht_plid = f[7]
@@ -560,10 +570,16 @@ class MausAchsen:
         y = self.y_mitte + self.y_richtung * laengs * self.y_spanne
         self.benutzer32.SetCursorPos(int(round(x)), int(round(y)))
 
-    def neutral(self) -> None:
-        """Pedale los, Lenkung gerade — wird auf jedem Ausstiegspfad gerufen."""
-        if self.benutzer32:
-            self.benutzer32.SetCursorPos(int(round(self.x_mitte)), int(round(self.y_mitte)))
+    def neutral(self, erzwingen: bool = False) -> None:
+        """Pedale los, Lenkung gerade — wird auf jedem Ausstiegspfad gerufen.
+
+        Solange ``aktiv`` False ist (z. B. waehrend ein Menue-Trace die Maus
+        braucht), wird der Zeiger nicht angefasst; ``erzwingen`` ist der
+        Ausstiegspfad beim Herunterfahren.
+        """
+        if self.benutzer32 is None or (not self.aktiv and not erzwingen):
+            return
+        self.benutzer32.SetCursorPos(int(round(self.x_mitte)), int(round(self.y_mitte)))
 
     def kalibriere(self, telemetrie: "TelemetrieEmpfaenger", schritte: int = 21,
                    wartezeit_s: float = 0.20) -> bool:
@@ -842,7 +858,7 @@ class Regelkreis:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2.0)
-        self.achsen.neutral()
+        self.achsen.neutral(erzwingen=True)
         self.radius.speichere()
         _setze_timeraufloesung_zurueck()
 
