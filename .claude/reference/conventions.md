@@ -45,10 +45,17 @@ angle_of_car = (heading + 16384) / 182.05     # → standard math degrees, 0 = +
 
 For objects: `angle_of_obj = (heading * 360 / 256 + 90) % 360` — same target frame.
 
-**Reverse detection** (used by FCW and adaptive lights):
+**Reverse detection** (used by FCW and adaptive lights) — use
+`misc.helpers.is_reversing(heading, direction)`:
 ```python
-reversing = abs(heading - direction) > 10000
+def heading_difference(heading, direction):   # signed, -32768…+32768
+    return ((heading - direction + 32768) % 65536) - 32768
+reversing = abs(heading_difference(heading, direction)) > 10000   # ≈ 55°
 ```
+**Never subtract two heading words directly.** They are angles on a circle: `heading
+100` and `direction 65500` are 0.75° apart, but the subtraction gives −65400. That read
+as "reversing" and switched FCW off in one whole heading sector.
+`Direction` is only meaningful while the car is moving, so gate on a minimum speed.
 
 **`Vehicle.data.angle_to_player`** (from `update_angle_to_player`): 0…360°, where
 **0/360 = directly ahead** of the observer. `AI_Driver.calculate_angle` /
@@ -73,12 +80,18 @@ silent 65536× error.
 
 Conversions: `km/h → m/s` is `* 0.277778`; `m/s → km/h` is `* 3.6`.
 
-**Acceleration has a hidden timing assumption.** `Vehicle.update_position` computes
-`acceleration = (speed_kmh - previous_speed_kmh) * 2.778`, where `2.778 = 1/(3.6 · 0.1)`.
-It is only correct while the MCI interval is exactly **100 ms**. That interval comes
-from `settings['assistance_refresh_rate']` (`LFSConnector.connect` passes it as
-`Interval`), so changing the refresh rate to 50 or 200 ms silently scales every
-acceleration value by 2×. Fix this by measuring real Δt if you touch it.
+**Acceleration is measured, not assumed.** `Vehicle.update_position` derives
+`acceleration = (Δ km/h / 3.6) / Δt` from the **real** time between two packets
+(`time.monotonic`, or a `timestamp` the caller passes), and smooths it with an
+exponential low-pass whose coefficient is `1 − exp(−Δt/τ)`, `τ = ACCEL_SMOOTHING_TAU_S`
+(0.15 s) — so the filter behaves the same at any packet rate and lags reality by at most
+that τ. Δt outside `MIN_SAMPLE_DT_S…MAX_SAMPLE_DT_S` (0.02…0.5 s) is a gap, not a
+measurement: the filter resets and the value is 0 for that packet.
+
+It used to be `(Δ km/h) * 2.778`, i.e. a hardcoded 100 ms step. The interval actually
+comes from `settings['assistance_refresh_rate']` (`LFSConnector.connect` passes it as
+the MCI `Interval`), so at 50 ms every acceleration was 2× too large and at 200 ms half
+the truth — and acceleration feeds FCW's braking maths and the adaptive brake light.
 
 ## 4. Car identification — and why mods break lookup tables
 
@@ -104,7 +117,7 @@ for every modded car.** Two exist today:
 
 | Table | Location | Fallback | Effect on a mod |
 |---|---|---|---|
-| `get_vehicle_size(cname)` → `(length, width)` | `assistance/park_distance_control.py` | `(4.5, 1.8)` | PDC sensor geometry and FCW's car-length term are wrong for anything that is not a mid-size saloon — a bus or a kart gets saloon dimensions |
+| `get_vehicle_size(cname)` → `(length, width)` | `assistance/park_distance_control.py` | `(4.5, 1.8)` | PDC sensor geometry is wrong for anything that is not a mid-size saloon — a bus or a kart gets saloon dimensions. **FCW no longer trusts it**: `ForwardCollisionWarning._vehicle_length` checks whether the `CName` is one the table really knows and otherwise uses `FALLBACK_VEHICLE_LENGTH_M` (5.0 m, the longest standard car), because for a warning threshold "too short" means "too late" |
 | gearbox calibration | `data/gearbox_calibrations.json` | none | handled correctly: the file is keyed by `CName` and the user calibrates each car once, so mods work by construction |
 
 The gearbox is the model to follow: **derive car-specific parameters at runtime instead
@@ -246,7 +259,7 @@ Do:
 
 Do not:
 - `print()` inside `process()` or a packet handler. (`navigation.py` violates this
-  heavily — dozens of lines per cycle.)
+  heavily — dozens of lines per cycle; it is no longer registered, see `systems.md`.)
 - Allocate polygons per vehicle per cycle without a distance pre-filter
   (`blind_spot_warning.py` currently does).
 - Do file I/O, `winsound`, `time.sleep`, or anything blocking.
@@ -268,7 +281,11 @@ balance, aero. Assistance logic must be defensible in those terms.
 
 - Braking calculations must state their assumed deceleration limit and where it comes
   from. `collision_warning.py` uses closed-form constant-deceleration kinematics with
-  an explicit `SAFETY_BUFFER` and a 0.2 s reaction-time term — follow that pattern.
+  an explicit `SAFETY_BUFFER` and a 0.2 s reaction-time term — follow that pattern. It
+  computes the **required** deceleration and never assumes a grip limit; the warning
+  thresholds are where the comparison against what a road tyre can actually do happens.
+- A "required deceleration" is a magnitude: return 0 when no braking is needed rather
+  than the absolute value of a positive (accelerate-away) result.
 - Distinguish *reachable* deceleration (grip-limited, ~8–11 m/s² on road tyres, less
   in a corner because lateral grip is already consuming the friction circle) from
   *requested* deceleration.

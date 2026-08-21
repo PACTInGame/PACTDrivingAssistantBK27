@@ -195,17 +195,31 @@ Both subscribe to `button_clicked`, so their two booleans can drift apart.
 ## 4. Menus — `ui/menu_system.py`
 
 A flat state machine: `current_menu ∈ {'none','main','driving','parking','system','cop','ai_traffic','keys','await_key'}`.
-Each `open_*` method clears IDs 20–40 and redraws its own button list. Button `40`
-closes (from `main`) or returns to `main`.
+Each menu has **two halves that must agree**:
+
+- `_buttons_<name>()` returns its button list (`buttons_for(name)` is the public
+  accessor), and `open_<name>()` clears IDs 20–40 and draws it;
+- `_actions[<name>]` maps button ID → action (`actions_for(name)`).
+
+`_handle_menu_click` looks the ID up in the active menu's table only, so an ID can
+never be interpreted by a menu that does not draw it, and a new entry cannot silently
+shadow an existing one. IDs `20` (open) and `40` (close/cancel) belong to no menu and
+must not appear in any table. `tests/test_menu.py` checks both directions for every
+menu.
 
 Toggling a setting immediately re-opens the same menu so the `^1`/`^2` colour prefix
-reflects the new state — that is the established pattern, keep it.
+reflects the new state — that is the established pattern, keep it. `_toggle` and
+`_cycle` do exactly that.
+
+The menu reads `language` live through the `MenuSystem.language` property. It used to
+cache the value at construction, so a language change from anywhere but the menu itself
+never reached it.
 
 Adding a menu entry:
-1. Pick a free ID in 21–39 within that menu's `open_*` list.
-2. Handle it in `_handle_menu_click` under the matching `current_menu` branch.
+1. Pick a free ID in 21–39 within that menu's `_buttons_*` list.
+2. Add it to that menu's entry in `_build_actions`.
 3. Add the label to `misc/language.py` for **all 8 languages**.
-4. If it maps to a setting, add the default in `SettingsManager._defaults`.
+4. If it maps to a setting, add the `Setting` entry in `SettingsManager._SCHEMA`.
 
 Key rebinding: menu emits `await_keybinding` → `Keybinder` starts `pynput` listeners in
 a thread → first key/click emits `new_keybinding` → `MenuSystem._rebind_key` persists
@@ -215,26 +229,53 @@ opened the prompt).
 ## 5. Settings — `core/settings_manager.py`
 
 `settings.json` next to the executable/project root (`misc.helpers.resolve_path`).
-`SettingsManager._defaults` is the **authoritative list of every setting key**; a key
-missing there cannot be enabled (this is why `sat_nav` never runs).
+`SettingsManager._SCHEMA` is the **authoritative list of every setting key**, with its
+default, type and allowed range; `_defaults` is derived from it and `known_keys` adds
+the derived keys. A key that is in neither cannot be enabled — that is why `sat_nav`
+never ran.
+
+Rules the rest of the app can rely on:
+
+- **`get(key)` always answers for a known key**: stored value, else schema default. The
+  optional `default` argument only applies to keys the schema does not know — it used
+  to shadow the built-in default, which is why every newly added system stayed off for
+  users with an older `settings.json`.
+- **Defaults are merged in on load**, unknown keys from a newer version are kept, and
+  the file carries a `_version` (`SETTINGS_VERSION`) with a migration hook in
+  `_migrate`.
+- **Values are validated and repaired** against the schema (type, range, allowed
+  values) with a logged warning. A hand-edited `assistance_refresh_rate: 0` is clamped
+  to 50 instead of busy-looping the app. An unreadable file is moved aside as
+  `settings.json.corrupt` rather than being silently overwritten.
+- **Writes are debounced** (`SAVE_DEBOUNCE_S`, 0.5 s) and atomic (tmp + `os.replace`).
+  `set()` therefore no longer does blocking file I/O on the packet thread. `flush()`
+  forces a pending write out; the debounce timer is deliberately non-daemon so the last
+  menu click still lands on disk at shutdown.
+- **`park_distance_control` is derived, not stored.** The single stored value is
+  `park_distance_control_mode` (0 off / 1 visual / 2 visual+audio); the boolean is
+  `mode != 0`, and setting it moves the mode. Two values for one concept could
+  contradict each other, and the shipped default did exactly that: the switch said on
+  while the mode said off, so PDC computed every cycle and displayed nothing.
 
 Groups:
 
 | Group | Keys |
 |---|---|
-| Assistance toggles | `forward_collision_warning`, `blind_spot_warning`, `cross_traffic_warning`, `automatic_gearbox`, `auto_hold`, `adaptive_lights`, `high_beam_assist`, `park_distance_control`, `cop_assistance`, `ai_traffic` |
+| Assistance toggles | `forward_collision_warning`, `blind_spot_warning`, `cross_traffic_warning`, `automatic_gearbox`, `auto_hold`, `adaptive_lights`, `high_beam_assist`, `cop_assistance`, `ai_traffic` (+ `park_distance_control`, **derived**) |
 | Thresholds/modes | `collision_warning_distance` (0 early/1 normal/2 late), `cross_traffic_warning_distance` (same), `automatic_emergency_brake` (0 off/1 warn/2 warn+brake — **inert**), `park_distance_control_mode` (0 off/1 visual/2 visual+audio), `parking_emergency_brake` |
 | Presentation | `language` (`de` default), `unit` (`metric`/`imperial`), `hud_active`, `hud_height`, `hud_width` |
 | Timing | `ui_refresh_rate` (50), `assistance_refresh_rate` (100 — **also becomes the InSim MCI `Interval`**) |
 | Input | `user_handbrake_key`, `user_shift_up_key`, `user_shift_down_key`, `user_clutch_key`, `user_ignition_key`, `user_brake_key`, `user_axis_*`, `vjoy_axis_1`, `own_control_mode` (0 mouse/1 keyboard/2 joystick) |
 
-`get(key, default)` falls back to `_defaults`, so old `settings.json` files keep
-working when you add a key. `set()` writes the whole file **synchronously on every
-call** and prints — fine for menu clicks, never call it from `process()`.
+`own_control_mode` is the **user's** choice. It is no longer overwritten from the
+control mode LFS reports in `IS_NPL` — that value is available separately as
+`vehicle.data.control_mode` and in the `player_name_changed` payload
+(`conventions.md` §5.4).
 
 `assistance_refresh_rate` is read once at startup for both the scheduled task and the
-InSim interval; changing it at runtime has no effect and would also invalidate the
-acceleration calculation (`conventions.md` §3).
+InSim interval; changing it at runtime has no effect on either. It no longer
+invalidates the acceleration calculation — that is measured from the real packet
+interval since WP7 (`conventions.md` §3).
 
 ## 6. Localisation — `misc/language.py`
 

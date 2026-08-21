@@ -53,6 +53,38 @@ def is_spotify_running():
     return False
 
 
+# LFS heading/direction words: 0…65535 for a full turn, 0 = +Y (north),
+# counting anticlockwise (reference/conventions.md §2).
+HEADING_UNITS_PER_TURN = 65536
+HEADING_UNITS_PER_HALF_TURN = HEADING_UNITS_PER_TURN // 2
+
+# Above this difference between where the car points and where it moves, it is
+# going backwards. 10000 units ≈ 55°, the value this project has always used.
+REVERSING_THRESHOLD_UNITS = 10000
+
+
+def heading_difference(heading, direction) -> float:
+    """Signed shortest difference between two LFS heading words.
+
+    Returns -32768…+32768 units. A plain subtraction is wrong at the wrap
+    point: heading 100 and direction 65500 are 0.75° apart, but subtracting
+    gives -65400. That made the reverse detection in FCW and in the adaptive
+    brake light fire for one heading sector while driving perfectly straight.
+    """
+    return ((heading - direction + HEADING_UNITS_PER_HALF_TURN)
+            % HEADING_UNITS_PER_TURN) - HEADING_UNITS_PER_HALF_TURN
+
+
+def is_reversing(heading, direction,
+                 threshold=REVERSING_THRESHOLD_UNITS) -> bool:
+    """Is the car moving backwards?
+
+    ``Direction`` is only meaningful while the car is moving (InSim.txt), so
+    callers must gate this on a minimum speed themselves.
+    """
+    return abs(heading_difference(heading, direction)) > threshold
+
+
 def calc_polygon_points(own_x, own_y, length, angle):
     # Calculate the coordinates of a point at a certain distance and angle from a given point.
     return own_x + length * math.cos(math.radians(angle)), own_y + length * math.sin(math.radians(angle))

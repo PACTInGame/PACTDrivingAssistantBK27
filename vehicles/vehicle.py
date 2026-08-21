@@ -1,6 +1,8 @@
 import copy
 import math
+import time
 from dataclasses import dataclass
+from typing import Optional
 
 from lfs.text_encoding import decode_button_text
 
@@ -9,6 +11,27 @@ from lfs.text_encoding import decode_button_text
 PTYPE_FEMALE = 1
 PTYPE_AI = 2
 PTYPE_REMOTE = 4
+
+# ─── Beschleunigung aus zwei MCI-Paketen ──────────────────────────────
+#
+# Der MCI-Takt ist ``settings['assistance_refresh_rate']`` (50…200 ms), nicht
+# feste 100 ms - die alte Formel ``(delta km/h) * 2.778`` war deshalb bei jeder
+# anderen Einstellung um genau diesen Faktor daneben (known-issues #13).
+# Gerechnet wird jetzt mit der wirklich verstrichenen Zeit.
+#
+# Ausreisser: unter MIN_SAMPLE_DT_S ist die Zeitmessung selbst das groesste
+# Glied in der Rechnung, ueber MAX_SAMPLE_DT_S liegt eine Luecke (Pause,
+# Boxengasse, Streckenwechsel, verlorene Pakete). Beides liefert keine
+# belastbare Ableitung, also faengt der Filter dort neu an.
+MIN_SAMPLE_DT_S = 0.02
+MAX_SAMPLE_DT_S = 0.5
+
+# Die Ankunftszeit der Pakete zittert um einige Millisekunden; bei 100 ms Takt
+# sind das bis zu ~10 % Fehler pro Einzelmessung, mit wechselndem Vorzeichen.
+# Ein Tiefpass mit 0.15 s Zeitkonstante mittelt das weg und haengt der Realitaet
+# dafuer um hoechstens diese 0.15 s hinterher - in derselben Groessenordnung wie
+# der Reaktionszeit-Puffer der Kollisionswarnung.
+ACCEL_SMOOTHING_TAU_S = 0.15
 
 
 def decode_car_name(value) -> str:
@@ -94,6 +117,11 @@ class Vehicle:
         self._staged = None
         self.last_update = 0
         self.previous_speed = 0.0
+        # Zeitpunkt des letzten Positionsupdates (time.monotonic) und der
+        # gefilterte Beschleunigungswert. Beide gehoeren zum Fahrzeug, nicht
+        # zum Frame-Schnappschuss - sie ueberdauern begin_frame/commit_frame.
+        self.previous_update_time: Optional[float] = None
+        self._acceleration: Optional[float] = None
         self.current_route = None
 
     # ─── Frame-Handling ───────────────────────────────────────────────
@@ -125,19 +153,46 @@ class Vehicle:
     # ─── Updates ──────────────────────────────────────────────────────
 
     def update_position(self, x: float, y: float, z: float, heading: float,
-                        direction: float, speed: float):
-        """Aktualisiert Position und Bewegungsdaten"""
+                        direction: float, speed: float,
+                        timestamp: Optional[float] = None):
+        """Aktualisiert Position und Bewegungsdaten
+
+        ``speed`` in km/h. ``timestamp`` ist die Ankunftszeit des Pakets auf
+        einer monotonen Uhr; ohne Angabe wird sie hier genommen. Aufrufer, die
+        eine ganze MCI-Runde verarbeiten, sollten fuer alle Fahrzeuge dieselbe
+        Zeit uebergeben.
+
+        Kosten pro Fahrzeug und Zyklus: ein ``time.monotonic()`` und ein
+        ``math.exp`` - zusammen unter 0.2 µs, also unter 10 µs bei 40 Autos.
+        """
         target = self._target
         target.x = x
         target.y = y
         target.z = z
         target.heading = heading
         target.direction = direction
-
-        # Berechne Beschleunigung
         target.speed = speed
-        target.acceleration = (speed - self.previous_speed) * 2.778  # Umrechnung von km/h auf m/s²
+
+        now = time.monotonic() if timestamp is None else timestamp
+        previous = self.previous_update_time
+        dt = None if previous is None else now - previous
+        if dt is None or dt < MIN_SAMPLE_DT_S or dt > MAX_SAMPLE_DT_S:
+            # Kein verwertbarer Abstand: Filter zuruecksetzen statt raten.
+            self._acceleration = None
+            target.acceleration = 0.0
+        else:
+            raw = (speed - self.previous_speed) / 3.6 / dt   # km/h -> m/s²
+            if self._acceleration is None:
+                self._acceleration = raw
+            else:
+                # Exponentieller Tiefpass, zeitschrittrichtig:
+                # alpha = 1 - exp(-dt/tau) haengt nicht von der Paketrate ab.
+                alpha = 1.0 - math.exp(-dt / ACCEL_SMOOTHING_TAU_S)
+                self._acceleration += alpha * (raw - self._acceleration)
+            target.acceleration = self._acceleration
+
         self.previous_speed = speed
+        self.previous_update_time = now
 
     def update_distance_to_player(self, player_x: float, player_y: float, player_z: float):
         """Berechnet Distanz zum Spieler"""

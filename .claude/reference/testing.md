@@ -45,7 +45,9 @@ tests/
   test_platform_shim.py    accessor caching, null-module recording, real-module passthrough
   test_helpers.py          calc_polygon_points / point_in_rectangle, rotated + degenerate
   test_language.py         8 languages complete, fallbacks, code literals vs. table, LFS encoding
-  test_settings.py         SettingsManager storage; every system name has a settings key
+  test_settings.py         SettingsManager storage, defaults merge, migration, schema
+                           validation, debounced/atomic writes; every system name has
+                           a settings key
   test_fixtures.py         the factories themselves, incl. a VehicleManager/StateHandler round trip
   test_error_isolation.py  EventBus / ThreadManager / AssistanceManager error isolation,
                            the ErrorThrottle rate limiter and the task watchdog
@@ -55,6 +57,11 @@ tests/
                            modes, own-PLID identity and the PType AI flag
   test_screen_context.py   IS_STA/IS_CIM screen contexts, main-menu suppression, SHIFT+B
                            repaint, HUD clamp, warning blink, notification queue
+  test_menu.py             every menu's button list checked against its action table,
+                           the settings the menu writes, live language, PDC mode
+  test_collision_warning.py  FCW physics with hand-computed expectations, the detection
+                           gates, warning-level hysteresis, and Vehicle acceleration
+                           from the real packet interval
 ```
 
 ### Fixtures (`tests/conftest.py`)
@@ -65,6 +72,7 @@ tests/
 | `recorder` | `recorder('a', 'b')` → `EventRecorder` with `.payloads(e)`, `.last(e)`, `.count(e)` |
 | `settings` / `make_settings(**overrides)` | `SettingsManager` on a `tmp_path` file |
 | `make_vehicle(...)` / `make_own_vehicle(...)` | `Vehicle` / `OwnVehicle` from **metres, degrees, km/h, m/s²** |
+| `relate_to_own(own, *vehicles)` | fills in `distance_to_player` / `angle_to_player`, as `VehicleManager` does per MCI frame — needed by anything reading those two fields (FCW's gates, BSW, CTW) |
 | `make_compcar`, `make_mci_packet`, `make_npl_packet`, `make_pll_packet`, `make_sta_packet`, `make_outgauge_packet`, `make_cim_packet`, `make_bfn_packet` | namespace packets with the real field names |
 | `make_mci_frame(cars, chunk=16, mark=True)` | splits cars into MCI packets and sets `CCI_FIRST`/`CCI_LAST` the way LFS does; `mark=False` reproduces a stream that sets neither |
 | `fake_insim`, `fake_connector` | recording stand-ins for the InSim socket and `LFSConnector`. `fake_connector` also records the button path: `.buttons`, `.deletes`, `.drawn_ids()`, `.last_button(id)`, `.reset()` |
@@ -86,6 +94,9 @@ Two traps in the packet factories:
   `ucid=1, ptype=PTYPE_REMOTE`.
 - `make_sta_packet(base_flags=…)` is the only way to build the main-menu / server-list
   signature, which sets neither `ISS_GAME` nor `ISS_FRONT_END`.
+- The vehicle factories build **one car in isolation**: `distance_to_player` and
+  `angle_to_player` stay 0 until `relate_to_own` is called. A distance of 0 reads as
+  "already touching" to FCW.
 
 Anything driven by a wall clock (`UIManager`'s blink phase, the notification timer)
 needs a fake clock — `tests/test_screen_context.py` monkeypatches
@@ -99,7 +110,6 @@ marker then.
 
 | Test | Waiting for |
 |---|---|
-| `test_settings.py::test_every_system_name_is_a_settings_key` | `sat_nav` has no settings key (`known-issues.md` #18) |
 | `test_helpers.py` degenerate-rectangle cases | `point_in_rectangle` judges by cross-product sign only, so a zero-area rectangle swallows its whole line |
 
 ## Guiding constraint
@@ -119,15 +129,16 @@ No mocks needed, no LFS. These are already pure or nearly so:
 | `vehicles/vehicle.py` — `update_distance_to_player`, `update_angle_to_player` | metre conversion, angle 0 = straight ahead, wraparound at 0/360 |
 | `assistance/AI_Driver.py` — `calculate_angle`, `calculate_angle_meters`, `analyze_upcoming_track`, `calculate_feedforward_steering`, `calculate_feedforward_throttle_brake`, `get_next_points_for_distance` | straight line → curvature 0; known arc → known curvature; clamping at ±45°; wraparound on closed loops |
 | `assistance/cross_traffic_warning.py` — `_direction_vector`, `_find_intersection`, `_compute_side` | perpendicular paths intersect at the expected point; parallel → `None`; intersection behind → `None`; **left/right sign convention** (this is the one the wrong comment threatens) |
-| `assistance/collision_warning.py` — `_calculate_needed_braking` | closing on a stationary car at known distance/speed → the physically correct deceleration; slower-and-not-braking lead → 0; inside the buffer → panic value |
+| `assistance/collision_warning.py` — `_calculate_needed_braking` | *(done — `test_collision_warning.py`)* |
 | `misc/spacial_hash_grid.py` — `point_in_polygon`, `polygon_overlap`, insert/query/remove | overlapping and touching polygons; objects spanning several cells |
 | `misc/language.py` | *(done — `test_language.py`)* |
 | `core/settings_manager.py` | *(done — `test_settings.py`)* |
 | `misc/helpers.py` | *(done — `test_helpers.py`)* |
 
 A cheap high-value test — every `AssistanceSystem` name resolves to a
-`SettingsManager._defaults` key — is `test_settings.py::test_every_system_name_is_a_settings_key`.
-It catches `sat_nav` (`known-issues.md` #18) and is `xfail` until that is fixed.
+`SettingsManager.known_keys` entry — is
+`test_settings.py::test_every_system_name_is_a_settings_key`. It caught `sat_nav`, which
+is no longer registered; keep it green when adding a system.
 
 ## Layer 2 — systems against a real EventBus
 
@@ -136,12 +147,13 @@ It catches `sat_nav` (`known-issues.md` #18) and is `xfail` until that is fixed.
 assert the emitted events.
 
 ```python
-def test_fcw_warns_on_stationary_car_ahead(bus, recorder, settings,
+def test_fcw_warns_on_stationary_car_ahead(bus, recorder, settings, relate_to_own,
                                            make_own_vehicle, make_vehicle):
     seen = recorder('collision_warning_changed')
     fcw = ForwardCollisionWarning(bus, settings)
     own   = make_own_vehicle(speed=80, x=0, y=0, heading=0)   # km/h, metres, degrees
     other = make_vehicle(plid=2, speed=0, x=0, y=30)
+    relate_to_own(own, other)                                 # distance and bearing
     fcw.process(own, {2: other})
     assert seen.last('collision_warning_changed')['level'] >= 2
 ```

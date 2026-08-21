@@ -31,7 +31,7 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `state_data` | see below | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `AutoHold`, `LightAssists`, `ChatCommandHandler`, `AIDriver` |
 | `vehicles_updated` | `Dict[plid, Vehicle]` (excludes own car) — a **fresh dict per MCI frame** | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
 | `own_vehicle_updated` | `OwnVehicle` | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
-| `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem`, `ControllerEmulator`\* |
+| `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem` (logs only since WP6), `ControllerEmulator`\* |
 | `player_data_updated` | `Dict[plid, {PName, CName, PNameBytes, CNameBytes, UCID, PType, Flags, IsAI, IsRemote, ControlMode}]` | `VehicleManager` | *(none — dead)* |
 | `assistance_results` | `{system_key: result_dict}` | `AssistanceManager` | *(none — dead)* |
 
@@ -124,8 +124,11 @@ Notifications are queued in `UIManager.notifications` and displayed one at a tim
 
 | Event | Payload | State |
 |---|---|---|
-| `dist_debug` | `{distance: float}` | emitted per vehicle per cycle by FCW; subscriber in `UIManager` is commented out — **live emission in the hot path** |
 | `decel_debug` | `{deceleration: float}` | subscriber commented out, never emitted |
+
+`dist_debug` is gone. FCW emitted it per detected vehicle per cycle while its only
+subscriber (`UIManager._dist_debug`) was commented out; the handler is still there if
+the readout on button 101 is ever wanted back.
 
 \* `ControllerEmulator` is not instantiated — it is commented out in
 `AssistanceManager._init_systems`. Events only it consumes are currently inert.

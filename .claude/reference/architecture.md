@@ -213,10 +213,12 @@ systems when `on_track` is true.
 
 1. Create `assistance/your_system.py`, subclass `AssistanceSystem`.
 2. Call `super().__init__("your_key", event_bus, settings)` where **`"your_key"` must
-   exactly match a key in `SettingsManager._defaults`** — `is_enabled()` does
-   `settings.get(self.name.lower(), False)`. A missing key means the system never
-   runs (this is how `sat_nav` ended up permanently disabled).
-3. Add the default to `core/settings_manager.py`.
+   exactly match one of `SettingsManager.known_keys`** — `is_enabled()` does
+   `settings.get(self.name.lower(), False)`, and that explicit `False` is what an
+   unknown key gets. A missing key means the system never runs (this is how `sat_nav`
+   ended up permanently disabled; it is no longer registered at all).
+3. Add a `Setting(...)` entry to `_SCHEMA` in `core/settings_manager.py`.
+   `tests/test_settings.py` fails if a registered system has no key.
 4. Register it in `AssistanceManager._init_systems`.
 5. Emit results as events; never call the UI directly. Document the event in
    `reference/events.md`.

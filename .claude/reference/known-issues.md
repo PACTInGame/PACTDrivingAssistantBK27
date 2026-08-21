@@ -47,9 +47,9 @@ per `process()` call, or give `OwnVehicle` the same swap treatment.
 
 **#5 — `navigation.py` is unusable as written.** Dozens of `print()` calls per 100 ms
 cycle (the only `print()` calls left in a hot path), and `_get_closest_road` walks every segment of every road each cycle. It is
-currently inert because `sat_nav` has no settings key and `sat_nav_active` is `False` —
-both the logging and the nearest-road lookup (spatial index or last-road-first search)
-must be fixed before it can be switched on.
+currently inert because the system is not registered in `AssistanceManager._init_systems`
+(and `sat_nav_active` is `False`) — both the logging and the nearest-road lookup
+(spatial index or last-road-first search) must be fixed before it can be switched on.
 
 **#7 — Blind spot warning allocates per vehicle per cycle.** `_create_rectangles_for_blindspot_warning`
 builds a `shapely.Polygon` for **every** car on track, with no distance pre-filter,
@@ -62,15 +62,17 @@ Cache the previous index and search a local window around it.
 
 **#14 — PDC beep spawns a thread per beep** running a blocking `winsound.Beep`.
 
-**#15 — FCW emits `dist_debug` per detected vehicle per cycle** even though its
-subscriber is commented out.
-
 ## Correctness
 
-**#13 — `Vehicle.acceleration` hardcodes a 100 ms timestep.** `(Δ km/h) * 2.778`
-assumes exactly 0.1 s between MCI packets. Changing `assistance_refresh_rate` silently
-scales every acceleration by the wrong factor — and acceleration feeds FCW's braking
-maths and the adaptive brake lights. See `conventions.md` §3.
+**#35 — FCW's detection quad is self-intersecting, so it is skewed.** The corner order
+`[far+1°, near−20°, near+20°, far−1°]` makes edges `p1p2` and `p3p4` cross, and
+`point_in_rectangle` covers the union of triangles `(p1,p2,p3)` and `(p1,p3,p4)` —
+not the intended wedge. Measured at 50 m with the car pointing north, the covered
+sector is about −0.5°…+1.5° around the axis instead of ±1°: a car half a metre to the
+right at that range is missed. Only the ordering is wrong, the four points are right.
+Changing it changes which cars FCW detects, so it is a product decision, not a silent
+fix. `tests/test_collision_warning.py` pins the current behaviour by placing test
+vehicles on the axis.
 
 **#16 — Misleading comment in `cross_traffic_warning._compute_side`.** It claims LFS's
 Y axis grows south and headings are clockwise. Per `InSim.txt` the system is
@@ -81,9 +83,6 @@ and it will mislead the next person doing geometry work.
 their own `siren_active` / `strobe_active` booleans, both driven by the same
 `button_clicked` event. They can desynchronise (e.g. when the chat command toggles only
 one of them). One owner should hold the state and publish it.
-
-**#18 — `sat_nav` has no settings key**, so `NavigationSystem.is_enabled()` is always
-`False`. Either add the key or remove the system from `_init_systems`.
 
 **#34 — `point_in_rectangle` judges by cross-product sign only.** For a proper rectangle
 it is correct, but a **degenerate** one (zero width or all four corners equal) contains
@@ -119,8 +118,11 @@ product decision, not a bug fix. `ui.md` §1.3.
 **#28 — Vehicle mods fall through hardcoded car tables.** `get_vehicle_size()` returns
 `(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary `CName`
 values. (`CName` is a decoded `str` since WP4 and the lookup accepts both, so the
-fall-through is now the only remaining half of this.) PDC sensor geometry and FCW's car-length term are then wrong for every modded
-car. `conventions.md` §4 has the preferred alternatives.
+fall-through is now the only remaining half of this.) PDC sensor geometry is then wrong
+for every modded car. FCW no longer relies on it — it detects the unknown name and uses
+a conservative 5.0 m length instead (WP7) — but it has to reach into the table's private
+`_CAR_SIZES` to do so; a public `is_known_car(cname)` next to `get_vehicle_size()` would
+be the cleaner home for that. `conventions.md` §4 has the preferred alternatives.
 
 **#29 — OutGauge stops in any external camera view, freezing all assistance.** LFS only
 streams OutGauge from an internal view while on track. Switching to chase/heli/TV camera,
@@ -167,4 +169,6 @@ some branches, never read; the method returns a literal.
   commented out in `AssistanceManager._init_systems`; the
   `automatic_emergency_brake` setting is inert. The whole intervention path needs
   redesign before it comes back.
-- **`NavigationSystem`** — see #5 / #18.
+- **`NavigationSystem`** — not registered in `AssistanceManager._init_systems` since
+  WP6. Needs the `print()` calls and the per-cycle nearest-road scan fixed (#5) before
+  it can be wired up again.

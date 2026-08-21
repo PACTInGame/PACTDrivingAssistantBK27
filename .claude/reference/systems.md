@@ -6,21 +6,24 @@ calls every enabled system once per cycle (default 100 ms) — but **only while
 `on_track` is true and `own_vehicle` exists**.
 
 `is_enabled()` is `self.enabled and settings.get(self.name.lower(), False)`, so the
-constructor's `name` argument **must match a key in `SettingsManager._defaults`**.
+constructor's `name` argument **must match a key the settings know** —
+`SettingsManager.known_keys`, i.e. `_defaults` plus the derived keys. The explicit
+`False` there only takes effect for a name the settings do *not* know; for a known key
+`get()` always returns the stored value or the schema default (`ui.md` §5).
 
 | Key in `manager.py` | Class | `name` / settings key |
 |---|---|---|
 | `fcw` | `ForwardCollisionWarning` | `forward_collision_warning` |
 | `bsw` | `BlindSpotWarning` | `blind_spot_warning` |
 | `ctw` | `CrossTrafficWarning` | `cross_traffic_warning` |
-| `pdc` | `ParkDistanceControl` | `park_distance_control` |
+| `pdc` | `ParkDistanceControl` | `park_distance_control` — derived from `park_distance_control_mode` |
 | `autoh` | `AutoHold` | `auto_hold` |
 | `lighta` | `LightAssists` | `adaptive_lights` |
 | `gearbox` | `Gearbox` | `automatic_gearbox` |
-| `sat_nav` | `NavigationSystem` | `sat_nav` — **no such settings key → never runs** |
 | `ai_traffic` | `AIDriver` | `ai_traffic` |
 | — | `ChatCommandHandler` | event-driven, no `process()` |
 | *(commented out)* | `ControllerEmulator` | `controller_emulator` |
+| *(not registered)* | `NavigationSystem` | would need a `sat_nav` key — see below |
 
 ---
 
@@ -28,26 +31,40 @@ constructor's `name` argument **must match a key in `SettingsManager._defaults`*
 
 Detects cars in a forward wedge and computes the deceleration required to avoid them.
 
-- **Detection:** builds a rotated quad ~85 m long, ±20° wide, from the car's heading
-  (`calc_polygon_points` + `point_in_rectangle`). Suppressed below 10 km/h and while
-  reversing.
+- **Detection:** builds a rotated quad ~85 m long, ±20° wide near the car and ±1° at
+  its far end, from the car's heading (`calc_polygon_points` + `point_in_rectangle`).
+  Two cheap gates run first, both on values `VehicleManager` already computed per
+  frame, so nothing pays for a polygon test it cannot pass: `distance_to_player` beyond
+  the wedge length, and `angle_to_player` outside ±21°.
+  Suppressed below 10 km/h and while reversing — reverse detection is
+  `misc.helpers.is_reversing`, a **signed modular** heading/direction difference.
+  A plain subtraction disabled the system in one heading sector.
 - **Physics:** `_calculate_needed_braking` returns the required deceleration in m/s²
   using closed-form constant-acceleration kinematics, accounting for the lead car's own
   acceleration. It picks between two cases:
   - *dynamic* — we catch them while they still move: `a_req = a_lead − Δv²/(2d)`
   - *static* — they stop first: treat the stopping point as a wall,
     `a_req = −v² / (2·(d + d_lead_stop))`
-  `d` subtracts both car lengths, a 0.5 m `SAFETY_BUFFER`, and a 0.2 s reaction-time
-  term. `d ≤ 0.01` returns 20 m/s² (panic).
+  `d` subtracts the mean car length, a 0.5 m `SAFETY_BUFFER`, and a 0.2 s reaction-time
+  term (the last one only while actually closing). `d ≤ 0.01` returns 20 m/s² (panic).
+  The result is a **non-negative required deceleration**: 0 means "no braking needed".
+  It used to be `abs(req_accel)`, so a situation that allowed us to accelerate came back
+  as a large braking demand.
+  Car lengths come from `park_distance_control.get_vehicle_size`, but only for the ~15
+  car codes that table really knows; an unknown `CName` (every vehicle mod) gets the
+  longest standard car, 5.0 m, so the warning is early rather than late
+  (`conventions.md` §4).
 - **Levels:** required deceleration is compared against a three-element threshold list
   selected by `collision_warning_distance` (0 early / 1 normal / 2 late) —
-  `[7.5, 3.0, 2.0]`, `[7.5, 5.0, 2.5]`, `[7.5, 6.5, 5.5]`. Levels are sticky: once at
-  level 2/3, any positive requirement holds it there.
+  `[7.5, 3.0, 2.0]`, `[7.5, 5.0, 2.5]`, `[7.5, 6.5, 5.5]` (level 3, 2, 1). Level 1 also
+  requires that we are not already braking hard enough by ourselves.
+  **Hysteresis, not a latch:** a level rises at its threshold and falls again once the
+  demand drops below `HYSTERESIS_RELEASE` (0.8) × that threshold, one step at a time.
+  Before WP7 any demand above 0 held level 3 indefinitely.
 - **Output:** `collision_warning_changed` on change; `needed_deceleration_update` every
   cycle (0 unless level 3).
 - **Automatic braking is deliberately disabled** (`# TODO no automatic braking for now`)
   and must not be re-enabled unasked.
-- Emits `dist_debug` per detected vehicle per cycle — hot-path noise.
 
 ## Blind Spot Warning — `blind_spot_warning.py`
 
@@ -152,10 +169,12 @@ Dijkstra route guidance over the junction graph in `track_data/*.json`, with
 turn-by-turn maneuver detection via cross/dot product of the incoming and outgoing road
 vectors, notifying 150 m before a junction.
 
-**Currently dead:** `sat_nav` is not in the settings defaults, and `sat_nav_active`
-defaults to `False`. It also prints dozens of debug lines per cycle and does an
-O(all road segments) nearest-road scan every cycle — it needs both cleanups before it
-can be enabled. See `known-issues.md` #5.
+**Not wired up:** since WP6 `NavigationSystem` is no longer constructed in
+`AssistanceManager._init_systems`. It had no `sat_nav` settings key, so it could never
+be enabled, and every cycle still paid for its `is_enabled()` call and its two event
+subscriptions. Before it can come back it needs the `print()` calls out of the hot path
+and an index for the nearest-road scan (`known-issues.md` #5); adding the settings key
+alone would only make a broken system reachable.
 
 ## Chat commands — `chat_commands.py`
 

@@ -10,7 +10,6 @@ from assistance.chat_commands import ChatCommandHandler
 from assistance.collision_warning import ForwardCollisionWarning
 from assistance.cross_traffic_warning import CrossTrafficWarning
 from assistance.gearbox import Gearbox
-from assistance.navigation import NavigationSystem
 from assistance.park_distance_control import ParkDistanceControl
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
@@ -58,10 +57,15 @@ class AssistanceManager:
         self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
         # This will be used again once all control inputs are supported
         #self.systems['controller_emulator'] = ControllerEmulator(self.event_bus, self.settings)
-        self.systems['sat_nav'] = NavigationSystem(self.event_bus, self.settings)
         self.systems['gearbox'] = Gearbox(self.event_bus, self.settings)
         self.systems['ctw'] = CrossTrafficWarning(self.event_bus, self.settings)
         self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
+        # NavigationSystem ist bewusst *nicht* registriert: es gibt keinen
+        # Einstellungsschluessel 'sat_nav', also lief es nie - es kostete nur
+        # zwei Event-Abonnements und einen is_enabled()-Aufruf pro Zyklus
+        # (known-issues #18). Ueber seine Zukunft entscheidet WP10; bevor es
+        # zurueckkommt, muessen die print()-Aufrufe und die O(n)-Suche pro
+        # Zyklus raus (known-issues #5).
 
         # Chat-Command Handler (event-basiert, kein process()-System)
         self.chat_commands = ChatCommandHandler(self.event_bus, self.settings)

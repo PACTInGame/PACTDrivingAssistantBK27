@@ -1,3 +1,10 @@
+# The authoritative list of language codes. ``SettingsManager`` validates the
+# ``language`` setting against it, so it has to live at module level -- importing
+# LanguageManager just to read it would build the whole translation table.
+SUPPORTED_LANGUAGES = ('en', 'de', 'it', 'fr', 'tr', 'no', 'dk', 'se')
+DEFAULT_LANGUAGE = 'en'
+
+
 class LanguageManager:
     """
     A language management class that handles translations for multiple languages.
@@ -6,8 +13,8 @@ class LanguageManager:
 
     def __init__(self):
         """Initialize the language manager with default translations."""
-        self.supported_languages = ['en', 'de', 'it', 'fr', 'tr', 'no', 'dk', 'se']
-        self.default_language = 'en'
+        self.supported_languages = list(SUPPORTED_LANGUAGES)
+        self.default_language = DEFAULT_LANGUAGE
 
         # Translation dictionary - organized by English key, then by language code
         self.translations = {

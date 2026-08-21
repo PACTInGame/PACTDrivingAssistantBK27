@@ -33,11 +33,12 @@ DEG_TO_LFS_HEADING = 65536.0 / 360.0    # 182.044 heading units per degree
 KMH_TO_MCI_SPEED = 91.02                # CompCar.Speed word per km/h
 KMH_TO_MS = 1.0 / 3.6
 
-# Vehicle.update_position derives acceleration as
-#   (v_kmh - v_prev_kmh) * 2.778,  2.778 = 1 / (3.6 * 0.1 s)
-# and is therefore only correct at a 100 ms MCI interval. The factories use the
-# same constant so a requested acceleration comes back out unchanged.
-KMH_PER_CYCLE_TO_MS2 = 2.778
+# Vehicle.update_position derives acceleration from the **real** time between
+# two packets (WP7): a = (delta km/h / 3.6) / dt, smoothed by an exponential
+# low-pass whose first sample is taken unfiltered. The factories therefore fake
+# exactly one preceding packet NOMINAL_DT_S earlier, which makes a requested
+# acceleration come back out unchanged.
+NOMINAL_DT_S = 0.1
 
 
 def metres(value: float) -> int:
@@ -137,12 +138,17 @@ def settings(make_settings) -> SettingsManager:
 def _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration):
     if direction is None:
         direction = heading
-    # update_position recomputes acceleration from previous_speed, so seed it.
-    vehicle.previous_speed = speed - acceleration / KMH_PER_CYCLE_TO_MS2
+    # update_position derives the acceleration from the previous sample, so
+    # fake one: same position, NOMINAL_DT_S earlier, at the speed the car must
+    # have had. The filter is empty at that point, so the first derived value
+    # is taken unfiltered and comes out exactly as requested.
+    vehicle.previous_speed = speed - acceleration * 3.6 * NOMINAL_DT_S
+    vehicle.previous_update_time = 0.0
     vehicle.update_position(
         metres(x), metres(y), metres(z),
         lfs_heading(heading), lfs_heading(direction),
         speed,
+        timestamp=NOMINAL_DT_S,
     )
 
 
@@ -199,6 +205,25 @@ def make_own_vehicle(make_outgauge_packet):
         return own
 
     return _make
+
+
+@pytest.fixture
+def relate_to_own():
+    """Fills in ``distance_to_player`` / ``angle_to_player``, as LFS data would.
+
+    ``VehicleManager._apply_frame`` runs these two updates for every car of an
+    MCI frame once the own car has been committed. The factories above build a
+    single vehicle in isolation, so a test that exercises code reading those
+    two fields -- FCW's distance gate, BSW, CTW -- has to do the same.
+    """
+    def _relate(own, *vehicles):
+        own_data = own.data
+        for vehicle in vehicles:
+            vehicle.update_distance_to_player(own_data.x, own_data.y, own_data.z)
+            vehicle.update_angle_to_player(own_data.x, own_data.y, own_data.heading)
+        return vehicles[0] if len(vehicles) == 1 else vehicles
+
+    return _relate
 
 
 # ─── Fake packets ────────────────────────────────────────────────────────────

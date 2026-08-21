@@ -733,3 +733,68 @@ rules are covered by `tests/test_vehicle_model.py`. What only LFS can prove:
 - **Notification burst**: run the gearbox calibration, which emits several messages in
   a row. They must appear one at a time, and the queue caps at 8 — with more than that
   the oldest are dropped and logged. Leaving the track must clear the queue.
+
+### WP6 — settings, migration and menu consistency
+
+`tests/test_settings.py` and `tests/test_menu.py` cover the storage, the schema and the
+menu tables, but only the game shows the menu itself and only a real installation has an
+old `settings.json`.
+
+- **An existing installation keeps its settings**: start the app with the `settings.json`
+  you already have. Every switch in the menu must show the state it showed before, the
+  file must gain the missing keys and a `"_version": 1`, and no key you had must be gone
+  — except `park_distance_control`, which is now derived from
+  `park_distance_control_mode`.
+- **PDC out of the box**: delete `settings.json`, start, drive slowly towards a wall.
+  The PDC column must now actually appear (default mode 1 = visual). Before, the menu
+  said PDC was on and nothing was ever drawn. Decide whether the shipped default should
+  be 2 (visual + audio) instead.
+- **The PDC menu**: switch PDC off and on again — the mode (Visual / Visual & Audio)
+  must come back as you left it, and switching it off must make the PDC column vanish
+  immediately, not at the next state change.
+- **A hand-broken settings file**: set `"assistance_refresh_rate": 0` by hand. The app
+  must start, log a clamp warning, and run at 50 ms — not freeze. Put `{ garbage` in the
+  file: the app must start on defaults and leave the old content in
+  `settings.json.corrupt`.
+- **Menu clicks no longer write per click**: click the HUD arrows quickly ten times.
+  There must be no stutter in LFS, and about half a second after the last click the file
+  must hold the final position. Close the app right after a click — the click must still
+  be in the file.
+- **Language**: switch the language in the menu; every label must change immediately, as
+  before. The menu now reads the setting live, so if a language is ever changed from
+  somewhere else it must follow without reopening the menu.
+- **Own control mode**: set your input device in LFS, then change your player name or
+  car. `own_control_mode` in `settings.json` must **not** change any more.
+- **Nothing lost with `sat_nav` gone**: `NavigationSystem` is no longer constructed. It
+  never ran (no settings key), so nothing should look different — confirm no menu entry,
+  notification or HUD element disappeared.
+
+### WP7 — forward collision warning
+
+`tests/test_collision_warning.py` computes every expectation by hand, but the wedge, the
+warning levels and the acceleration input only meet reality in the game.
+
+- **The heading sector that used to be dead**: drive a long straight and note the
+  compass direction where FCW used to go quiet (heading near 0/65535, i.e. due north on
+  most tracks). Approach a stopped car on that heading — the warning must now come
+  exactly as it does on any other heading.
+- **Reversing still suppresses the warning**: reverse towards a car. No forward
+  collision warning may appear.
+- **No warning when the car ahead pulls away**: follow a car that accelerates harder
+  than you. There must be no warning at all — that case used to be able to raise one.
+- **The warning falls again**: approach a slower car until level 3 (red), then lift off
+  and let the gap open. The warning must step down 3 → 2 → 1 → off as the situation
+  relaxes. Before, it stayed at 3 until the required braking hit exactly zero.
+- **Refresh rate does not change the warning any more**: set
+  `assistance_refresh_rate` to 50 and then to 200 and repeat the same approach at the
+  same speed. The warning must come at roughly the same distance both times. Before, the
+  acceleration input was scaled by 2× in each direction.
+- **A modded car ahead**: approach a vehicle mod. The warning must come slightly earlier
+  than for a standard car of the same length, never later — its length falls back to
+  5.0 m.
+- **Frame rate on a busy track**: with ~40 cars, FCW now rejects almost all of them with
+  two number comparisons before building a polygon. Watch for a small improvement, never
+  a regression.
+- **The debug readout is gone**: `dist_debug` is no longer emitted. Its subscriber was
+  already commented out, so button 101 was never drawn — confirm nothing on screen
+  changed.
