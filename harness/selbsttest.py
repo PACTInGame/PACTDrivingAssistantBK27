@@ -176,6 +176,88 @@ def test_rollradius() -> None:
     pruefe(abs(r.radius_m - 0.31) < 1e-3, "unplausibler Wert wird verworfen")
 
 
+# ─── 2b. IS_MCI und Quellen-Diagnose ──────────────────────────────────────────
+
+def test_mci() -> None:
+    print("IS_MCI:")
+    compcar = struct.Struct('<2H4B3i3Hh')
+
+    def auto(plid, speed, richtung=0, kurs=0, gierrate=0, x=1.5):
+        return compcar.pack(0, 1, plid, 1, 0, 0,
+                            int(x * 65536), int(2.5 * 65536), int(0.3 * 65536),
+                            speed, richtung, kurs, gierrate)
+
+    nutzlast = auto(3, 9830, kurs=16384, gierrate=455) + auto(7, 4915, x=99.0)
+    paket = struct.pack('<4B', (4 + len(nutzlast)) // 4, L.ISP_MCI, 0, 2) + nutzlast
+
+    v = L.InSimVerbindung()
+    v._verarbeite(paket)
+    pruefe(v.mci is not None and v.mci["plid"] == 3, "ohne Filter wird das erste Fahrzeug genommen")
+    pruefe(abs(v.mci["v_mps"] - 30.0) < 0.01,
+           f"Speed 32768 = 100 m/s -> {v.mci['v_mps']:.3f} m/s")
+    pruefe(abs(math.degrees(v.mci["gierrate_rad_s"]) - 10.0) < 0.05,
+           f"AngVel 16384 = 360 Grad/s -> {math.degrees(v.mci['gierrate_rad_s']):.2f} Grad/s")
+    pruefe(abs(math.degrees(v.mci["kurs_rad"]) - 90.0) < 0.05, "Kurs 16384 = 90 Grad")
+    pruefe(abs(v.mci["position_m"][0] - 1.5) < 1e-3, "Position 1/65536 m")
+
+    v2 = L.InSimVerbindung()
+    v2.mci_plid = 7
+    v2._verarbeite(paket)
+    pruefe(v2.mci["plid"] == 7 and abs(v2.mci["position_m"][0] - 99.0) < 1e-3,
+           "Filter auf die eigene PLID greift")
+
+    v3 = L.InSimVerbindung()
+    v3._verarbeite(struct.pack('<4B', 8, L.ISP_MCI, 0, 5) + nutzlast)   # NumC luegt
+    pruefe(v3.mci is not None, "zu kurzes MCI-Paket bricht nicht ab")
+
+
+def test_quellenvergleich() -> None:
+    import orchestrator  # noqa: F401  (nur um sicherzugehen, dass der Import klappt)
+    print("Quellen-Diagnose:")
+
+    def lauf(og_folgt: str, radius=0.31):
+        """Erzeugt einen Rollvorgang mit anschliessender Bremsung mit Blockierern."""
+        zeilen, v = [], 30.0
+        for i in range(400):
+            bremst = i > 200
+            if bremst:
+                v = max(0.5, v - 0.15)
+            # Beim Bremsen blockieren die Vorderraeder zu 60 %, hinten zu 20 %.
+            omega_v = v * (1.0 - (0.6 if bremst else 0.0)) / radius
+            omega_h = v * (1.0 - (0.2 if bremst else 0.0)) / radius
+            quellen = {"grund": v, "vorne": omega_v * radius, "hinten": omega_h * radius}
+            zeilen.append({"t": i * 0.05, "bremse": 1.0 if bremst else 0.0,
+                           "og_speed": quellen[og_folgt], "v_outsim": v, "v_mci": v,
+                           "omega_v": omega_v, "omega_h": omega_h})
+        return zeilen
+
+    e = L._vergleiche_quellen(lauf("vorne"))
+    pruefe(e.get("treffer") == "OutSim Raeder vorne (omega)",
+           f"Vorderachs-Quelle erkannt ({e.get('treffer')})")
+    pruefe(abs(e["kandidaten"]["OutSim Raeder vorne (omega)"]["faktor"] - 0.31) < 0.01,
+           "Faktor entspricht dem Rollradius")
+    pruefe(e["kandidaten"]["OutSim Raeder vorne (omega)"]["rest_bremsen"] < 1.0,
+           "passende Quelle: kleiner Restfehler beim Bremsen")
+    pruefe(e["kandidaten"]["OutSim |v| (ueber Grund)"]["rest_bremsen"] > 10.0,
+           "unpassende Quelle: grosser Restfehler beim Bremsen")
+
+    e = L._vergleiche_quellen(lauf("grund"))
+    pruefe(e.get("treffer") in ("OutSim |v| (ueber Grund)", "MCI.Speed (ueber Grund)"),
+           f"Grund-Quelle erkannt ({e.get('treffer')})")
+    pruefe(abs(e["kandidaten"]["OutSim |v| (ueber Grund)"]["faktor"] - 1.0) < 0.01,
+           "Faktor ~ 1 fuer eine Geschwindigkeitsquelle")
+
+    e = L._vergleiche_quellen(lauf("hinten"))
+    pruefe(e.get("treffer") == "OutSim Raeder hinten (omega)",
+           f"Hinterachs-Quelle erkannt ({e.get('treffer')})")
+
+    ohne_bremsung = [z for z in lauf("vorne") if z["bremse"] == 0.0]
+    e = L._vergleiche_quellen(ohne_bremsung)
+    pruefe(e["bremsproben"] == 0 and "treffer" not in e,
+           "ohne Bremsphase wird bewusst kein Treffer gemeldet")
+    pruefe(L._vergleiche_quellen([])["proben"] == 0, "leere Eingabe bricht nicht ab")
+
+
 # ─── 3. Fahrereingabe und Ausgabepruefung ─────────────────────────────────────
 
 def test_fahrereingabe() -> None:
@@ -582,7 +664,8 @@ def test_recorder() -> None:
 
 def main() -> int:
     beginn = time.monotonic()
-    for test in (test_pakete, test_fahrzeugzustand, test_rollradius, test_fahrereingabe,
+    for test in (test_pakete, test_fahrzeugzustand, test_rollradius,
+                 test_mci, test_quellenvergleich, test_fahrereingabe,
                  test_ausgabepruefung, test_regelkreis, test_reglerfehler,
                  test_auswertung, test_codepruefung, test_recorder):
         try:

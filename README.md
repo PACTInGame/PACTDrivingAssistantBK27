@@ -76,7 +76,59 @@ Prüfen mit `python harness/orchestrator.py --nur-cfg`.
 
 ---
 
-## 4. Vorbereitung des Prüfstands (einmalig)
+## 4. Woher die Messwerte kommen
+
+Der Prüfstand nutzt **OutGauge** (Pedale, Gang, Drehzahl) und **OutSim**
+(Bewegung, Beschleunigungen, Raddaten). **IS_MCI** wird nur vom Diagnosewerkzeug
+`--quellen` abonniert, nicht im Messbetrieb.
+
+### 4.1 Was OutSim je Rad liefert (`OutSim Opts 1ff`, Reihenfolge HL, HR, VL, VR)
+
+| Feld | Einheit | Inhalt |
+|---|---|---|
+| `SuspDeflect` | m | Federweg |
+| `Steer` | rad | Radlenkwinkel (nur vorne ≠ 0 → identifiziert die Vorderachse) |
+| `XForce`, `YForce` | N | Längs- und Querkraft am Reifen |
+| `VerticalLoad` | N | Radlast |
+| `AngVel` | rad/s | **Radwinkelgeschwindigkeit** |
+| `LeanRelToRoad` | rad | Sturz relativ zur Fahrbahn |
+| `AirTemp` | °C (Byte) | Reifenlufttemperatur |
+| `SlipFraction` | 0…255 | Schlupfanteil |
+| `Touching` | Byte | Bodenkontakt |
+| `SlipRatio` | – | **Längsschlupf** |
+| `TanSlipAngle` | – | tan(Schräglaufwinkel) |
+
+Dazu kommen fahrzeugweit: Winkelgeschwindigkeit (3), Kurs/Nick/Roll,
+Beschleunigung (3), Geschwindigkeit (3), Position (3), Eingaben (Gas, Bremse,
+Lenkung, Kupplung, Handbremse), Gang, Motorwinkelgeschwindigkeit, Rundendistanz
+und Lenkmoment.
+
+**Bewusst nicht an die KI weitergegeben:** sämtliche radindividuellen Felder.
+LFS liefert `SlipRatio` je Rad fertig aus — wer das in die Reglerfunktion gibt,
+verschenkt die Aufgabe, denn das Schätzen des Schlupfes *ist* die Aufgabe. Der
+Prüfstand mittelt nur `AngVel` der beiden Vorderräder zu einer
+Achsgeschwindigkeit; alles andere bleibt im Harness.
+
+### 4.2 Welches Signal ist die Vorderachsgeschwindigkeit?
+
+Ob `OutGauge.Speed` die Geschwindigkeit über Grund oder die von den Vorderrädern
+abgeleitete Anzeige ist, steht in keiner verfügbaren Dokumentation. Es ist aber
+messbar:
+
+```
+python lfs_link.py --quellen
+```
+
+Beschleunigen, dann **Vollbremsung bis zum Blockieren** (Fahrhilfen aus). Nur
+dort trennen sich Rad- und Grundgeschwindigkeit. Das Werkzeug passt je Kandidat
+(OutSim-Grundgeschwindigkeit, MCI.Speed, Vorder- und Hinterräder) einen
+Skalenfaktor an und zeigt den Restfehler während der Bremsung. Der Kandidat mit
+dem kleinsten Restfehler ist die Quelle von `OutGauge.Speed`.
+
+Ergibt sich „Räder vorne", kann die Rollradius-Schätzung entfallen und
+`v_vorderachse_mps` direkt aus `OutGauge.Speed` kommen.
+
+## 5. Vorbereitung des Prüfstands (einmalig)
 
 1. **Verbindung prüfen** — Fahrzeug auf die Strecke stellen, Innenansicht:
    ```
@@ -91,11 +143,17 @@ Prüfen mit `python harness/orchestrator.py --nur-cfg`.
    ```
    Ergebnis: `kalibrierung.json`.
 
-3. **Rollradius einfahren** — einmal ~30 s rollen lassen (Gas und Bremse los,
+3. **Quellen prüfen** (siehe §4.2) — entscheidet, ob die Rollradius-Schätzung
+   überhaupt gebraucht wird:
+   ```
+   python lfs_link.py --quellen
+   ```
+
+4. **Rollradius einfahren** — einmal ~30 s rollen lassen (Gas und Bremse los,
    über 30 km/h). Der Radius wird automatisch geschätzt und je Fahrzeug in
    `rollradius.json` gespeichert. Ohne ihn ist `vorderachse_gueltig` False.
 
-4. **Traces aufnehmen** (`harness/traces/`):
+5. **Traces aufnehmen** (`harness/traces/`):
    ```
    python harness/input_recorder.py aufnehmen harness/traces/sitzung_start.json
    python harness/input_recorder.py aufnehmen harness/traces/szenario_1_asphalt.json
@@ -109,13 +167,13 @@ Prüfen mit `python harness/orchestrator.py --nur-cfg`.
      mit W/A/S/D fahren.
    * F8 beendet die Aufnahme.
 
-5. **Messfenster eintragen** — in `harness/orchestrator.py`, `SZENARIEN`:
+6. **Messfenster eintragen** — in `harness/orchestrator.py`, `SZENARIEN`:
    `messfenster_ms=(von_ms, bis_ms)` je Szenario, Bezug wahlweise `"start"`
    (Beginn des Abspielens) oder ein Markenname. Fenster großzügig um den
    Bremsvorgang legen; die Auswertung sucht den Bremsbeginn selbst.
    Kontrolle: `python harness/input_recorder.py zeigen <trace>`.
 
-6. **Basisläufe aufzeichnen** (`harness/basiswerte/`):
+7. **Basisläufe aufzeichnen** (`harness/basiswerte/`):
    ```
    python harness/orchestrator.py --basiswerte ohne_abs    # Fahrhilfen aus, Funktion unverändert
    python harness/orchestrator.py --basiswerte referenz    # mit funktionierendem ABS
@@ -126,7 +184,7 @@ Prüfen mit `python harness/orchestrator.py --nur-cfg`.
 
 ---
 
-## 5. Selbsttest des Prüfstands
+## 6. Selbsttest des Prüfstands
 
 ```
 python harness/selbsttest.py
@@ -139,7 +197,7 @@ Punktevergabe und den AST-Vergleich der Codeprüfung. Nach jeder Änderung an
 `lfs_link.py` oder am Harness ausführen — eine still kaputte Bewertung ist
 schlimmer als gar keine.
 
-## 6. Benchmark-Lauf
+## 7. Benchmark-Lauf
 
 ```
 python harness/orchestrator.py --lauf
@@ -150,7 +208,7 @@ Messschriebe schneiden → bewerten → `harness/ergebnisse/ergebnis_<zeit>.json
 
 ---
 
-## 7. Bewertung
+## 8. Bewertung
 
 **Kennwerte je Szenario** (aus dem Messfenster, `berechne_metriken`):
 
@@ -185,7 +243,7 @@ ausgewiesen.
 
 ---
 
-## 8. Fallstricke
+## 9. Fallstricke
 
 | Symptom | Ursache |
 |---|---|

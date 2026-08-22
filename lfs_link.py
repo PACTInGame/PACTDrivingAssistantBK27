@@ -341,10 +341,11 @@ class TelemetrieEmpfaenger:
 
 # ─── InSim (nur was der Benchmark braucht) ────────────────────────────────────
 
-ISP_ISI, ISP_VER, ISP_TINY, ISP_SMALL, ISP_STA, ISP_MST = 1, 2, 3, 4, 5, 13
+ISP_ISI, ISP_VER, ISP_TINY, ISP_SMALL, ISP_STA, ISP_MST, ISP_MCI = 1, 2, 3, 4, 5, 13, 38
 TINY_NONE, TINY_PING, TINY_REPLY, TINY_SST = 0, 3, 4, 7
 INSIM_VERSION = 9
 ISF_LOCAL = 4
+ISF_MCI = 32
 ISS_GAME, ISS_REPLAY, ISS_PAUSED, ISS_DIALOG = 1, 2, 4, 16
 ISS_FRONT_END, ISS_VISIBLE, ISS_TEXT_ENTRY = 256, 16384, 32768
 
@@ -396,16 +397,27 @@ class InSimVerbindung:
     _tiny = struct.Struct('<4B')                # 4 Byte
     _mst = struct.Struct('<4B63sx')             # 68 Byte
     _sta = struct.Struct('<4BfH10B5sx2B')       # 28 Byte
+    _compcar = struct.Struct('<2H4B3i3Hh')      # 28 Byte je Fahrzeug in IS_MCI
 
     def __init__(self, konfig: Konfiguration = KONFIG):
         self.konfig = konfig
         self.zustand = LfsZustand()
+        # IS_MCI wird nur auf Anforderung abonniert (siehe verbinde). Der
+        # Benchmark braucht es nicht; das Diagnosewerkzeug --quellen schon.
+        self.mci: Optional[Dict[str, float]] = None
+        self.mci_zeit = 0.0
+        self.mci_plid = 0                       # 0 = erstes Fahrzeug im Paket
         self._sock: Optional[socket.socket] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._sendesperre = threading.Lock()
 
-    def verbinde(self, zeitlimit_s: float = 5.0) -> bool:
+    def verbinde(self, zeitlimit_s: float = 5.0, mci_intervall_ms: int = 0) -> bool:
+        """Baut die InSim-Verbindung auf.
+
+        ``mci_intervall_ms`` > 0 abonniert zusaetzlich IS_MCI (Position,
+        Geschwindigkeit ueber Grund, Kurs, Gierrate aller Fahrzeuge).
+        """
         try:
             self._sock = socket.create_connection((self.konfig.insim_host, self.konfig.insim_port),
                                                   timeout=zeitlimit_s)
@@ -415,8 +427,10 @@ class InSimVerbindung:
             print("           In LFS '/insim 29999' eingeben oder in autoexec.lfs eintragen.")
             return False
 
-        paket = self._isi.pack(self._isi.size // 4, ISP_ISI, 1, 0, 0, ISF_LOCAL,
-                               INSIM_VERSION, b'!', 0, b'', b'ABS-Bench')
+        flags = ISF_LOCAL | (ISF_MCI if mci_intervall_ms > 0 else 0)
+        paket = self._isi.pack(self._isi.size // 4, ISP_ISI, 1, 0, 0, flags,
+                               INSIM_VERSION, b'!', max(0, mci_intervall_ms),
+                               b'', b'ABS-Bench')
         self._sock.sendall(paket)
         self.zustand.verbunden = True
         self._thread = threading.Thread(target=self._lies_schleife, daemon=True, name="insim")
@@ -490,6 +504,38 @@ class InSimVerbindung:
             self.zustand.kamera = f[6]
             self.zustand.sicht_plid = f[7]
             self.zustand.strecke = f[16].decode("latin-1", "ignore").strip("\x00")
+        elif typ == ISP_MCI:
+            self._verarbeite_mci(paket)
+
+    def _verarbeite_mci(self, paket: bytes) -> None:
+        """Liest den CompCar-Eintrag des eigenen Fahrzeugs aus IS_MCI.
+
+        Einheiten laut InSim.txt:
+          Speed     word,  32768 = 100 m/s
+          AngVel    short, 16384 = 360 Grad/s (Drehung gegen den Uhrzeigersinn)
+          Heading   word,  0 = Norden (+Y), gegen den Uhrzeigersinn
+          Direction word,  gleiche Kodierung, Bewegungsrichtung (nur bei Speed > 0)
+          X/Y/Z     int,   1/65536 m
+        """
+        anzahl = paket[3]
+        for i in range(anzahl):
+            versatz = 4 + i * self._compcar.size
+            if versatz + self._compcar.size > len(paket):
+                return
+            (_node, _lap, plid, _pos, _info, _sp3, x, y, z,
+             speed, richtung, kurs, gierrate) = self._compcar.unpack_from(paket, versatz)
+            if self.mci_plid and plid != self.mci_plid:
+                continue
+            self.mci = {
+                "plid": plid,
+                "v_mps": speed * 100.0 / 32768.0,
+                "gierrate_rad_s": math.radians(gierrate * 360.0 / 16384.0),
+                "kurs_rad": math.radians(kurs * 360.0 / 65536.0),
+                "richtung_rad": math.radians(richtung * 360.0 / 65536.0),
+                "position_m": (x / 65536.0, y / 65536.0, z / 65536.0),
+            }
+            self.mci_zeit = time.monotonic()
+            return
 
 
 # ─── Maus-Achsen ──────────────────────────────────────────────────────────────
@@ -1169,6 +1215,141 @@ def _kalibrieren() -> int:
     return 0 if ok else 1
 
 
+def _vergleiche_quellen(zeilen: List[Dict[str, float]]) -> Dict[str, Any]:
+    """Ordnet OutGauge.Speed einem der Kandidatensignale zu.
+
+    Vorgehen: je Kandidat wird ein einzelner Skalenfaktor k kleinste-Quadrate
+    durch den Ursprung angepasst (fuer Radsignale ist k der Rollradius, fuer
+    Geschwindigkeitssignale muss k ~ 1 herauskommen). Entscheidend ist der
+    Restfehler **waehrend der Bremsung**: dort laufen Rad- und
+    Grundgeschwindigkeit auseinander, sonst nicht.
+    """
+    kandidaten = {
+        "OutSim |v| (ueber Grund)": "v_outsim",
+        "MCI.Speed (ueber Grund)": "v_mci",
+        "OutSim Raeder vorne (omega)": "omega_v",
+        "OutSim Raeder hinten (omega)": "omega_h",
+    }
+    roll = [z for z in zeilen if z["og_speed"] > 2.0]
+    brems = [z for z in roll if z["bremse"] > 0.5]
+    ergebnis: Dict[str, Any] = {"proben": len(roll), "bremsproben": len(brems),
+                                "kandidaten": {}}
+    if len(roll) < 20:
+        return ergebnis
+
+    for name, feld in kandidaten.items():
+        gueltig = [z for z in roll if z[feld] > 0.01]
+        if len(gueltig) < 20:
+            continue
+        zaehler = sum(z["og_speed"] * z[feld] for z in gueltig)
+        nenner = sum(z[feld] ** 2 for z in gueltig)
+        if nenner <= 0:
+            continue
+        k = zaehler / nenner
+
+        def rest(menge):
+            menge = [z for z in menge if z[feld] > 0.01]
+            if not menge:
+                return None
+            quadrate = sum((z["og_speed"] - k * z[feld]) ** 2 for z in menge) / len(menge)
+            bezug = sum(z["og_speed"] for z in menge) / len(menge)
+            return 100.0 * math.sqrt(quadrate) / max(0.1, bezug)
+
+        ergebnis["kandidaten"][name] = {"faktor": k, "rest_gesamt": rest(roll),
+                                        "rest_bremsen": rest(brems)}
+
+    bewertbar = {n: w for n, w in ergebnis["kandidaten"].items()
+                 if w["rest_bremsen"] is not None}
+    if bewertbar and brems:
+        ergebnis["treffer"] = min(bewertbar, key=lambda n: bewertbar[n]["rest_bremsen"])
+    return ergebnis
+
+
+def _quellen(dauer_s: float = 40.0) -> int:
+    """Diagnose: welches Signal ist die Vorderachs-, welches die Grundgeschwindigkeit?
+
+    Ablauf: Fahrzeug auf die Strecke, beschleunigen, dann **mit blockierenden
+    Raedern** voll bremsen (Fahrhilfen aus). Nur dann trennen sich Rad- und
+    Grundgeschwindigkeit ueberhaupt.
+    """
+    anbindung = LfsAnbindung()
+    anbindung.telemetrie.starte()
+    if not anbindung.insim.verbinde(mci_intervall_ms=50):
+        anbindung.telemetrie.stoppe()
+        return 1
+    if not anbindung.warte_auf_daten():
+        print("Keine Telemetrie — zuerst 'python lfs_link.py --pruefen' ausfuehren.")
+        anbindung.insim.trenne(); anbindung.telemetrie.stoppe()
+        return 1
+
+    print(f"Aufzeichnung laeuft {dauer_s:.0f} s. Beschleunigen, dann VOLLBREMSUNG bis "
+          f"zum Blockieren. Strg+C beendet frueher.\n")
+    print("   t     Bremse   OutGauge    OutSim|v|      MCI    omega_v    omega_h")
+    zeilen: List[Dict[str, float]] = []
+    t0 = time.monotonic()
+    try:
+        while time.monotonic() - t0 < dauer_s:
+            time.sleep(0.05)
+            og, og_zeit, osp, os_zeit = anbindung.telemetrie.lies()
+            if og is None or osp is None or len(osp.rad_winkelgeschwindigkeit_rad_s) != 4:
+                continue
+            if og.plid and not anbindung.insim.mci_plid:
+                anbindung.insim.mci_plid = og.plid
+            i_l, i_r = OutSimPaket.IDX_VORNE
+            omega_v = (abs(osp.rad_winkelgeschwindigkeit_rad_s[i_l])
+                       + abs(osp.rad_winkelgeschwindigkeit_rad_s[i_r])) / 2.0
+            omega_h = (abs(osp.rad_winkelgeschwindigkeit_rad_s[0])
+                       + abs(osp.rad_winkelgeschwindigkeit_rad_s[1])) / 2.0
+            mci = anbindung.insim.mci
+            frisch = mci is not None and time.monotonic() - anbindung.insim.mci_zeit < 0.3
+            zeile = {"t": time.monotonic() - t0, "bremse": og.bremse,
+                     "og_speed": og.geschwindigkeit_mps,
+                     "v_outsim": math.hypot(osp.geschwindigkeit[0], osp.geschwindigkeit[1]),
+                     "v_mci": mci["v_mps"] if frisch else 0.0,
+                     "omega_v": omega_v, "omega_h": omega_h}
+            zeilen.append(zeile)
+            print(f"\r{zeile['t']:6.2f}  {zeile['bremse']:6.2f}  {zeile['og_speed']:9.3f}  "
+                  f"{zeile['v_outsim']:9.3f}  {zeile['v_mci']:9.3f}  "
+                  f"{omega_v:8.2f}  {omega_h:8.2f}", end="")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print()
+        anbindung.insim.trenne()
+        anbindung.telemetrie.stoppe()
+
+    ergebnis = _vergleiche_quellen(zeilen)
+    print("\n" + "=" * 74)
+    print(f"{ergebnis['proben']} Proben in Fahrt, davon {ergebnis['bremsproben']} unter Bremsung")
+    if not ergebnis.get("kandidaten"):
+        print("Zu wenige Daten — laenger fahren.")
+        return 1
+    if not ergebnis["bremsproben"]:
+        print("Es wurde nicht gebremst. Ohne Bremsphase sind alle Signale identisch,")
+        print("die Zuordnung ist dann nicht entscheidbar. Bitte wiederholen.")
+        return 1
+
+    print("\nWorauf laeuft OutGauge.Speed hinaus?\n")
+    print(f"{'Kandidat':<30}{'Faktor k':>12}{'Rest gesamt':>14}{'Rest beim Bremsen':>19}")
+    for name, w in ergebnis["kandidaten"].items():
+        einheit = " m" if "omega" in name else ""
+        rg = "—" if w["rest_gesamt"] is None else f"{w['rest_gesamt']:.2f} %"
+        rb = "—" if w["rest_bremsen"] is None else f"{w['rest_bremsen']:.2f} %"
+        print(f"{name:<30}{w['faktor']:>10.4f}{einheit:<2}{rg:>14}{rb:>19}")
+
+    treffer = ergebnis.get("treffer")
+    print(f"\nOutGauge.Speed folgt am ehesten: {treffer}")
+    if treffer and "vorne" in treffer:
+        print("  -> Die Annahme stimmt: OutGauge.Speed ist die Vorderachsgeschwindigkeit.")
+        print("     Der Rollradius muss dann nicht mehr geschaetzt werden.")
+    elif treffer and "Grund" in treffer:
+        print("  -> OutGauge.Speed ist die Geschwindigkeit ueber Grund, nicht die")
+        print("     Vorderachse. Die Vorderachse muss dann aus den OutSim-Raddaten")
+        print("     kommen (so ist es aktuell implementiert).")
+    print("=" * 74)
+    return 0
+
+
 def _fahren() -> int:
     anbindung = LfsAnbindung()
     if not anbindung.starte():
@@ -1194,12 +1375,18 @@ def main() -> int:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--pruefen", action="store_true", help="Verbindung und Datenstrom pruefen")
     g.add_argument("--kalibrieren", action="store_true", help="Maus-Achsen einmessen")
+    g.add_argument("--quellen", action="store_true",
+                   help="Diagnose: welches Signal ist Vorderachs-, welches Grundgeschwindigkeit")
     g.add_argument("--fahren", action="store_true", help="Regelkreis starten")
+    p.add_argument("--dauer", type=float, default=40.0,
+                   help="Aufzeichnungsdauer fuer --quellen in Sekunden")
     args = p.parse_args()
     if args.pruefen:
         return _pruefen()
     if args.kalibrieren:
         return _kalibrieren()
+    if args.quellen:
+        return _quellen(args.dauer)
     return _fahren()
 
 
