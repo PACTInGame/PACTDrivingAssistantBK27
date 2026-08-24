@@ -1,5 +1,5 @@
 import math
-from typing import List, Tuple, Dict, Set, Optional
+from typing import Hashable, List, Tuple, Dict, Set, Optional
 
 
 class SpatialHashGrid:
@@ -17,8 +17,10 @@ class SpatialHashGrid:
         """
         self.cell_size = cell_size
         self.grid: Dict[Tuple[int, int], List[Dict]] = {}
-        self.static_objects: Dict[int, List[Tuple[float, float]]] = {}
-        self.dynamic_objects: Dict[int, List[Tuple[float, float]]] = {}
+        # Objekt-IDs sind irgendetwas Hashbares: PLIDs (int) fuer Fahrzeuge,
+        # (Index, X, Y, Zbyte)-Tupel fuer Layout-Objekte.
+        self.static_objects: Dict[Hashable, List[Tuple[float, float]]] = {}
+        self.dynamic_objects: Dict[Hashable, List[Tuple[float, float]]] = {}
 
     def world_to_grid(self, x: float, y: float) -> Tuple[int, int]:
         """Wandelt Weltkoordinaten in Grid-Koordinaten um."""
@@ -204,7 +206,7 @@ class SpatialHashGrid:
 
         return self.polygons_intersect(polygon, rectangle)
 
-    def insert_object(self, object_id: int, points: List[Tuple[float, float]],
+    def insert_object(self, object_id: Hashable, points: List[Tuple[float, float]],
                       is_static: bool = True, metadata: Optional[Dict] = None):
         """
         Fügt ein Objekt ins Grid ein.
@@ -246,7 +248,7 @@ class SpatialHashGrid:
         else:
             self.dynamic_objects[object_id] = points.copy()
 
-    def remove_object(self, object_id: int, points: Optional[List[Tuple[float, float]]] = None):
+    def remove_object(self, object_id: Hashable, points: Optional[List[Tuple[float, float]]] = None):
         """
         Entfernt ein Objekt aus dem Grid.
 
@@ -286,7 +288,7 @@ class SpatialHashGrid:
         if object_id in self.dynamic_objects:
             del self.dynamic_objects[object_id]
 
-    def update_dynamic_object(self, object_id: int, new_points: List[Tuple[float, float]],
+    def update_dynamic_object(self, object_id: Hashable, new_points: List[Tuple[float, float]],
                               metadata: Optional[Dict] = None):
         """
         Aktualisiert ein bewegliches Objekt (z.B. Fahrzeug).

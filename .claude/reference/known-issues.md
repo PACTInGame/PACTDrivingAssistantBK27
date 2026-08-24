@@ -51,16 +51,10 @@ currently inert because the system is not registered in `AssistanceManager._init
 (and `sat_nav_active` is `False`) — both the logging and the nearest-road lookup
 (spatial index or last-road-first search) must be fixed before it can be switched on.
 
-**#7 — Blind spot warning allocates per vehicle per cycle.** `_create_rectangles_for_blindspot_warning`
-builds a `shapely.Polygon` for **every** car on track, with no distance pre-filter,
-before any cheap rejection. Add a squared-distance gate first.
-
 **#9 — AI traffic route search is O(path length) per car per cycle.**
 `get_closest_index_on_route` scans the full route for each controlled car, and
 `analyze_upcoming_track` runs twice per car (normal + 120 m long-straight lookahead).
 Cache the previous index and search a local window around it.
-
-**#14 — PDC beep spawns a thread per beep** running a blocking `winsound.Beep`.
 
 ## Correctness
 
@@ -72,12 +66,9 @@ sector is about −0.5°…+1.5° around the axis instead of ±1°: a car half a
 right at that range is missed. Only the ordering is wrong, the four points are right.
 Changing it changes which cars FCW detects, so it is a product decision, not a silent
 fix. `tests/test_collision_warning.py` pins the current behaviour by placing test
-vehicles on the axis.
-
-**#16 — Misleading comment in `cross_traffic_warning._compute_side`.** It claims LFS's
-Y axis grows south and headings are clockwise. Per `InSim.txt` the system is
-right-handed with anticlockwise headings. The *code* is correct; the comment is not,
-and it will mislead the next person doing geometry work.
+vehicles on the axis. The same defect existed in the blind-spot corridors and was
+fixed there (WP8) — there the quad was pure geometry with no tuning attached to it,
+so reordering the corners was a fix rather than a product decision.
 
 **#17 — Siren/strobe state is duplicated.** `UIManager` and `LightAssists` each keep
 their own `siren_active` / `strobe_active` booleans, both driven by the same
@@ -119,7 +110,8 @@ product decision, not a bug fix. `ui.md` §1.3.
 `(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary `CName`
 values. (`CName` is a decoded `str` since WP4 and the lookup accepts both, so the
 fall-through is now the only remaining half of this.) PDC sensor geometry is then wrong
-for every modded car. FCW no longer relies on it — it detects the unknown name and uses
+for every modded car, and since WP8 the cross-traffic arrival window uses the same table.
+FCW no longer relies on it — it detects the unknown name and uses
 a conservative 5.0 m length instead (WP7) — but it has to reach into the table's private
 `_CAR_SIZES` to do so; a public `is_known_car(cname)` next to `get_vehicle_size()` would
 be the cleaner home for that. `conventions.md` §4 has the preferred alternatives.

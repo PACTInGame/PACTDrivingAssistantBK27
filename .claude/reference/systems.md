@@ -68,37 +68,77 @@ Detects cars in a forward wedge and computes the deceleration required to avoid 
 
 ## Blind Spot Warning — `blind_spot_warning.py`
 
-Two rotated quads beside the car (left `[90,178,177,90]`, right `[270,182,183,270]`
-degree offsets) tested against a quad built around every other car, using
-`shapely.Polygon.intersects`.
+Two long, narrow corridors beside the car — from the car's centre to 85 m behind it,
+laterally 1…4.5 m off the axis, i.e. the adjacent lane. Each is tested against a
+2.3 m-radius quad built around the other car with `shapely.Polygon.intersects`.
 
-- Only warns if the other car's heading is within ±5000 LFS units (~±27°) of ours
-  (`_is_within_threshold`) and it is approaching (distance gated by the speed delta).
+- **Trigger** = geometry **and** relevance:
+  1. the other car's outline intersects the corridor;
+  2. within `BLIND_SPOT_ZONE_M` (7 m from our centre — the mirror blind spot proper,
+     ISO 17387 uses "rear bumper + 3 m") it is always relevant, whatever its speed;
+     further back only while it is closing and reaches us inside `APPROACH_TIME_S`
+     (3.5 s, the lane-change-assist criterion);
+  3. `_is_within_threshold`: its heading must be within ±5000 LFS units (~±27°) of
+     ours, so oncoming traffic is not blind-spot traffic.
+  The condition used to be `distance < (other_kmh − own_kmh + 5) · 1.2` — metres
+  compared against km/h. For any car not faster than us the right-hand side was ≤ 0,
+  so a car sitting in the blind spot at our speed could **never** warn.
+- **Hold time:** a set warning stays for the time the other car needs to move one
+  vehicle length relative to us, clamped to 0.5…2.0 s, so one missed 100 ms sample
+  cannot blank it.
+- **Corner order matters.** Both corridor quads were `[near-outer, far-inner,
+  far-outer, near-inner]`, which crosses two edges: shapely got an invalid polygon
+  covering a 64 m² bow-tie instead of the intended 190 m² corridor. Same defect class
+  as `known-issues.md` #35 in FCW.
+- The other car's outline used `abs((heading − 16384) / 182.05)`. Above 16384 that is
+  a 180° rotation, which this centrally symmetric box does not notice; below it, it is
+  a **mirror** — a car pointing north-west got an outline pointing north-east.
+- **Cost:** per vehicle two float comparisons (`distance_to_player`,
+  `angle_to_player`) and one modular heading test. A shapely polygon and two
+  `intersects` are paid only for cars that pass all of them — normally none to two,
+  instead of one polygon per car per cycle.
 - Output: `blind_spot_warning_changed` `{left, right}` on change.
-- **Cost:** allocates one shapely polygon per vehicle per cycle with no distance
-  pre-filter. This is the most expensive system per vehicle — see `known-issues.md` #7.
+- **Open product question:** the corridor is 85 m long, which is lane-change-assist
+  geometry rather than a blind spot. The relevance rule keeps far-away same-speed
+  traffic quiet, but a fast approacher 80 m back does raise a blind-spot warning.
+  Shortening `_CORRIDOR_MULTIPLIERS` is a decision for the author, not a bug fix.
 
 ## Cross Traffic Warning — `cross_traffic_warning.py`
 
 Ray-ray intersection between our path and each other car's path, then compares arrival
 times.
 
-- Skips: own speed < 5 km/h, gear ≤ 1 (reverse/neutral), other car < 3 km/h,
-  crossing angle < `MIN_CROSSING_ANGLE_DEG` (20°), intersection farther than
-  `MAX_INTERSECTION_DISTANCE` (100 m), arrival-time difference >
-  `ARRIVAL_TIME_TOLERANCE` (0.5 s).
+- Skips: own speed < `MIN_OWN_SPEED_KMH` (5), **reversing**, other car <
+  `MIN_OTHER_SPEED_KMH` (3), crossing angle < `MIN_CROSSING_ANGLE_DEG` (20°),
+  intersection farther than `MAX_INTERSECTION_DISTANCE` (100 m), arrival-time
+  difference outside `_arrival_window()`.
+- The gate used to be `own_vehicle.gear <= 1`, i.e. the raw OutGauge gear. That
+  silenced the system in neutral, in reverse, and for any car whose gear is not
+  reported (0). What matters is the motion, so it is now speed plus
+  `misc.helpers.is_reversing(heading, direction)` — reversing has to stay excluded
+  because the direction vector is derived from `heading` and would point the wrong
+  way.
+- **`_arrival_window()` is size-aware.** Vehicles are bodies, not points: we occupy
+  the conflict area for `(own_length + other_width) / own_speed`, they for
+  `(other_length + own_width) / other_speed`. The window is the sum of the two
+  half-occupancies plus `ARRIVAL_TIME_TOLERANCE` (0.5 s) for noise. A 5 m car
+  crossing at 10 km/h blocks the junction for ~2.4 s and was simply missed by the
+  old fixed ±0.5 s. Lengths come from `park_distance_control.get_vehicle_size`.
 - Thresholds on TTC by `cross_traffic_warning_distance`: early `3.5/3.0`,
   medium `2.5/1.5`, late `1.5/1.0` s (visual / acoustic).
-- `_compute_side` uses the 2D cross product. **The comment in that function describes
-  the coordinate system incorrectly (it claims Y grows south / clockwise); the code
-  itself is right for LFS's right-handed CCW system.** See `conventions.md` §1.
+- `_compute_side` uses the 2D cross product; the code is right for LFS's
+  right-handed CCW system and the docstrings now say so (they used to claim Y grows
+  south, which is what `known-issues.md` #16 was about). See `conventions.md` §1.
 - Output: `cross_traffic_warning_changed` `{level, side}` on change.
 
 ## Park Distance Control — `park_distance_control.py`
 
 Six virtual ultrasonic sensors (3 front, 3 rear) against layout objects *and* cars.
 
-- Only active below 10 km/h; otherwise all six report `-1` (display removed).
+- Only active below `PDC_MAX_SPEED_KMH` (10); otherwise all six report
+  `PDC_INACTIVE` (`-1`), which `UIManager._update_pdc` reads as "remove the display".
+  `PDC_CLEAR` (`0`) means "active, nothing in range" and keeps the empty column on
+  screen — the two must not be swapped.
 - Sensor geometry: from the car's four corners plus front/rear midpoints, three nested
   triangular cones per position at 0.1 / 1.4 / 2.8 m, half-angle 25°.
 - `get_vehicle_size` / `get_object_size` are hardcoded tables. For **vehicle mods**
@@ -106,12 +146,24 @@ Six virtual ultrasonic sensors (3 front, 3 rear) against layout objects *and* ca
   see `conventions.md` §4.
 - Obstacles come from two sources:
   - **Static** — `IS_AXM` layout objects, converted to rectangles by
-    `create_rectangle_for_object` (note the `* 4096` AXM→MCI unit conversion) and
-    inserted into a `SpatialHashGrid` (cell size 15 m). Objects in `no_hitbox_objects`
-    are skipped. Sizes come from the `get_object_size` index table.
-  - **Dynamic** — other cars within 15 m, re-inserted every cycle;
-    `get_vehicle_size` holds the per-model dimension table.
+    `create_rectangle_for_object` (`AXM_TO_MCI` = 65536/16 = 4096, verified against
+    `conventions.md` §1) and inserted into a `SpatialHashGrid` (cell size 15 m).
+    Objects in `NO_HITBOX_OBJECTS` are skipped. Sizes come from the `get_object_size`
+    index table.
+    Grid keys are `axm_object_id(info)` = `(Index, X, Y, Zbyte)` **tuples**. They used
+    to be `int(str(Index) + str(abs(X)) + str(abs(Y)) + str(abs(Zbyte)))`, which is
+    not injective — `X=1, Y=23` and `X=12, Y=3` produce the same number, and `abs()`
+    threw the sign away — so a `PMO_DEL_OBJECTS` could evict a different object and
+    leave an invisible obstacle behind until the next layout reload.
+  - **Dynamic** — other cars within `PDC_VEHICLE_RANGE_M` (15 m), re-inserted every
+    cycle after `clear_dynamic_objects()`; `get_vehicle_size` holds the per-model
+    dimension table.
 - Result is `{sensor: 0..3}` where 3 is closest; only emitted on change.
+- **The beeper is one long-lived daemon thread** (`misc/pdc_beep.py`), started on the
+  first `beep()` call and fed by `pdc_changed`. `UIManager._show_pdc_display` calls
+  `beep()` every UI cycle while `park_distance_control_mode == 2`; that call only
+  *permits* sound for `REQUEST_TIMEOUT_S`, the pattern timing happens in the thread.
+  Before, every single beep was a fresh thread running a blocking `winsound.Beep`.
 - `get_vehicle_size` is also imported by FCW for car-length maths — keep it here.
 
 ## Auto Hold — `auto_hold.py`

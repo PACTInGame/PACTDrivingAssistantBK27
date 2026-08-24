@@ -1,7 +1,6 @@
 import logging
 import math
 import os
-import time
 from typing import Dict, Any
 
 import pyinsim.func
@@ -168,13 +167,24 @@ def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
 
     return outer_sensors, middle_sensors, inner_sensors
 
+# IS_AXM/ObjectInfo liefert X und Y in 1/16 m, MCI und alles andere in dieser
+# Datei in 1/65536 m. Der Umrechnungsfaktor ist damit 65536/16 = 4096
+# (reference/conventions.md §1) - geprueft, kein TODO mehr.
+AXM_TO_MCI = 65536 // 16
+
+
+# Objects without hitbox - einmal als frozenset, statt die Liste bei jedem
+# einzelnen Layout-Objekt neu zu bauen und linear zu durchsuchen.
+NO_HITBOX_OBJECTS = frozenset((0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17,
+                               128, 129, 130, 131, 132, 149, 150, 151,
+                               172, 173, 174, 175, 176, 177, 178, 179, 184, 185, 186,
+                               252, 253, 254, 255))
+
+
 def create_rectangle_for_object(x: float, y: float, index: int, heading: float) -> list:
-    x = x * 4096 # TODO check if correct for 65536 scale
-    y = y * 4096
-    no_hitbox_objects = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 128, 129, 130, 131, 132, 149, 150, 151,
-                         172, 173, 174, 175, 176, 177, 178, 179, 184, 185, 186, 252, 253,
-                         254, 255]  # Objects without hitbox
-    if index not in no_hitbox_objects:
+    x = x * AXM_TO_MCI
+    y = y * AXM_TO_MCI
+    if index not in NO_HITBOX_OBJECTS:
         height, width = get_object_size(index)
     else:
         return [-1]
@@ -191,6 +201,23 @@ def create_rectangle_for_object(x: float, y: float, index: int, heading: float) 
     rectangle_for_object = [(corner_x, corner_y), (corner2_x, corner2_y), (corner3_x, corner3_y),
                             (corner4_x, corner4_y)]
     return rectangle_for_object
+
+def axm_object_id(info) -> tuple:
+    """Eindeutiger Schluessel eines Layout-Objekts.
+
+    Vorher wurden Index und Koordinaten als Ziffernfolge aneinandergehaengt:
+    ``int(str(Index) + str(abs(X)) + str(abs(Y)) + str(abs(Zbyte)))``. Das ist
+    nicht eindeutig - ``X=1, Y=23`` und ``X=12, Y=3`` ergeben dieselbe Zahl,
+    und auch das Vorzeichen ging verloren. Ein PMO_DEL_OBJECTS konnte damit
+    ein voellig anderes Objekt aus dem Gitter werfen, das dann bis zum
+    naechsten Layout-Reload als unsichtbares Hindernis fehlte.
+
+    Ein Tupel ist eindeutig, behaelt die Vorzeichen und ist als Dict-Schluessel
+    genauso schnell.
+    """
+    return (getattr(info, 'Index', -1), getattr(info, 'X', 0),
+            getattr(info, 'Y', 0), getattr(info, 'Zbyte', 0))
+
 
 def create_rectangle_for_vehicle(x: float, y: float, type: str, heading: float) -> list:
     height, width = get_vehicle_size(type)
@@ -242,21 +269,25 @@ def save_rectangles_as_json(rectangles: list, filename: str):
             json.dump(rectangles, f, indent=4)
 
 
+# Sensorwerte: -1 = System inaktiv (zu schnell), 0 = frei, 1..3 = Hindernis,
+# 3 am naechsten. UIManager._update_pdc nimmt -1 als "Anzeige entfernen",
+# 0 als "nichts in Sicht, Anzeige bleibt leer stehen" - deshalb duerfen die
+# beiden Werte nicht vertauscht werden.
+PDC_INACTIVE = -1
+PDC_CLEAR = 0
+# Nur unterhalb dieser Geschwindigkeit rechnet PDC ueberhaupt.
+PDC_MAX_SPEED_KMH = 10.0
+# Fahrzeuge weiter weg als das kommen nicht ins Gitter - der aeusserste
+# Sensorkegel reicht 2.8 m ueber die Karosserie hinaus.
+PDC_VEHICLE_RANGE_M = 15.0
+
+
 class ParkDistanceControl(AssistanceSystem):
     """PDC"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("park_distance_control", event_bus, settings)
-        self.detection_distance = 70.0
-        self.pdc_result = {
-            0: -1,
-            1: -1,
-            2: -1,
-            3: -1,
-            4: -1,
-            5: -1
-        }
-        self.last_exec = time.perf_counter()
+        self.pdc_result = dict.fromkeys(range(6), PDC_INACTIVE)
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
         self.event_bus.subscribe('layout_received', self._update_axm)
         self.track = "ax"
@@ -272,15 +303,20 @@ class ParkDistanceControl(AssistanceSystem):
             self.park_grid.insert_object(i, [rect[0], rect[1], rect[2], rect[3]], is_static=True)
 
     def _update_axm(self, axm):
-        """Aktualisiert die AXM-Daten"""
-        if axm.PMOAction == pyinsim.PMO_ADD_OBJECTS or axm.PMOAction == pyinsim.PMO_TINY_AXM:
+        """Aktualisiert die AXM-Daten
+
+        Laeuft im Packet-Thread auf Rohdaten, also wird kein Feld
+        vorausgesetzt: ein Paket ohne PMOAction oder ohne Info faellt
+        wirkungslos durch, statt den Handler zu sprengen.
+        """
+        action = getattr(axm, 'PMOAction', None)
+        if action == pyinsim.PMO_ADD_OBJECTS or action == pyinsim.PMO_TINY_AXM:
             logger.debug("Updating AXM objects...")
             self._update_axm_track_boundaries(axm)
-        elif axm.PMOAction == pyinsim.PMO_DEL_OBJECTS:
-            for o in axm.Info:
-                index = int(str(o.Index) + str(abs(o.X)) + str(abs(o.Y)) + str(abs(o.Zbyte)))
-                self.park_grid.remove_object(index)
-        elif axm.PMOAction == pyinsim.PMO_CLEAR_ALL:
+        elif action == pyinsim.PMO_DEL_OBJECTS:
+            for o in getattr(axm, 'Info', ()) or ():
+                self.park_grid.remove_object(axm_object_id(o))
+        elif action == pyinsim.PMO_CLEAR_ALL:
             self.park_grid.clear()
             self.event_bus.emit("request_axm_update", {})
 
@@ -301,11 +337,10 @@ class ParkDistanceControl(AssistanceSystem):
     def _update_axm_track_boundaries(self, axm):
         """Aktualisiert die AXM-Daten"""
         rects = []
-        for object in axm.Info:
+        for object in getattr(axm, 'Info', ()) or ():
             rect = create_rectangle_for_object(object.X, object.Y, object.Index, object.Heading)
             if rect[0] != -1:
-                index = int(str(object.Index) + str(abs(object.X)) + str(abs(object.Y)) + str(abs(object.Zbyte)))
-                rects.append([rect, index])
+                rects.append([rect, axm_object_id(object)])
         logger.debug("Inserting %d AXM objects into the spatial grid.", len(rects))
         for i, rectangle in enumerate(rects):
             rect = rectangle[0]
@@ -313,36 +348,25 @@ class ParkDistanceControl(AssistanceSystem):
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[int, int]:
         """Prüft auf Fahrzeuge im toten Winkel"""
-        new_pdc_result = {
-            0: -1,
-            1: -1,
-            2: -1,
-            3: -1,
-            4: -1,
-            5: -1
-        }
-        if own_vehicle.data.speed < 10 :
-            new_pdc_result = {
-                0: 0,
-                1: 0,
-                2: 0,
-                3: 0,
-                4: 0,
-                5: 0
-            }
+        new_pdc_result = dict.fromkeys(range(6), PDC_INACTIVE)
+        own = own_vehicle.data
+        if own.speed < PDC_MAX_SPEED_KMH:
+            new_pdc_result = dict.fromkeys(range(6), PDC_CLEAR)
+            # Alle Fahrzeuge sind gerade aus dem Gitter geflogen, ein
+            # zusaetzliches remove_object() pro entferntem Fahrzeug waere
+            # nur Arbeit ohne Wirkung.
             self.park_grid.clear_dynamic_objects()
-            vehicle_copy = vehicles.copy() # to avoid runtime error for changing dict size during iteration
-            for vehicle in vehicle_copy.values():
-                if vehicle.data.distance_to_player > 15:
-                    self.park_grid.remove_object(vehicle.data.player_id)
+            for vehicle in list(vehicles.values()):  # Snapshot: die Quelle kann sich nebenlaeufig aendern
+                data = vehicle.data
+                if data.distance_to_player > PDC_VEHICLE_RANGE_M:
                     continue
-                rectangle = create_rectangle_for_vehicle(vehicle.data.x, vehicle.data.y,
-                                                        vehicle.data.cname, vehicle.data.heading)
-                self.park_grid.insert_object(vehicle.data.player_id, [rectangle[0], rectangle[1], rectangle[2], rectangle[3]], is_static=False)
+                rectangle = create_rectangle_for_vehicle(data.x, data.y,
+                                                        data.cname, data.heading)
+                self.park_grid.insert_object(data.player_id, [rectangle[0], rectangle[1], rectangle[2], rectangle[3]], is_static=False)
                 #self.park_grid.plot_grid()
 
             outer_sensors, middle_sensors, inner_sensors = create_bboxes_for_own_vehicle(own_vehicle)
-            nearby = self.park_grid.query_area(own_vehicle.data.x, own_vehicle.data.y, 30 * 65536)
+            nearby = self.park_grid.query_area(own.x, own.y, 30 * 65536)
             collisions = []
             for obj in nearby:
                 for i, sensor in enumerate(outer_sensors):

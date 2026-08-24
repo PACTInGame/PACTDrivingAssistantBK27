@@ -62,6 +62,13 @@ tests/
   test_collision_warning.py  FCW physics with hand-computed expectations, the detection
                            gates, warning-level hysteresis, and Vehicle acceleration
                            from the real packet interval
+  test_blind_spot.py       BSW corridor geometry and validity, the geometric trigger,
+                           relative-speed relevance and hold time, and the polygon
+                           budget of the pre-filter
+  test_cross_traffic.py    CTW direction/side conventions, the speed+reverse gate that
+                           replaced the gear gate, and the size-aware arrival window
+  test_pdc.py              AXM object identity and the AXM→MCI scale, the -1/0 sensor
+                           contract, and the single-threaded beeper
 ```
 
 ### Fixtures (`tests/conftest.py`)
@@ -128,7 +135,9 @@ No mocks needed, no LFS. These are already pure or nearly so:
 | `misc/helpers.py` — `calc_polygon_points`, `point_in_rectangle` | known points in/out of rotated rectangles; degenerate rectangles |
 | `vehicles/vehicle.py` — `update_distance_to_player`, `update_angle_to_player` | metre conversion, angle 0 = straight ahead, wraparound at 0/360 |
 | `assistance/AI_Driver.py` — `calculate_angle`, `calculate_angle_meters`, `analyze_upcoming_track`, `calculate_feedforward_steering`, `calculate_feedforward_throttle_brake`, `get_next_points_for_distance` | straight line → curvature 0; known arc → known curvature; clamping at ±45°; wraparound on closed loops |
-| `assistance/cross_traffic_warning.py` — `_direction_vector`, `_find_intersection`, `_compute_side` | perpendicular paths intersect at the expected point; parallel → `None`; intersection behind → `None`; **left/right sign convention** (this is the one the wrong comment threatens) |
+| `assistance/cross_traffic_warning.py` — `_direction_vector`, `_find_intersection`, `_compute_side` | *(done — `test_cross_traffic.py`)* |
+| `assistance/blind_spot_warning.py` | *(done — `test_blind_spot.py`)* |
+| `assistance/park_distance_control.py`, `misc/pdc_beep.py` | *(done — `test_pdc.py`)* |
 | `assistance/collision_warning.py` — `_calculate_needed_braking` | *(done — `test_collision_warning.py`)* |
 | `misc/spacial_hash_grid.py` — `point_in_polygon`, `polygon_overlap`, insert/query/remove | overlapping and touching polygons; objects spanning several cells |
 | `misc/language.py` | *(done — `test_language.py`)* |

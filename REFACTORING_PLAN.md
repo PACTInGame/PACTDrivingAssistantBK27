@@ -769,6 +769,43 @@ old `settings.json`.
   never ran (no settings key), so nothing should look different — confirm no menu entry,
   notification or HUD element disappeared.
 
+### WP8 — blind spot, cross traffic and PDC
+
+`tests/test_blind_spot.py`, `tests/test_cross_traffic.py` and `tests/test_pdc.py`
+compute every expectation by hand, but the zones, the sound and the layout data only
+exist in the game.
+
+- **The blind spot that never warned**: get a car to sit beside you at exactly your
+  speed, one lane over, roughly level with your rear bumper. The blind-spot arrow must
+  light up now — this was the case the old condition could never trigger.
+- **How far back the warning reaches**: the corridor is 85 m long. Let a car close on
+  you from far behind in the next lane. The warning should come roughly 3.5 s before it
+  reaches you, and a car cruising 60 m back at your speed must stay silent. If the
+  warning still feels too early, the corridor length (`_CORRIDOR_MULTIPLIERS`, 85 m) is
+  the number to shorten — that is a product decision, not a bug.
+- **Left really is left**: drive with traffic on both sides and confirm the arrow side
+  matches. The other car's outline was mirrored for every heading below 16384 (roughly
+  north through west), so this used to be wrong in one quadrant.
+- **Frame rate with traffic**: with ~40 cars, BSW now builds shapely polygons only for
+  cars that pass three comparisons. Watch for an improvement, never a regression.
+- **Cross traffic in neutral**: roll up to a junction in neutral (or coast with the
+  clutch in). The warning must now appear — the old `gear <= 1` gate switched the whole
+  system off. Reversing must still suppress it.
+- **A long vehicle crossing slowly**: in a layout with AI traffic, let a long car cross
+  in front of you at walking pace. It must now raise a warning; the old fixed ±0.5 s
+  arrival tolerance treated every vehicle as a point and missed it.
+- **PDC after deleting a layout object**: in the layout editor, place several objects
+  close together, then delete one. Only that object may disappear from the PDC — before,
+  the id collision could evict a different one, leaving an obstacle the sensors no
+  longer see. Reversing into the remaining objects must still beep.
+- **PDC object positions**: park next to armco or a post and check that the sensor rings
+  light at the right distance. The AXM→MCI factor of 4096 was marked with a `TODO`; it is
+  correct per `InSim.txt`, but only the game shows whether the objects sit where the
+  sensors expect them.
+- **The beep**: reverse quickly towards a wall so the pattern goes 1 → 2 → 3. The tone
+  must speed up smoothly and stop the moment PDC switches off or you exceed 10 km/h. It
+  is now one thread; listen for stuck or overlapping tones.
+
 ### WP7 — forward collision warning
 
 `tests/test_collision_warning.py` computes every expectation by hand, but the wedge, the

@@ -2,10 +2,15 @@ import math
 from typing import Dict, Any, Optional, Tuple
 
 from assistance.base_system import AssistanceSystem
+from assistance.park_distance_control import get_vehicle_size
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
+from misc.helpers import is_reversing
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
+
+KMH_TO_MS = 0.277778
+METRE = 65536.0     # MCI-Positionseinheiten pro Meter
 
 
 def _direction_vector(heading: float) -> Tuple[float, float]:
@@ -14,8 +19,17 @@ def _direction_vector(heading: float) -> Tuple[float, float]:
     Nutzt die bewährte Konvertierung aus der Codebase:
       angle_deg = (heading + 16384) / 182.05
 
-    Im LFS-Koordinatensystem: X wächst nach Osten, Y wächst nach Süden.
-    Heading 0 = Süd, 16384 = West, 32768 = Nord, 49152 = Ost (clockwise).
+    Im LFS-Koordinatensystem gilt (reference/conventions.md §1, InSim.txt):
+    **X wächst nach Osten, Y wächst nach Norden, Z nach oben** - ein
+    rechtshändiges System. Headings zählen **gegen** den Uhrzeigersinn ab der
+    +Y-Achse: 0 = Nord, 16384 = West, 32768 = Süd, 49152 = Ost.
+
+    Der Summand +16384 dreht von "0 = +Y" auf "0 = +X", damit das Ergebnis
+    direkt in cos/sin passt.
+
+    Der frühere Kommentar behauptete das Gegenteil (Y nach Süden, Headings im
+    Uhrzeigersinn). Der Code war immer richtig, der Kommentar nie
+    (known-issues #16).
     """
     angle_deg = (heading + 16384) / 182.05
     rad = math.radians(angle_deg)
@@ -66,9 +80,18 @@ def _compute_side(own_dx: float, own_dy: float, own_x: float, own_y: float,
     Nutzt das Kreuzprodukt des eigenen Richtungsvektors mit dem Vektor
     vom eigenen Fahrzeug zum anderen Fahrzeug.
 
-    ACHTUNG: Im LFS-Koordinatensystem wächst Y nach Süden (linkshändig).
-    Dadurch ist das Vorzeichen des 2D-Kreuzprodukts gegenüber dem
-    Standard-Mathe-System invertiert.
+    Das LFS-System ist rechtshändig (X Ost, Y Nord), also gilt die
+    Standard-Mathematik ohne Vorzeichenumkehr: ein positives 2D-Kreuzprodukt
+    ``own_dir × to_other`` heißt, das andere Fahrzeug liegt gegen den
+    Uhrzeigersinn von unserer Fahrtrichtung - und das ist **links**.
+    Negativ heißt rechts.
+
+    Beispiel: wir fahren nach Norden (0, 1), das andere Auto steht im Osten
+    (+X). Dann ist cross = 0*0 - 1*10 = -10 < 0, also rechts - was stimmt.
+
+    Der frühere Kommentar erklärte dasselbe Ergebnis mit einem linkshändigen
+    Koordinatensystem, das es nicht gibt (known-issues #16). Das Verhalten
+    bleibt unverändert, nur die Begründung stimmt jetzt.
 
     Returns:
         'left' oder 'right'
@@ -80,7 +103,7 @@ def _compute_side(own_dx: float, own_dy: float, own_x: float, own_y: float,
     # 2D Kreuzprodukt: own_dir × to_other
     cross = own_dx * to_other_y - own_dy * to_other_x
 
-    # Im LFS-KS (Y nach unten/Süden): Negativ = links, Positiv = rechts
+    # Rechtshändiges System: negativ = rechts, positiv = links
     return 'right' if cross < 0 else 'left'
 
 
@@ -89,10 +112,15 @@ class CrossTrafficWarning(AssistanceSystem):
 
     # Maximale Distanz zum Schnittpunkt (in Metern) für Berücksichtigung
     MAX_INTERSECTION_DISTANCE = 100.0
-    # Toleranz für gleichzeitige Ankunft am Schnittpunkt (Sekunden)
+    # Grundtoleranz für gleichzeitige Ankunft am Schnittpunkt (Sekunden).
+    # Deckt Messrauschen und das 100-ms-Raster ab; die Fahrzeuggröße kommt in
+    # _arrival_window() dazu.
     ARRIVAL_TIME_TOLERANCE = 0.5
     # Minimaler Kreuzungswinkel (Grad) um nahezu parallele Fahrzeuge auszuschließen
     MIN_CROSSING_ANGLE_DEG = 20.0
+    # Unterhalb dieser Geschwindigkeit gibt es keine Querverkehrswarnung.
+    MIN_OWN_SPEED_KMH = 5.0
+    MIN_OTHER_SPEED_KMH = 3.0
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("cross_traffic_warning", event_bus, settings)
@@ -105,7 +133,21 @@ class CrossTrafficWarning(AssistanceSystem):
         warning_side = None
         min_ttc = float('inf')
 
-        if not self.is_enabled() or own_vehicle.data.speed < 5 or own_vehicle.gear <= 1:
+        # Einmal binden: OutGauge schreibt nebenläufig in own_vehicle.data
+        # (known-issues #12).
+        own = own_vehicle.data
+
+        # Vorher hing die Warnung an ``own_vehicle.gear <= 1``. Das ist der
+        # rohe OutGauge-Gang (0 = Rückwärts, 1 = Leerlauf), also gab es weder
+        # im Leerlauf noch beim Rückwärtsfahren eine Warnung - und für ein
+        # Auto ohne gemeldeten Gang (kein OutGauge, Automatik im Leerlauf,
+        # Rollen) überhaupt keine. Gefährlich ist aber die Bewegung, nicht der
+        # Gang: geprüft wird jetzt die Geschwindigkeit und - über den
+        # modularen Heading/Direction-Vergleich - ob wir rückwärts rollen.
+        # Beim Rückwärtsfahren zeigt der Richtungsvektor aus dem Heading in
+        # die falsche Richtung, dann wäre jeder Schnittpunkt falsch.
+        if (not self.is_enabled() or own.speed < self.MIN_OWN_SPEED_KMH
+                or is_reversing(own.heading, own.direction)):
             self._emit_if_changed(warning_level, warning_side)
             return {'level': 0, 'side': None, 'ttc': float('inf')}
 
@@ -122,22 +164,26 @@ class CrossTrafficWarning(AssistanceSystem):
             acoustic_threshold = 1.5
 
         # Eigene Position in Metern (LFS nutzt 1/65536 Meter)
-        own_x = own_vehicle.data.x / 65536.0
-        own_y = own_vehicle.data.y / 65536.0
-        own_speed_ms = own_vehicle.data.speed * 0.277778  # km/h -> m/s
+        own_x = own.x / METRE
+        own_y = own.y / METRE
+        own_speed_ms = own.speed * KMH_TO_MS  # km/h -> m/s
 
         # Eigener Richtungsvektor
-        own_dx, own_dy = _direction_vector(own_vehicle.data.heading)
+        own_dx, own_dy = _direction_vector(own.heading)
+
+        # Eigene Abmessungen einmal pro Zyklus, nicht pro Fahrzeug.
+        own_length, own_width = get_vehicle_size(own.cname)
 
         for vehicle in vehicles.values():
-            if vehicle.data.speed < 3:
+            data = vehicle.data
+            if data.speed < self.MIN_OTHER_SPEED_KMH:
                 # Stehendes/sehr langsames Fahrzeug ignorieren
                 continue
 
-            other_x = vehicle.data.x / 65536.0
-            other_y = vehicle.data.y / 65536.0
-            other_speed_ms = vehicle.data.speed * 0.277778
-            other_dx, other_dy = _direction_vector(vehicle.data.heading)
+            other_x = data.x / METRE
+            other_y = data.y / METRE
+            other_speed_ms = data.speed * KMH_TO_MS
+            other_dx, other_dy = _direction_vector(data.heading)
 
             # Kreuzungswinkel prüfen (parallele Fahrzeuge ausschließen)
             dot = own_dx * other_dx + own_dy * other_dy
@@ -169,9 +215,14 @@ class CrossTrafficWarning(AssistanceSystem):
             time_own = dist_own / own_speed_ms if own_speed_ms > 0.1 else float('inf')
             time_other = dist_other / other_speed_ms if other_speed_ms > 0.1 else float('inf')
 
-            # Prüfe ob beide Fahrzeuge ungefähr gleichzeitig ankommen
+            # Prüfe, ob sich die Belegungszeiten am Schnittpunkt überlappen.
+            # Punktförmige Fahrzeuge mit fester ±0.5-s-Toleranz übersahen den
+            # klassischen Fall: ein langes Fahrzeug, das langsam kreuzt,
+            # blockiert die Kreuzung sekundenlang.
             time_diff = abs(time_own - time_other)
-            if time_diff > self.ARRIVAL_TIME_TOLERANCE:
+            if time_diff > self._arrival_window(
+                    own_length, own_width, own_speed_ms,
+                    data.cname, other_speed_ms):
                 continue
 
             # Time-to-collision aus Sicht des eigenen Fahrzeugs
@@ -207,3 +258,32 @@ class CrossTrafficWarning(AssistanceSystem):
                 'side': warning_side,
             })
 
+
+    def _arrival_window(self, own_length: float, own_width: float,
+                        own_speed_ms: float, other_cname: str,
+                        other_speed_ms: float) -> float:
+        """Zulässiger Ankunftszeit-Unterschied für ein konkretes Fahrzeugpaar.
+
+        Beide Fahrzeuge sind Körper, keine Punkte. Die Konfliktfläche an der
+        Kreuzung ist entlang **unseres** Weges so lang wie unsere Länge plus
+        die Breite des anderen, entlang **seines** Weges so lang wie seine
+        Länge plus unsere Breite. Wir belegen sie also für
+
+            (own_length + other_width) / own_speed
+
+        Sekunden, er für ``(other_length + own_width) / other_speed``. Es
+        kracht, wenn sich die beiden Zeitfenster überlappen; verglichen wird
+        deshalb gegen die Summe der halben Belegungszeiten plus der
+        Grundtoleranz für Messrauschen.
+
+        Beispiel: ein 5.4 m langer Transporter mit 10 km/h braucht
+        (5.4 + 1.8) / 2.78 = 2.6 s, um eine 1.8 m breite Spur zu räumen -
+        die alte feste Toleranz von 0.5 s hat ihn schlicht übersehen.
+
+        Kosten: ein Dict-Zugriff und vier Multiplikationen pro Fahrzeug, das
+        alle vorherigen Filter überstanden hat.
+        """
+        other_length, other_width = get_vehicle_size(other_cname)
+        own_occupancy = (own_length + other_width) / max(own_speed_ms, 0.1) / 2.0
+        other_occupancy = (other_length + own_width) / max(other_speed_ms, 0.1) / 2.0
+        return self.ARRIVAL_TIME_TOLERANCE + own_occupancy + other_occupancy
