@@ -78,10 +78,26 @@ MODIFIER_STALE_AFTER_S = 1.0
 # never turn into one message per cycle.
 REASON_LOG_INTERVAL_S = 30.0
 
-# Window titles / process names that mean "LFS is in front". LFS titles its
-# window "Live for Speed"; the executable is LFS.exe.
-_LFS_TITLE_MARKERS = ('live for speed', 'lfs')
-_LFS_PROCESS_MARKER = 'lfs'
+# What "LFS is in front" looks like. The **process** is the authoritative
+# answer: LFS ships as ``LFS.exe``. The window title is only the fallback, for
+# a renamed executable, and it has to be the full product name -- a bare "lfs"
+# substring also matches a browser tab on the LFS forum, a file manager in a
+# folder called LFS, or this project's own window, and each of those would let
+# a keystroke through to exactly the application we are trying to protect.
+_LFS_PROCESS_NAMES = frozenset(('lfs', 'lfs_dbg'))
+_LFS_TITLE_MARKER = 'live for speed'
+
+
+def looks_like_lfs(window_title, process_name) -> bool:
+    """Does this foreground window belong to LFS?
+
+    Split out from the Win32 plumbing so the matching rule itself is testable
+    without Windows.
+    """
+    stem = (process_name or '').rsplit('.', 1)[0].strip().lower()
+    if stem in _LFS_PROCESS_NAMES:
+        return True
+    return _LFS_TITLE_MARKER in (window_title or '').lower()
 
 
 def lfs_has_focus() -> bool:
@@ -91,7 +107,7 @@ def lfs_has_focus() -> bool:
     returns ``True``: the check may refuse a keystroke because the user really
     is somewhere else, never because we could not ask. Failing closed here
     would silently disable auto-hold and the gearbox on a machine whose window
-    title we do not recognise.
+    we cannot inspect.
     """
     if not is_windows():
         return True
@@ -106,19 +122,19 @@ def lfs_has_focus() -> bool:
         length = user32.GetWindowTextLengthW(hwnd)
         buffer = ctypes.create_unicode_buffer(length + 1)
         user32.GetWindowTextW(hwnd, buffer, length + 1)
-        title = (buffer.value or '').lower()
-        if any(marker in title for marker in _LFS_TITLE_MARKERS):
-            return True
+        title = buffer.value or ''
 
-        # The title did not say so -- ask the process behind the window, which
-        # survives an LFS build that titles its window differently.
+        # Ask the process behind the window first: it survives an LFS build
+        # that titles its window differently, and it cannot be spoofed by a
+        # browser tab that happens to mention LFS.
+        process_name = ''
         pid = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if not pid.value:
-            return False
-        import psutil
+        if pid.value:
+            import psutil
+            process_name = psutil.Process(pid.value).name()
 
-        return _LFS_PROCESS_MARKER in psutil.Process(pid.value).name().lower()
+        return looks_like_lfs(title, process_name)
     except Exception as exc:  # pragma: no cover - Windows-only path
         logger.debug("Foreground window check failed (%s: %s) - allowing input",
                      type(exc).__name__, exc)

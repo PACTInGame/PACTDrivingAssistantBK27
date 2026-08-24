@@ -25,7 +25,7 @@ from misc import platform_shim
 from misc.input_guard import (REASON_AI_CONTROLLED, REASON_DIALOG,
                               REASON_LFS_NOT_FOCUSED, REASON_MODIFIER_HELD,
                               REASON_NOT_LOCAL_DRIVER, REASON_OFF_TRACK,
-                              REASON_TEXT_ENTRY, InputGuard)
+                              REASON_TEXT_ENTRY, InputGuard, looks_like_lfs)
 from ui.ui_manager import BTN_SIREN as UI_BTN_SIREN
 from ui.ui_manager import UIManager
 
@@ -154,6 +154,26 @@ def test_guard_ignores_a_stale_modifier_reading(bus, make_own_vehicle, make_outg
     bus.emit('outgauge_data', make_outgauge_packet(flags=pyinsim.OG_SHIFT))
     clock.advance(5.0)
     assert guard.may_inject(make_own_vehicle(local_plid=1, plid=1)) is None
+
+
+@pytest.mark.parametrize("title, process, expected", [
+    ("Live for Speed", "LFS.exe", True),        # the normal case
+    ("LFS 0.7E", "LFS.exe", True),              # any title, LFS is the process
+    ("Live for Speed", "renamed.exe", True),    # renamed exe, title still says it
+    ("LFS Forum - Mozilla Firefox", "firefox.exe", False),
+    ("C:\\LFS - File Explorer", "explorer.exe", False),
+    ("", "", False),
+    (None, None, False),
+])
+def test_looks_like_lfs_does_not_match_anything_that_merely_says_lfs(
+        title, process, expected):
+    """The process name decides; the title is only a fallback.
+
+    A bare "lfs" title substring matches a browser tab on the LFS forum and a
+    file manager in a folder called LFS - i.e. exactly the applications the
+    foreground check exists to protect from an injected keystroke.
+    """
+    assert looks_like_lfs(title, process) is expected
 
 
 def test_guard_refuses_when_lfs_is_not_the_foreground_window(bus, make_own_vehicle):

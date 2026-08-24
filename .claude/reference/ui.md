@@ -115,8 +115,13 @@ Rules that shaped the implementation:
 - **A refusal is logged at debug level, once per reason per 30 s.** It is normal
   operation, not an error, and must never become one message per cycle.
 - **The foreground check fails *open*.** Off Windows, and on any Win32 error, it returns
-  `True`: refusing because we could not ask would silently kill both features. It
-  accepts a window titled "Live for Speed" or a foreground process named `LFS*`.
+  `True`: refusing because we could not ask would silently kill both features. What it
+  accepts is decided by `looks_like_lfs(title, process_name)`: the **process** is
+  authoritative (stem `lfs` / `lfs_dbg`, i.e. `LFS.exe`), and the window title is only a
+  fallback for a renamed executable — and then it must contain the full `live for
+  speed`. A bare `lfs` title substring is deliberately *not* enough: it matches a browser
+  tab on the LFS forum and a file manager in a folder called LFS, which are exactly the
+  windows the check exists to keep keystrokes out of.
 - **A stale Shift reading does not block.** OutGauge only streams on track in an
   internal view (`conventions.md` §5.3) — exactly when injection is allowed at all — so
   the flags are fresh whenever they matter; a reading older than 1 s is treated as
