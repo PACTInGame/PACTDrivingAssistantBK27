@@ -60,12 +60,11 @@ class AssistanceManager:
         self.systems['gearbox'] = Gearbox(self.event_bus, self.settings)
         self.systems['ctw'] = CrossTrafficWarning(self.event_bus, self.settings)
         self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
-        # NavigationSystem ist bewusst *nicht* registriert: es gibt keinen
-        # Einstellungsschluessel 'sat_nav', also lief es nie - es kostete nur
-        # zwei Event-Abonnements und einen is_enabled()-Aufruf pro Zyklus
-        # (known-issues #18). Ueber seine Zukunft entscheidet WP10; bevor es
-        # zurueckkommt, muessen die print()-Aufrufe und die O(n)-Suche pro
-        # Zyklus raus (known-issues #5).
+        # NavigationSystem gibt es nicht mehr: es hatte nie einen
+        # Einstellungsschluessel, lief also nie, und war in der vorliegenden
+        # Form ohnehin nicht einsetzbar. Was ein neuer Entwurf anders machen
+        # muss, steht in reference/systems.md; der alte Code steht in der
+        # Git-Historie.
 
         # Chat-Command Handler (event-basiert, kein process()-System)
         self.chat_commands = ChatCommandHandler(self.event_bus, self.settings)
