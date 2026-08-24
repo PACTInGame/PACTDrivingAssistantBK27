@@ -1,3 +1,21 @@
+"""Capture a loaded LFS layout and turn it into ``track_data/track_data_XX.json``.
+
+**Offline tool, not a test** (it used to live in the project root as
+``test.py``, which every test runner tried to collect). It needs LFS running
+with the layout loaded and InSim on port 29999, and it pulls in ``numpy``,
+``scipy`` and ``matplotlib`` through ``MapBuilder`` -- none of which the
+running app needs. See ``reference/ai-traffic.md`` §5.
+
+Run it from the project root:  ``python tools/capture_layout.py``
+"""
+
+import os
+import sys
+
+# Run as a script, sys.path[0] is tools/ -- MapBuilder and pyinsim live one
+# directory up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pyinsim
 from MapBuilder import MapGenerator
 

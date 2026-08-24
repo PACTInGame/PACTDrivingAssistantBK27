@@ -27,26 +27,34 @@ controller.bind_ai_info_handler(plid, callback)         # callback(aii)
 - **Once you send `IS_AIC` to a car, you own it** — it will not steer, shift or restart
   its engine by itself. `AIDriver` therefore also handles gear shifting and stall
   recovery from `IS_AII`.
-- `AI_Cheatsheet.py` is a stale near-copy of `AI_Control.py` (its `_normalize_analog`
-  lacks the clamping). **Do not edit or import it.**
 
 ## 2. `AIDriver` state machine
 
 `STATE_INACTIVE → STATE_ACTIVE → STATE_STOPPING → STATE_INACTIVE`
 
-- **Start** (`ai_traffic_start`, from the menu) validates that
-  `track_data/track_data_XX.json` exists and that the current track is in
-  `ALLOWED_TRACKS = {b'BL1X', b'SO7', b'KY1X'}`. On mismatch it emits a translated
-  error plus a track-specific hint from `TRACK_LAYOUT_HINTS` (e.g. *"Select City"* for
-  SO). On success it sends `/axload AI_Traffic` and `/restart` to LFS, loads routes and
-  markers, and goes active.
+- **Start** (`ai_traffic_start`, from the menu) validates, in this order: that
+  `track_data/track_data_XX.json` exists, that the current track (a decoded `str`) is in
+  `ALLOWED_TRACKS = {'BL1X', 'SO7', 'KY1X'}`, and that the route file actually parses.
+  On mismatch it emits a translated error plus a track-specific hint from
+  `TRACK_LAYOUT_HINTS` (e.g. *"Select City"* for SO). **Only then** does it send
+  `/axload AI_Traffic` and `/restart` to LFS and go active — those two commands throw
+  away whatever layout the driver had loaded, so nothing is sent until the run is
+  certain to work.
+- Because that pair of commands cannot be undone, the menu asks first: the first click
+  on the toggle only arms the start (`^3Confirm: restart race` plus a notification
+  saying what will happen), the second executes it. Leaving the menu, reopening it or a
+  SHIFT+B repaint cancels the confirmation (`MenuSystem.ai_traffic_confirm_pending`).
 - **Stop** brakes every controlled car at 100 % for `STOP_BRAKE_CYCLES = 20` (2 s),
   then calls `stop_ai_control` on each and clears all per-vehicle state.
-- A track change (`state_data`) forces a stop and drops the loaded routes.
+- A track change (`state_data`) forces a stop and drops the loaded routes. A packet
+  with no usable track name is "unknown", not a change — otherwise one malformed
+  `IS_STA` would stop running traffic. `self.routes` is *rebound*, never mutated, and
+  `_process_active` binds it once per pass, because that handler runs on the packet
+  thread while `process()` runs on a worker (`conventions.md` §6).
 
-Cars are adopted only if their player name contains `AI` (`_is_local_ai_vehicle`) — LFS
-names its local AI drivers `AI 1`, `AI 2`, …. The player's own car is included as a
-candidate because the camera may be attached to an AI car.
+Cars are adopted only when LFS itself marks them as AI: `IS_NPL.PType` bit 1, exposed as
+`vehicle.data.is_ai` (`_is_local_ai_vehicle`, `conventions.md` §5.5). The player's own
+car is included as a candidate because the camera may be attached to an AI car.
 
 Because `IS_AII` requests are lost when the map reloads, `AIDriver` re-issues
 `request_ai_info` for any car silent for more than `AI_INFO_TIMEOUT = 2.0` s.
@@ -98,10 +106,31 @@ locked out until the car is `MARKER_COOLDOWN_DISTANCE = 8 m` away again:
 - `arrow_left` / `arrow_right` → indicator on for `INDICATOR_DURATION_CYCLES = 50` (5 s),
   then `IndicatorMode.CANCEL`
 
-**Performance note:** `get_closest_index_on_route` scans the *entire* route path for
-every controlled car every cycle, and `analyze_upcoming_track` is called twice per car.
-With many cars on a long route this is the heaviest loop in the project. Caching the
-previous index and searching a local window would fix it — see `known-issues.md` #9.
+**Route search (the hot part).** `get_closest_index_on_route(x, y, z, route)` still
+scans the whole path when called with three coordinates and a route, which is what
+`_find_closest_route` and any external caller does. `AIDriver` instead passes
+`previous_index=` — the index that car had last cycle, kept in `_route_index` — and the
+search then only looks at `ROUTE_SEARCH_WINDOW = 20` points either side of it. The
+window wraps when the road is a `closed_loop`. It is thrown away and the whole path
+scanned again when the car cannot be inside it: the best point found is further than
+`ROUTE_RESYNC_DISTANCE_M = 25 m` away (teleport, respawn, `/restart`), or it sits on the
+window's edge, where something nearer may lie just outside. So the answer equals the old
+full scan whenever the car is on its route, and being wrong costs one extra scan, never
+a wrong index. All comparisons are squared distances.
+
+The 120 m long-straight analysis — the second `analyze_upcoming_track` call, over ~25
+points — depends only on `(route_id, index)`, both fixed while the route is loaded, so
+it is cached in `_straight_cache` and computed at most once per route point instead of
+once per car per cycle. The cache is dropped when routes are loaded or dropped; it is
+bounded by the number of points in the track (~2500 booleans).
+
+Cost per controlled car per cycle: 41 squared-distance comparisons, one curvature
+analysis over the 5–8 points of the speed-dependent lookahead, one dict lookup, the
+marker scan, and one pass over the other controlled cars for collision avoidance.
+Measured on a cloud container with 20 cars on a synthetic 2000-point route: 0.66 ms per
+`_process_active` pass, against 5.3 ms for the pre-WP10 behaviour.
+`tests/test_ai_traffic.py` guards both halves — no full scan in a steady-state cycle,
+and the ratio against a full-scan baseline.
 
 ## 4. `track_data/*.json` format
 
@@ -127,10 +156,21 @@ One file per track prefix: `track_data_BL.json`, `track_data_KY.json`,
 }
 ```
 
-`roads` and `markers` are consumed by `AIDriver`; `roads` and `junctions` are consumed
-by `NavigationSystem` (which builds the Dijkstra graph from them).
+`roads` and `markers` are consumed by `AIDriver`. `junctions` is written by
+`MapBuilder` and read by nothing since `NavigationSystem` was deleted (`systems.md`);
+the shipped files carry 0–1 of them anyway.
 
-## 5. Generating map data — `MapBuilder.py` + `test.py`
+**The file is treated as hostile input.** `load_routes_from_file` validates the whole
+shape and raises `RouteDataError` — naming the file and the offending element — for a
+missing or unreadable file, invalid JSON, a non-object top level, a `roads` entry
+without an integer `road_id` or with a duplicate one, a `path` shorter than two points,
+or a point that is not three numbers. Marker types it does not know are logged and
+skipped, not fatal. Positions come back as tuples of floats, converted once. This
+matters because the load happens inside the InSim packet handler that delivered the
+menu click: `AIDriver._load_routes` catches the error, logs it and returns `False`, and
+the start is refused with a notification instead of an exception in the packet loop.
+
+## 5. Generating map data — `MapBuilder.py` + `tools/capture_layout.py`
 
 The map is authored **inside LFS's layout editor**: you place objects along each road,
 using a *different object type per road* — the object's `Index` becomes the `road_id`.
@@ -138,7 +178,8 @@ Marker object indices are fixed: **4 = stop line, 8 = arrow left, 11 = arrow rig
 
 Capture and build:
 
-1. Load the layout in LFS, then run `test.py` (a capture script, **not** a unit test).
+1. Load the layout in LFS, then run `python tools/capture_layout.py` from the project
+   root (a capture script, **not** a unit test — it used to be `test.py`).
    It opens InSim, requests `TINY_AXM`, converts objects to metres
    (`X/16`, `Y/16`, `Zbyte/4`), skips index 184, and once ≥ 318 objects have arrived
    runs `MapGenerator`.
@@ -156,8 +197,10 @@ Capture and build:
 The `.lyt` files in `layouts/` (`BL1X_AI_Traffic.lyt`, `KY1X_AI_Traffic.lyt`,
 `SO7_AI_Traffic.lyt`) are the authored layouts; the setup wizard copies them into
 `<LFS>/data/layout/`. Adding a new track means: author a layout → capture with
-`test.py` → commit `track_data_XX.json` and the `.lyt` → add the track code to
-`AIDriver.ALLOWED_TRACKS` and a hint to `TRACK_LAYOUT_HINTS`.
+`tools/capture_layout.py` → commit `track_data_XX.json` and the `.lyt` → add the track
+code to `AIDriver.ALLOWED_TRACKS` and a hint to `TRACK_LAYOUT_HINTS`.
 
-`MapBuilder`/`test.py` are **offline tools**; they import `numpy`, `scipy` and
-`matplotlib`, which the runtime app does not need in its hot path.
+`MapBuilder.py` and `tools/capture_layout.py` are **offline tools**; they import
+`numpy`, `scipy` and `matplotlib`, which the runtime app does not need in its hot path.
+Neither is imported by the app, and `pytest.ini`'s `testpaths = tests` keeps the capture
+script out of the test run.

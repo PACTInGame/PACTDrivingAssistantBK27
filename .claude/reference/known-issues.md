@@ -35,19 +35,6 @@ A system that reads `own_vehicle.data.x` and `own_vehicle.data.speed` on
 separate lines can still straddle a packet. Bind `data = own_vehicle.data` once
 per `process()` call, or give `OwnVehicle` the same swap treatment.
 
-## Performance
-
-**#5 — `navigation.py` is unusable as written.** Dozens of `print()` calls per 100 ms
-cycle (the only `print()` calls left in a hot path), and `_get_closest_road` walks every segment of every road each cycle. It is
-currently inert because the system is not registered in `AssistanceManager._init_systems`
-(and `sat_nav_active` is `False`) — both the logging and the nearest-road lookup
-(spatial index or last-road-first search) must be fixed before it can be switched on.
-
-**#9 — AI traffic route search is O(path length) per car per cycle.**
-`get_closest_index_on_route` scans the full route for each controlled car, and
-`analyze_upcoming_track` runs twice per car (normal + 120 m long-straight lookahead).
-Cache the previous index and search a local window around it.
-
 ## Correctness
 
 **#35 — FCW's detection quad is self-intersecting, so it is skewed.** The corner order
@@ -125,19 +112,6 @@ and stops braking while the driver is still pressing the pedal key. Any future a
 braking on keyboard/mouse must track real hardware key state and suppress its own
 release. `control-intervention.md` §3.2.
 
-## Housekeeping
-
-**#19 — `AI_Cheatsheet.py` is a stale duplicate of `AI_Control.py`.** ~476 lines,
-imported by nothing, differs only in that `_normalize_analog` lacks range clamping.
-Delete it.
-
-**#20 — `test.py` is not a test.** It is a live-capture script for `MapBuilder`. The
-name will confuse any test runner and any reader. Rename to something like
-`tools/capture_layout.py`.
-
-**#21 — Unused module `vehicles/VehicleInfo.py`.** A parallel, richer vehicle data
-container that nothing constructs. Either adopt it or delete it.
-
 ## Deliberately disabled — leave alone unless asked
 
 - **Automatic emergency braking.** `collision_warning.py` ends with
@@ -145,6 +119,3 @@ container that nothing constructs. Either adopt it or delete it.
   commented out in `AssistanceManager._init_systems`; the
   `automatic_emergency_brake` setting is inert. The whole intervention path needs
   redesign before it comes back.
-- **`NavigationSystem`** — not registered in `AssistanceManager._init_systems` since
-  WP6. Needs the `print()` calls and the per-cycle nearest-road scan fixed (#5) before
-  it can be wired up again.

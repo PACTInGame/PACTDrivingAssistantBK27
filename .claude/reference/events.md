@@ -116,7 +116,7 @@ payload shapes and different subscribers. This is a trap — see `known-issues.m
 
 | Event | Payload | Emitters | Subscriber |
 |---|---|---|---|
-| `notification` | `{notification: str}` (may carry `type`, `icon` from navigation) | ~27 call sites across most systems, plus `ThreadManager` / `AssistanceManager` when they disable a failing task or system | `UIManager` |
+| `notification` | `{notification: str}` | ~27 call sites across most systems, plus `ThreadManager` / `AssistanceManager` when they disable a failing task or system | `UIManager` |
 | `play_audio` | `{audio_file: str}` — basename without `.wav`, resolved under `audio/` | `UIManager` | `AudioPlayer` |
 | `show_siren_ui` | `{ui: bool}` | `LightAssists` | `UIManager` |
 | `siren_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |

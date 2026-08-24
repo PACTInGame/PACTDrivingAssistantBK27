@@ -365,6 +365,16 @@ class LanguageManager:
                 "dk": "Start AI-Trafik",
                 "se": "Starta AI-Trafik"
             },
+            "Confirm: restart race": {
+                "en": "Confirm: restart race",
+                "de": "Bestätigen: Neustart",
+                "it": "Conferma: riavvia gara",
+                "fr": "Confirmer: redémarrer",
+                "tr": "Onayla: yeniden başlat",
+                "no": "Bekreft: start på nytt",
+                "dk": "Bekræft: genstart løb",
+                "se": "Bekräfta: starta om"
+            },
             # ─── Keys and Axes Menu ───────────────────────────────────
             "Handbrake Key": {
                 "en": "Handbrake Key",
@@ -497,6 +507,16 @@ class LanguageManager:
                 "no": "Kameraet må være på eget kjøretøy.",
                 "dk": "Kameraet skal være på eget køretøj.",
                 "se": "Kameran måste vara på eget fordon."
+            },
+            "Loads AI layout and restarts the race": {
+                "en": "Loads AI layout and restarts the race",
+                "de": "Lädt KI-Layout, startet Rennen neu",
+                "it": "Carica layout IA e riavvia la gara",
+                "fr": "Charge le circuit IA et relance la course",
+                "tr": "YZ düzenini yükler, yarışı yeniden başlatır",
+                "no": "Laster KI-layout og starter løpet på nytt",
+                "dk": "Indlæser AI-layout og genstarter løbet",
+                "se": "Laddar AI-layout och startar om loppet"
             },
             # ─── Notifications (auto_hold.py) ────────────────────────
             # "Auto Hold" is already defined above
@@ -684,7 +704,7 @@ class LanguageManager:
                 "dk": "Forkert banekonfiguration",
                 "se": "Fel bankonfiguration"
             },
-            # ─── Notifications (navigation.py) ───────────────────────
+            # ─── Turn instructions (kept for a future sat-nav) ───────
             "Destination Reached": {
                 "en": "Destination Reached",
                 "de": "Ziel erreicht",

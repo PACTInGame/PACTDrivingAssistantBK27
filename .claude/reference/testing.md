@@ -4,8 +4,9 @@
 Linux, Windows or macOS with only `requirements-dev.txt` installed (`pytest`, `psutil`,
 `shapely`, `numpy`). No LFS, no display, no sound device, no socket.
 
-`test.py` in the project root is still a live LFS capture script, not a test
-(`known-issues.md` #20); `pytest.ini` sets `testpaths = tests`, so it is never collected.
+The live LFS capture script that used to sit in the project root as `test.py` is now
+`tools/capture_layout.py`; `pytest.ini` sets `testpaths = tests`, so neither it nor
+`MapBuilder.py` is ever collected.
 
 ## How to run
 
@@ -74,6 +75,10 @@ tests/
                            calibration (countdown, cancel, gear storage, legacy file),
                            high-beam dedupe, strobe timing, and the single owner of
                            the siren/strobe state
+  test_ai_traffic.py       the windowed route search against a full scan over the real
+                           track_data files, the teleport resync, route-file validation,
+                           PType-based adoption, the routes/worker race, the AI traffic
+                           start confirmation, and the per-cycle budget with 20 cars
 ```
 
 ### Fixtures (`tests/conftest.py`)
@@ -147,6 +152,7 @@ No mocks needed, no LFS. These are already pure or nearly so:
 |---|---|
 | `misc/helpers.py` — `calc_polygon_points`, `point_in_rectangle` | known points in/out of rotated rectangles; degenerate rectangles |
 | `vehicles/vehicle.py` — `update_distance_to_player`, `update_angle_to_player` | metre conversion, angle 0 = straight ahead, wraparound at 0/360 |
+| `assistance/AI_Driver.py` — `get_closest_index_on_route`, `load_routes_from_file` | *(done — `test_ai_traffic.py`)* |
 | `assistance/AI_Driver.py` — `calculate_angle`, `calculate_angle_meters`, `analyze_upcoming_track`, `calculate_feedforward_steering`, `calculate_feedforward_throttle_brake`, `get_next_points_for_distance` | straight line → curvature 0; known arc → known curvature; clamping at ±45°; wraparound on closed loops |
 | `assistance/cross_traffic_warning.py` — `_direction_vector`, `_find_intersection`, `_compute_side` | *(done — `test_cross_traffic.py`)* |
 | `assistance/blind_spot_warning.py` | *(done — `test_blind_spot.py`)* |
@@ -229,6 +235,15 @@ def test_assistance_cycle_within_budget(benchmark_scene_40_cars):
 Run per system as well, so a regression names its culprit. Note CI hardware differs
 from the target laptop — treat the number as a relative regression guard, not an
 absolute guarantee.
+
+`test_ai_traffic.py` shows the two shapes that survive a noisy container, and the first
+is worth preferring wherever it fits:
+
+* **count the operations**, not the milliseconds — after the adoption cycle, no
+  steady-state cycle may call `_scan_whole_path` at all, asserted by monkeypatching it;
+* **compare against a baseline measured in the same test run** — the same scene with the
+  caches dropped each cycle is the pre-optimisation behaviour, and the assertion is on
+  the ratio. Any absolute number stays as a loose ceiling with a comment saying why.
 
 ## Not worth automating
 

@@ -23,7 +23,6 @@ constructor's `name` argument **must match a key the settings know** —
 | `ai_traffic` | `AIDriver` | `ai_traffic` |
 | — | `ChatCommandHandler` | event-driven, no `process()` |
 | *(commented out)* | `ControllerEmulator` | `controller_emulator` |
-| *(not registered)* | `NavigationSystem` | would need a `sat_nav` key — see below |
 
 ---
 
@@ -247,18 +246,26 @@ rebind in the menu works without a restart.
   5-sample throttle average.
 - Gear numbering follows OutGauge: `0` = reverse, `1` = neutral, `2` = 1st gear.
 
-## Navigation — `navigation.py` (dormant)
+## Navigation — removed in WP10
 
-Dijkstra route guidance over the junction graph in `track_data/*.json`, with
-turn-by-turn maneuver detection via cross/dot product of the incoming and outgoing road
-vectors, notifying 150 m before a junction.
+There was a `navigation.py` with a `NavigationSystem`: Dijkstra route guidance over the
+`junctions` graph in `track_data/*.json`, turn-by-turn maneuver detection from the
+cross/dot product of the incoming and outgoing road vectors, and a notification 150 m
+before a junction. It never ran — no `sat_nav` settings key existed, so `is_enabled()`
+was always false — and WP6 stopped constructing it. WP10 deleted the file.
 
-**Not wired up:** since WP6 `NavigationSystem` is no longer constructed in
-`AssistanceManager._init_systems`. It had no `sat_nav` settings key, so it could never
-be enabled, and every cycle still paid for its `is_enabled()` call and its two event
-subscriptions. Before it can come back it needs the `print()` calls out of the hot path
-and an index for the nearest-road scan (`known-issues.md` #5); adding the settings key
-alone would only make a broken system reachable.
+**If sat-nav is wanted, it is a new design, not a resurrection.** What the deleted
+version got wrong, and what a new one has to do differently:
+
+- dozens of `print()` per 100 ms cycle — use `logging`, and nothing per cycle;
+- `_get_closest_road` walked every point of every road every cycle, for one car; the
+  windowed search `AIDriver` now uses (`ai-traffic.md` §3) is the pattern to copy;
+- it needed a settings key (`SettingsManager.known_keys`) before it could ever be
+  enabled, and a menu entry before a user could find it.
+
+The shipped route data still carries the `junctions` the graph was built from, and the
+translated turn instructions are still in `misc/language.py`. `git log -- assistance/navigation.py`
+has the original if it is ever wanted as a starting point.
 
 ## Chat commands — `chat_commands.py`
 
@@ -274,7 +281,10 @@ Add new ones to the `self._commands` dict and to `_cmd_help`'s text.
 
 ## AI Driver — `AI_Driver.py`
 
-See `reference/ai-traffic.md`.
+See `reference/ai-traffic.md`. Two things belong in every reader's head before touching
+it: cars are adopted by `IS_NPL.PType` bit 1, never by name, and the nearest-point
+search is windowed around the previous index — hand it `previous_index=` or it falls
+back to scanning the whole route.
 
 ## Controller Emulator — `controller_emulator.py` (disabled)
 

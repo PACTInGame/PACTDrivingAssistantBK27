@@ -258,8 +258,9 @@ Do:
 - Use `misc.spacial_hash_grid.SpatialHashGrid` for broad-phase against layout objects.
 
 Do not:
-- `print()` inside `process()` or a packet handler. (`navigation.py` violates this
-  heavily — dozens of lines per cycle; it is no longer registered, see `systems.md`.)
+- `print()` inside `process()` or a packet handler. Every system logs through
+  `logging.getLogger(__name__)`; the last offenders (`AI_Driver`, `navigation.py`) went
+  in WP10.
 - Allocate polygons per vehicle per cycle without a distance pre-filter
   (`blind_spot_warning.py` currently does).
 - Do file I/O, `winsound`, `time.sleep`, or anything blocking.

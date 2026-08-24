@@ -134,7 +134,6 @@ vehicles/
   vehicle.py               Vehicle + VehicleData dataclass; position, heading, distance/angle to player, decoded names, IS_NPL identity; frame staging (begin_frame/commit_frame)
   own_vehicle.py           OwnVehicle(Vehicle): OutGauge data (rpm, gear, pedals, dash lights) + local_plid / viewed_plid / is_local_driver
   vehicle_manager.py       Consumes MCI/NPL/PLL/OutGauge → reassembles MCI frames on CCI_FIRST/CCI_LAST → emits an immutable vehicles_updated snapshot / own_vehicle_updated
-  VehicleInfo.py           Legacy/unused data container — not wired into anything
 
 assistance/
   base_system.py           AssistanceSystem ABC: process(), is_enabled()
@@ -146,7 +145,6 @@ assistance/
   auto_hold.py             Automatic handbrake when stopped (injects a keypress)
   adaptive_lights.py       Adaptive brake lights, high beam assist, cop siren/strobe
   gearbox.py               Automatic gearbox with per-car calibration (injects keypresses)
-  navigation.py            Dijkstra route guidance — currently never enabled, see known-issues
   AI_Driver.py             AI traffic controller: drives LFS AI cars along recorded routes
   chat_commands.py         `$`-prefixed in-game chat commands + periodic tooltips (event-driven, no process())
   controller_emulator.py   Emulated brake input via vJoy — disabled in manager.py
@@ -172,9 +170,8 @@ pyinsim/                   Forked & extended pyinsim 2.1.0 — see reference/ins
 Controls/wheel.py          vJoy brake actuation (currently unreachable, see known-issues)
 
 AI_Control.py              AICarController: high-level wrapper over IS_AIC (AI car control)
-AI_Cheatsheet.py           Stale near-duplicate of AI_Control.py — dead file, do not edit
 MapBuilder.py              Offline tool: turns a captured LFS layout into track_data/*.json (roads, junctions, markers)
-test.py                    NOT a test — a capture script that feeds a live layout into MapBuilder
+tools/capture_layout.py    NOT a test — a capture script that feeds a live layout into MapBuilder
 
 track_data/*.json          Generated route/junction/marker maps per track (BL, KY, SO)
 layouts/*.lyt              LFS layout files installed into LFS by the setup wizard

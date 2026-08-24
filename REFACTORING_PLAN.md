@@ -890,3 +890,41 @@ but only the game has a foreground window, a real keyboard binding and real car 
   as reversing. Reversing hard must still not flash them.
 - **Non-cop players get no light commands**: with `cop_assistance` on but a plain player
   name, join a track and change your name. No light may change by itself.
+
+### WP10 — AI traffic, robustness and dead code
+
+`tests/test_ai_traffic.py` drives the route search against the real `track_data` files,
+the route-file validation, the adoption rule and the menu prompt, but only the game has
+AI cars, a layout to reload and a frame rate.
+
+- **The start now asks first**: open the AI Traffic menu and click the toggle once. The
+  race must **not** restart; the button must turn `^3` "Confirm: restart race" and a
+  notification must say the AI layout will be loaded. Click it again — only now do
+  `/axload AI_Traffic` and `/restart` happen. Close the menu after the first click,
+  reopen it: the button must say "Start AI Traffic" again.
+- **Traffic still starts and drives**: on SO7/City (also BL1X and KY1X), confirm the
+  start. The AI cars must pick up their routes, keep to the centre line, indicate at the
+  arrows and stop at the stop lines exactly as before — the control law is unchanged, only
+  the route search under it.
+- **After a `/restart` or a respawn**: press SHIFT+R or reset a car mid-lap. The car must
+  rejoin its route immediately, not drive off towards where it used to be — that is the
+  windowed search resyncing by full scan.
+- **Frame rate with a full grid**: with ~20 AI cars on SO7, watch the frame rate and the
+  log for skipped cycles. It must improve, never regress; the search is now ~8× cheaper
+  per car and the 120 m lookahead is computed once per route point instead of once per
+  car per cycle.
+- **A human whose name contains "AI"**: join with a name like MAIK or RAID (or have a
+  friend do so online) while traffic runs. That car must stay under human control; the
+  real AI cars must still be driven.
+- **A broken route file**: rename or corrupt `track_data/track_data_SO.json` (e.g. delete
+  a bracket), then try to start traffic on City. The app must show the red "Traffic not
+  avail. on this map" notification, log a line naming the file and the offending element,
+  and **must not** reload the layout or restart the race — and InSim must stay connected.
+- **Track change while traffic runs**: switch track from the entry screen with traffic
+  active. Traffic must stop, the cars must be handed back, and the menu button must show
+  "Start AI Traffic" again.
+- **Nothing lost with the dead code gone**: `AI_Cheatsheet.py`, `vehicles/VehicleInfo.py`
+  and `assistance/navigation.py` are deleted and `test.py` is now
+  `tools/capture_layout.py`. Nothing in the app should look or behave differently;
+  confirm the capture script still runs from the project root with a layout loaded
+  (`python tools/capture_layout.py`).

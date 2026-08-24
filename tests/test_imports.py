@@ -17,9 +17,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The packages that make up the running application.
 PACKAGES = ('assistance', 'core', 'lfs', 'misc', 'ui', 'vehicles')
 
-# Root-level modules that are part of the app (MapBuilder.py, test.py and
-# AI_Cheatsheet.py are offline tooling / dead code and pull in scipy and
-# matplotlib -- see WP10).
+# Root-level modules that are part of the app. MapBuilder.py and
+# tools/capture_layout.py are offline tooling: they need scipy and matplotlib,
+# which the running app does not (reference/ai-traffic.md §5).
 ROOT_MODULES = ('main', 'AI_Control')
 
 # Modules that must never be imported at module level again.

@@ -48,6 +48,10 @@ class MenuSystem:
         self.translator = LanguageManager()
         self.keybinder = key_binder.Keybinder(self.ui_manager.event_bus, self.settings)
         self.ai_traffic_active = False
+        # Der Start laedt das Layout AI_Traffic und startet das Rennen neu -
+        # das verwirft, was der Fahrer geladen hat. Deshalb fragt der erste
+        # Klick nach, erst der zweite startet (REFACTORING_PLAN WP10).
+        self.ai_traffic_confirm_pending = False
         # Welche Taste gerade neu belegt wird ('await_key').
         self.pending_key_setting = ''
         # Zuletzt aktiver PDC-Modus, damit der Ein/Aus-Schalter die Wahl
@@ -88,6 +92,7 @@ class MenuSystem:
     def _on_ai_traffic_state_changed(self, data):
         """Callback from AIDriver when traffic state changes."""
         self.ai_traffic_active = data.get('active', False)
+        self.ai_traffic_confirm_pending = False
 
     def _on_buttons_cleared(self, data=None):
         """SHIFT+B: LFS hat unsere Buttons geworfen (reference/ui.md §1.5)
@@ -349,6 +354,10 @@ class MenuSystem:
         if self.ai_traffic_active:
             toggle_color = "^2"
             toggle_text = self.translator.get("Stop AI Traffic", lang)
+        elif self.ai_traffic_confirm_pending:
+            # Zweiter Klick startet wirklich; Close bricht ab.
+            toggle_color = "^3"
+            toggle_text = self.translator.get("Confirm: restart race", lang)
         else:
             toggle_color = "^1"
             toggle_text = self.translator.get("Start AI Traffic", lang)
@@ -363,7 +372,13 @@ class MenuSystem:
         ]
 
     def open_ai_traffic_menu(self):
-        """Öffnet das AI-Traffic-Menü"""
+        """Öffnet das AI-Traffic-Menü
+
+        Die Startbestaetigung gilt nur fuer den aktuellen Besuch des Menues:
+        wer es verlaesst, neu oeffnet oder es nach SHIFT+B neu zeichnen laesst,
+        faengt wieder beim harmlosen "Start"-Button an.
+        """
+        self.ai_traffic_confirm_pending = False
         self._open('ai_traffic', self._buttons_ai_traffic())
 
     # ─── Keys and Axes Menu ───────────────────────────────────────────
@@ -597,10 +612,22 @@ class MenuSystem:
         self._cycle('park_distance_control_mode', (1, 2), self.open_parking_menu)
 
     def _toggle_ai_traffic(self):
+        """Startet/stoppt den KI-Verkehr - der Start erst nach Rueckfrage
+
+        Der Start schickt ``/axload AI_Traffic`` und ``/restart`` an LFS. Das
+        laesst sich nicht rueckgaengig machen und traf frueher jeden, der den
+        Button aus Neugier angetippt hat. Der erste Klick sagt deshalb nur an,
+        was passieren wird; der zweite fuehrt es aus.
+        """
         if self.ai_traffic_active:
             self.ui_manager.event_bus.emit('ai_traffic_stop', {})
             self._notify('^3', "AI Traffic stopping...")
+            self.ai_traffic_confirm_pending = False
+        elif not self.ai_traffic_confirm_pending:
+            self.ai_traffic_confirm_pending = True
+            self._notify('^3', "Loads AI layout and restarts the race")
         else:
+            self.ai_traffic_confirm_pending = False
             self.ui_manager.event_bus.emit('ai_traffic_start', {})
             # AIDriver validates the track and emits its own notifications.
             # ai_traffic_active is updated by the synchronous callback
@@ -608,7 +635,9 @@ class MenuSystem:
             if self.ai_traffic_active:
                 self._notify('^2', "AI Traffic started.")
                 self._notify('^3', "Camera needs to be on own vehicle.")
-        self.open_ai_traffic_menu()
+        # Nicht open_ai_traffic_menu(): das wuerde die Rueckfrage sofort
+        # wieder zuruecksetzen.
+        self._open('ai_traffic', self._buttons_ai_traffic())
 
     # ─── Click Handling ───────────────────────────────────────────────
 
