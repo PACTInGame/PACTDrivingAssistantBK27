@@ -117,11 +117,11 @@ superseded by these docs but kept for context.
   winsound / pynput / pygame / tkinter / misc.vjoy` at module level again: the shim
   imports them lazily and returns a recording no-op where they are missing. That is what
   keeps the code importable — and therefore testable — off Windows.
-- **`pyautogui` keypresses are global OS input.** Any code that injects keys must be
-  blocked while `text_entry` or `dialog` is set, while the user holds **Shift** (LFS
-  binds SHIFT+key commands), while not `on_track`, and when LFS is not the foreground
-  window. `reference/ui.md` §1.4 has the full table — today only `AutoHold` guards at
-  all, and only partially.
+- **`pyautogui` keypresses are global OS input.** Every injecting call site asks
+  `misc/input_guard.py` first: blocked while `text_entry` or `dialog` is set, while the
+  user holds **Shift**/**Ctrl**, while not `on_track`, while OutGauge describes another
+  car, and when LFS is not the foreground window. Never press a key without it, and read
+  the key from settings at press time. `reference/ui.md` §1.4 has the full table.
 - **LFS is many screens, not one.** `StateHandler` derives the context from `IS_STA` +
   `IS_CIM`; branch on `state_data['buttons_allowed']` (and `['screen']`), never on
   `on_track` alone. Anything that draws only on change must also subscribe to

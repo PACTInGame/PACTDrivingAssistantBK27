@@ -1,7 +1,10 @@
+import logging
 import threading
 
 from misc.language import LanguageManager
 from misc.platform_shim import get_input_listener
+
+logger = logging.getLogger(__name__)
 
 
 class Keybinder:
@@ -18,20 +21,32 @@ class Keybinder:
 
     def _listen_for_key(self, data):
         """Start listening for a key press in a separate thread."""
-        setting = data.get('setting')
+        setting = data.get('setting') if isinstance(data, dict) else None
         if setting is None:
             return
 
+        # A second request while a capture is still running used to overwrite
+        # the pending target, so the next key pressed was stored against the
+        # wrong setting. The running capture keeps its target; the new request
+        # is ignored until it finishes or is answered.
+        if self._listening:
+            logger.debug("Key capture already running for %r - ignoring request for %r",
+                         self._current_setting, setting)
+            return
+
+        # Set here, not in the thread: two events arriving back to back would
+        # otherwise both pass the check above before either thread ran.
+        self._listening = True
         self._current_setting = setting
         thread = threading.Thread(target=self._start_listening, daemon=True)
         thread.start()
 
     def _start_listening(self):
-        """Start the keyboard and mouse listeners."""
-        if self._listening:
-            return
+        """Start the keyboard and mouse listeners.
 
-        self._listening = True
+        Runs on the capture thread; ``_listening`` is already set by
+        ``_listen_for_key``.
+        """
         self._mouse_left_first_press = False
 
         pynput = get_input_listener()

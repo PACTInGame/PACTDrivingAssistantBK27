@@ -93,31 +93,50 @@ Practical rules:
 ### 1.4 Input injection safety — hard rules
 
 `AutoHold` and `Gearbox` inject global keypresses with `pyautogui`. These are real OS
-keystrokes: they go wherever focus is. Any code path that injects a key **must** be
-blocked when:
+keystrokes: they go wherever focus is. **Every such call site goes through
+`misc/input_guard.py`** — `InputGuard.may_inject(own_vehicle)` returns `None` when the
+keystroke may be sent and a reason string when it may not:
 
-| Condition | Source | Why |
-|---|---|---|
-| `ISS_TEXT_ENTRY` is set | `state_data['text_entry']` | the keystroke is typed into the LFS chat instead of acting as a control |
-| `ISS_DIALOG` is set | `state_data['dialog']` | the keystroke operates the open dialog |
-| the user is holding **Shift** | `OutGaugePack.Flags & OG_SHIFT` (1); `OG_CTRL` (2) for Ctrl. Falls back to a local `pynput` listener when OutGauge is not streaming | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
-| LFS is not the foreground window | Win32 / `pygetwindow` | otherwise we type into the user's browser |
-| not `on_track` | `state_data['on_track']` | no control input is meaningful |
+| Condition | Reason | Source | Why |
+|---|---|---|---|
+| not `on_track` | `off_track` | `state_data['on_track']` | no control input is meaningful |
+| `ISS_TEXT_ENTRY` is set | `text_entry` | `state_data['text_entry']` | the keystroke is typed into the LFS chat instead of acting as a control |
+| `ISS_DIALOG` is set | `dialog` | `state_data['dialog']` | the keystroke operates the open dialog |
+| the user is holding **Shift** or **Ctrl** | `modifier_held` | `OutGaugePack.Flags & OG_SHIFT` (1) / `OG_CTRL` (2) | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
+| OutGauge describes another car | `not_local_driver` | `own_vehicle.is_local_driver` | TAB moves OutGauge to a spectated car; shifting on its rpm actuates *our* car (`conventions.md` §5.2) |
+| LFS drives the car itself | `ai_controlled` | `own_vehicle.data.is_ai` | our keys would fight the AI |
+| LFS is not the foreground window | `lfs_not_focused` | Win32 `GetForegroundWindow` | otherwise we type into the user's browser |
 
-`AutoHold` currently checks `dialog` and `text_entry` only. `Gearbox` checks **nothing**.
-Neither checks Shift or focus. See `known-issues.md` #11.
+Rules that shaped the implementation:
 
-**Shift state is available from OutGauge**: `OutGaugePack.Flags` carries `OG_SHIFT` (1)
-and `OG_CTRL` (2), updated at the OutGauge rate. Since OutGauge only streams while on
-track in an internal view (`conventions.md` §5.3) — which is exactly when key injection
-happens — this covers the relevant cases. `misc/key_binder.py` already depends on
-`pynput` and is the natural place for a fallback listener if a broader guarantee is
-needed. (`IS_BTC.CFlags` also has `ISB_SHIFT`/`ISB_CTRL`, but only for button clicks.)
+- **The guard is asked only where a key would really be pressed** — once per auto-hold
+  engagement, once per gear change — never once per cycle. The conditions are ordered
+  cheapest first; the Win32 call is last.
+- **A refusal is logged at debug level, once per reason per 30 s.** It is normal
+  operation, not an error, and must never become one message per cycle.
+- **The foreground check fails *open*.** Off Windows, and on any Win32 error, it returns
+  `True`: refusing because we could not ask would silently kill both features. It
+  accepts a window titled "Live for Speed" or a foreground process named `LFS*`.
+- **A stale Shift reading does not block.** OutGauge only streams on track in an
+  internal view (`conventions.md` §5.3) — exactly when injection is allowed at all — so
+  the flags are fresh whenever they matter; a reading older than 1 s is treated as
+  unknown rather than as "held", or one lost packet would disable the feature.
+  `misc/key_binder.py` already depends on `pynput` and is the natural place for a local
+  fallback listener if a broader guarantee is ever wanted. (`IS_BTC.CFlags` also has
+  `ISB_SHIFT`/`ISB_CTRL`, but only for button clicks.)
+- **The input mode is deliberately not a condition.** `own_control_mode` /
+  `vehicle.data.control_mode` (mouse / keyboard / joystick) says nothing about whether
+  the *keyboard* binding works — a wheel user still has one. Gating on it would remove
+  the feature for those users.
+- **Key settings are read live**, at the moment of the keypress. A key rebound in the
+  menu takes effect immediately; `Gearbox` used to cache them in `__init__`, so a rebind
+  only arrived after a restart.
 
 Also note: whichever key the injector presses must be the key **the user has actually
 bound in LFS**. The `user_*_key` settings are the app's guess at that binding and
 nothing verifies it — a wrong binding means the injection does nothing, or does
-something else entirely.
+something else entirely. `/key <key> <function>` would let us push our binding *into*
+LFS instead of guessing; see `control-intervention.md` §3.1.
 
 ### 1.5 The user can clear our buttons — and we never notice
 
@@ -154,15 +173,19 @@ rather than writing literals.
 | 20–40 | `MenuSystem` | `20` floating "Main Menu" opener, `21` title, `22`–`31` entries, `40` close/cancel |
 | 41–60 | `UIManager` | PDC display: `41–43`/`44–46`/`47–49` front green/yellow/red, `51–53`/`54–56`/`57–59` rear, `60` "PDC" label |
 | 61 | `UIManager` | Notification line |
-| 62–63 | `UIManager` + `LightAssists` | `62` Siren, `63` Strobe (cop mode) |
+| 62–63 | `LightAssists` (state) + `UIManager` (drawing) | `62` Siren, `63` Strobe (cop mode) |
 | 100–101 | `UIManager` | Debug readouts (deceleration, distance) — subscribers commented out |
 
 When adding UI, claim a free range here and update both this table and the comment in
 `ui/ui_manager.py`.
 
-**Buttons 62/63 have two independent click handlers** — `UIManager._handle_button_click`
-tracks the visual state and `LightAssists._handle_button_click` performs the action.
-Both subscribe to `button_clicked`, so their two booleans can drift apart.
+**Buttons 62/63 have exactly one click handler**: `LightAssists._handle_button_click`.
+It owns the siren/strobe state and publishes `siren_state_changed` /
+`strobe_state_changed`; `UIManager` subscribes to those and only repaints the caption.
+The button ids are therefore spelled out in both files (`BTN_SIREN` / `BTN_STROBE`) and
+must stay in step. Before WP9 both classes kept their own boolean off the same
+`button_clicked` event, so the `$siren` chat command moved one of them and the caption
+lied.
 
 ## 3. HUD and warnings — `ui/ui_manager.py`
 

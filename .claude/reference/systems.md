@@ -171,10 +171,14 @@ Six virtual ultrasonic sensors (3 front, 3 rear) against layout objects *and* ca
 Applies the handbrake when the car is stopped with the brake pressed.
 
 - Trigger: `speed < 0.05 km/h and brake > 0.05` and the handbrake dash light is off.
-- Actuation is a **global `pyautogui` keypress** of `user_handbrake_key`. It is
-  suppressed while `dialog` or `text_entry` is active — this guard is essential and
-  must not be removed. It does **not** check whether the user is holding Shift, nor
-  whether LFS has focus. Both are required; see `ui.md` §1.4 for the full rule set.
+- Actuation is a **global `pyautogui` keypress** of `user_handbrake_key`, read from
+  the settings at press time, and only after `InputGuard.may_inject()` agrees —
+  on track, no dialog/text entry, no Shift or Ctrl held, LFS in the foreground and
+  OutGauge really describing our car (`ui.md` §1.4). Never press a key here without it.
+- It re-presses on every cycle in which the car is stopped, braked and the handbrake
+  dash light is still off. That is the recovery path when the keypress did not take
+  (wrong binding) and the reason a wrong `user_handbrake_key` is *quiet* rather than
+  loud.
 
 ## Adaptive Lights / Cop Mode — `adaptive_lights.py`
 
@@ -182,31 +186,59 @@ Three unrelated features share this system:
 
 1. **Adaptive brake lights** — flashes the hazards at ~150 ms while decelerating
    harder than 8 m/s² (or brake > 0.85 above 10 km/h), not while reversing.
-2. **High beam assist** — high beam on unless a car is visible ahead
-   (`distance < 250 m`, `speed > 1`, within ±15° cone). Gated by `high_beam_assist`.
+   "Reversing" is `misc.helpers.is_reversing`, i.e. a *signed modular* heading
+   difference — the plain subtraction it used before switched the brake light off in
+   one heading sector.
+2. **High beam assist** — high beam unless a car is visible ahead (`distance < 250 m`,
+   `speed > 1`, within ±15° cone). Gated by `high_beam_assist`. Two rules that make it
+   a driver aid instead of an override:
+   - **Lights off means hands off.** With neither low nor full beam on, the assist does
+     nothing. It used to force the low beam on every cycle, so driving without lights
+     was impossible.
+   - **One command per state change.** It compares the desired beam against the one
+     OutGauge reports *and* against what it last asked for, so an unchanged decision
+     sends nothing, and a driver who dips again by hand is not overruled until the
+     situation itself changes. Before, this was one `send_light_command` per cycle,
+     ~10 InSim packets per second.
 3. **Siren / strobe (cop roleplay)** — enabled only when the player name contains
    `[cop]`, `[tow]` or `[res]` **and** `cop_assistance` is on. The strobe is a 14-step
-   light pattern advanced one step per cycle. Siren uses `SMALL_LCS`; the strobe uses
-   `send_light_command`. Toggled by buttons 62/63 or the `$siren` / `$strobe` chat
-   commands.
+   light pattern advanced **every `STROBE_STEP_S` (0.1 s)**, not once per cycle, so its
+   speed no longer follows `assistance_refresh_rate` (the cycle time is still the
+   ceiling). Siren uses `SMALL_LCS`; the strobe uses `send_light_command`. Toggled by
+   buttons 62/63 or the `$siren` / `$strobe` chat commands — **all four paths go through
+   the one owner here** and are published as `siren_state_changed` /
+   `strobe_state_changed`; the UI only draws (`ui.md` §2).
+   `disable_siren()` switches the strobe's extra lights off and **nothing else** — it
+   used to switch the low beam *on* as a side effect, for every player, on every track
+   entry and every name change.
 
-Emits 12 of the project's `send_light_command` calls — it is the only system that
-should be driving lights.
+Everything data-driven here (brake light, high beam) is skipped while
+`own_vehicle.is_local_driver` is false: OutGauge follows the camera but `SMALL_LCL`
+always switches *our* car (`conventions.md` §5.2).
 
-## Automatic Gearbox — `gearbox.py` (incomplete)
+It is the only system that should be driving lights.
 
-Shifts by injecting `pyautogui` keypresses (clutch down, shift key, release).
-**It applies none of the input-injection guards** — no `text_entry`, no `dialog`, no
-Shift, no focus check — so an automatic shift while the user is typing in chat types
-the clutch and shift keys into the chat line. See `ui.md` §1.4 and
-`known-issues.md` #11.
+## Automatic Gearbox — `gearbox.py`
 
-- **Requires per-car calibration**: idle rpm, redline, max gear. This is the pattern to
-  copy for any car-specific parameter — it works for vehicle mods by construction
-  (`conventions.md` §4). Started from the menu
-  (`gearbox_calibrate`), three 12-second steps, persisted to
-  `data/gearbox_calibrations.json` keyed by car name. Without calibration the system
-  does nothing.
+Shifts by injecting `pyautogui` keypresses (clutch down, shift key, release), through
+`InputGuard.may_inject()` like every other injection site (`ui.md` §1.4). A refused
+shift is a shift that did **not** happen: the cooldown does not start, so the next
+allowed cycle still shifts. The keys are read from the settings at press time, so a
+rebind in the menu works without a restart.
+
+- **Requires per-car calibration**: idle rpm, redline, number of forward gears. This is
+  the pattern to copy for any car-specific parameter — it works for vehicle mods by
+  construction (`conventions.md` §4). Started from the menu (`gearbox_calibrate`),
+  three 12-second steps, persisted to `data/gearbox_calibrations.json` keyed by car
+  name. Without calibration the system does nothing, and a car with no entry does not
+  inherit the previous car's numbers.
+- **Calibration UX**: each step announces itself, counts down at 6 s and 3 s remaining,
+  and aborts on its own if the car moves or the camera leaves the own car. The same
+  menu entry pressed again **cancels**. Finishing in neutral or reverse is rejected
+  instead of storing "0 gears" and silently never shifting again.
+- **`forward_gears` is the number of forward gears**, not the raw OutGauge gear index —
+  one representation, displayed as it is stored. Files written by older builds carry
+  the raw index under `max_gears` and are converted on load.
 - **Anti-hunting design** — read `_process_shifting`'s docstring before changing it:
   throttle-dependent shift points create a wide dead zone between the upshift threshold
   (`idle + range·(0.50 + 0.42·throttle)`) and the downshift threshold

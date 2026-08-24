@@ -159,7 +159,12 @@ class UIManager:
         self.event_bus.subscribe("notification", self._update_notifications)
         self.event_bus.subscribe("send_lfs_command", self._handle_lfs_command)
         self.event_bus.subscribe("show_siren_ui", self._show_siren_ui)
-        self.event_bus.subscribe("button_clicked", self._handle_button_click)
+        # Sirene/Strobe gehoeren LightAssists; hier wird nur gezeichnet, was
+        # es meldet (WP9, known-issues #17). Der frueher hier haengende
+        # button_clicked-Handler fuehrte eine zweite Kopie des Zustands, die
+        # beim Umschalten per Chat-Befehl auseinanderlief.
+        self.event_bus.subscribe("siren_state_changed", self._on_siren_state_changed)
+        self.event_bus.subscribe("strobe_state_changed", self._on_strobe_state_changed)
         self.event_bus.subscribe("buttons_cleared", self._on_buttons_cleared)
         #self.event_bus.subscribe("decel_debug", self._decel_debug)
         #self.event_bus.subscribe("dist_debug", self._dist_debug)
@@ -177,15 +182,18 @@ class UIManager:
         return clamp_hud_position(self.settings.get("hud_width"),
                                   self.settings.get("hud_height"))
 
-    # ─── Klicks ───────────────────────────────────────────────────────
+    # ─── Sirene / Stroboskop (nur Darstellung) ────────────────────────
 
-    def _handle_button_click(self, data):
-        button_id = _as_int(getattr(data, 'ClickID', -1), -1)
-        if button_id == BTN_SIREN:
-            self.siren_active = not self.siren_active
+    def _on_siren_state_changed(self, data):
+        """Reine Anzeige - den Zustand besitzt LightAssists"""
+        self.siren_active = bool(data.get('siren_active', False)) if isinstance(data, dict) else False
+        if self.siren_ui_visible:
             self._update_siren_buttons()
-        elif button_id == BTN_STROBE:
-            self.strobe_active = not self.strobe_active
+
+    def _on_strobe_state_changed(self, data):
+        """Reine Anzeige - den Zustand besitzt LightAssists"""
+        self.strobe_active = bool(data.get('strobe_active', False)) if isinstance(data, dict) else False
+        if self.siren_ui_visible:
             self._update_siren_buttons()
 
     def _show_siren_ui(self, data):

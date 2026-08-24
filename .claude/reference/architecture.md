@@ -158,7 +158,8 @@ ui/
 misc/
   platform_shim.py         Lazy accessors for pyautogui / winsound / pynput / pygame / tkinter / vjoy
   logging_setup.py         setup_logging() (console + rotating file) and the ErrorThrottle rate limiter
-  helpers.py               resolve_path, is_lfs_running, geometry helpers (calc_polygon_points, point_in_rectangle)
+  helpers.py               resolve_path, is_lfs_running, geometry helpers (calc_polygon_points, point_in_rectangle, is_reversing)
+  input_guard.py           InputGuard: may a key be injected right now? — every pyautogui call site asks it (ui.md §1.4)
   language.py              LanguageManager: 8-language translation table
   key_binder.py            pynput listener to capture a key/mouse button for rebinding
   audio_player.py          pygame.mixer playback of audio/*.wav with repeat suppression

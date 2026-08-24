@@ -13,11 +13,11 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `lfs_connected` | `None` | `main.LFSAssistantApp` |
 | `game_state_changed` | `IS_STA` packet | `lfs.lfs_state.StateHandler` |
 | `vehicle_data_received` | `IS_MCI` packet | `VehicleManager` |
-| `outgauge_data` | `OutGaugePack` | `VehicleManager`, `UIManager` |
+| `outgauge_data` | `OutGaugePack` | `VehicleManager`, `UIManager`, `InputGuard` (one per key-injecting system) |
 | `outsim_data` | `OutSimPack` | *(none — see known-issues #3)* |
 | `player_joined` | `IS_NPL` packet | `VehicleManager` |
 | `player_left` | `IS_PLL` packet | `VehicleManager` |
-| `button_clicked` | `IS_BTC` packet | `UIManager`, `MenuSystem`, `LightAssists` |
+| `button_clicked` | `IS_BTC` packet | `MenuSystem`, `LightAssists` |
 | `message_received` | `IS_MSO` packet | `ChatCommandHandler` |
 | `layout_received` | `IS_AXM` packet | `ParkDistanceControl` |
 | `buttons_cleared` | `{sub_type: BFN_USER_CLEAR\|BFN_REQUEST}` | `MessageSender`, `UIManager`, `MenuSystem` |
@@ -28,7 +28,7 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 
 | Event | Payload | Emitter | Subscribers |
 |---|---|---|---|
-| `state_data` | see below | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `AutoHold`, `LightAssists`, `ChatCommandHandler`, `AIDriver` |
+| `state_data` | see below | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `LightAssists`, `ChatCommandHandler`, `AIDriver`, `InputGuard` (one per key-injecting system) |
 | `vehicles_updated` | `Dict[plid, Vehicle]` (excludes own car) — a **fresh dict per MCI frame** | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
 | `own_vehicle_updated` | `OwnVehicle` | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
 | `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem` (logs only since WP6), `ControllerEmulator`\* |
@@ -91,14 +91,23 @@ contract — the UI relies on it and the bus is synchronous.
 | Event | Payload | Emitters | Subscriber |
 |---|---|---|---|
 | `send_light_command` | `{light: 0..8, on: bool}` | `LightAssists` | `LFSConnector` |
-| `siren_state_changed` | `{siren_active: bool}` | `LightAssists` | `LFSConnector` |
+| `siren_state_changed` | `{siren_active: bool}` | `LightAssists` | `LFSConnector`, `UIManager` |
+| `strobe_state_changed` | `{strobe_active: bool}` | `LightAssists` | `UIManager` |
 | `request_axm_update` | `{}` | `ParkDistanceControl` | `LFSConnector` |
 | `send_command_to_lfs` | **`str`** — e.g. `"/axload AI_Traffic"` | `AIDriver` | `MessageSender` |
 | `send_local_message_to_lfs` | **`str`** — chat line, may contain `^n` colours | `ChatCommandHandler` | `MessageSender` |
 | `send_lfs_command` | **`{command: str}`** | `ControllerEmulator`\* | `UIManager` |
 
 Light IDs: `0` sidelight, `1` low beam, `2` high beam, `3` fog front, `4` fog rear,
-`5` extra, `6` indicator left, `7` indicator right, `8` hazards.
+`5` extra, `6` indicator left, `7` indicator right, `8` hazards. The constants live in
+`assistance/adaptive_lights.py` (`LIGHT_*`).
+
+**`LightAssists` owns the siren and strobe state.** It is the only writer; the two
+`*_state_changed` events are the only way anyone else learns about it, and it republishes
+both whenever it shows the siren UI (`show_siren_ui` → state events), so a freshly drawn
+button always carries the right caption. `UIManager` renders and nothing else — it no
+longer subscribes to `button_clicked` at all. Light commands are
+emitted **only on change**: an unchanged high-beam decision produces no packet.
 
 `send_command_to_lfs` and `send_lfs_command` do almost the same thing with different
 payload shapes and different subscribers. This is a trap — see `known-issues.md` #4.
@@ -113,7 +122,7 @@ payload shapes and different subscribers. This is a trap — see `known-issues.m
 | `siren_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
 | `strobe_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
 | `ai_traffic_start` / `ai_traffic_stop` | `{}` | `MenuSystem` | `AIDriver` |
-| `gearbox_calibrate` | `{}` | `MenuSystem` | `Gearbox` |
+| `gearbox_calibrate` | `{}` | `MenuSystem` | `Gearbox` — **toggle**: starts the calibration, or cancels the one that is running |
 | `await_keybinding` | `{setting: str}` | `MenuSystem` | `Keybinder` |
 | `new_keybinding` | `{button: str, setting: str}` | `Keybinder` | `MenuSystem` |
 

@@ -273,17 +273,20 @@ def make_outgauge_packet():
     """Factory for an OutGauge packet. ``speed`` in km/h, pedals 0.0…1.0.
 
     Light state is given as keywords (``full_beam=True``) or as a raw
-    ``show_lights`` mask.
+    ``show_lights`` mask. ``flags`` is the raw ``OutGaugePack.Flags`` word --
+    ``pyinsim.OG_SHIFT`` / ``OG_CTRL`` are the modifier keys the input guard
+    reads (``reference/ui.md`` §1.4).
     """
     def _make(plid: int = 1, speed: float = 0.0, gear: int = 2,
               rpm: float = 2000.0, throttle: float = 0.0, brake: float = 0.0,
               clutch: float = 0.0, turbo: float = 0.0, fuel: float = 0.5,
               car: bytes = b"XFG", show_lights_mask: int = 0,
+              flags: int = 0,
               **lights) -> FakePacket:
         return FakePacket(
             Time=0,
             Car=car,
-            Flags=0,
+            Flags=flags,
             Gear=gear,
             PLID=plid,
             Speed=speed * KMH_TO_MS,      # OutGauge sends m/s

@@ -835,3 +835,58 @@ warning levels and the acceleration input only meet reality in the game.
 - **The debug readout is gone**: `dist_debug` is no longer emitted. Its subscriber was
   already commented out, so button 101 was never drawn — confirm nothing on screen
   changed.
+
+### WP9 — actuation: key injection and light commands
+
+`tests/test_actuation.py` drives the guard table, the calibration and the light dedupe,
+but only the game has a foreground window, a real keyboard binding and real car lights.
+
+- **The foreground check**: start the app, drive, then alt-tab to a browser while the
+  car is stopped with the brake held. **Nothing may be typed into the browser.** Back in
+  LFS, auto-hold must engage again. This is the one check that decides whether the
+  window-title / process test (`Live for Speed`, `LFS*`) recognises your LFS build at
+  all — if auto-hold and the gearbox stop working entirely, it does not, and
+  `misc/input_guard.py::lfs_has_focus` needs the real title. Log level `DEBUG` shows
+  `Key injection refused: lfs_not_focused`.
+- **Chat and dialogs**: press T and type while stopped on the brake, and open the ESC
+  menu. No handbrake key and no shift may be injected; the chat line must stay clean.
+- **Shift held**: hold SHIFT (e.g. before SHIFT+U) while the automatic gearbox would
+  shift. No shift may be injected. This reads `OutGaugePack.Flags & OG_SHIFT`, which
+  only the game produces — confirm it really arrives (debug log, `modifier_held`).
+- **TAB while stopped on the brake**: with the camera on another car, auto-hold must not
+  press anything; back on your own car it must engage.
+- **Key rebinding without a restart**: rebind the handbrake and the shift keys in the
+  menu and use them immediately. Both must take effect at once — the gearbox used to
+  need a restart.
+- **Gearbox calibration**: run it. Each step must announce itself and count down at 6 s
+  and 3 s; pressing the calibration entry again must cancel; finishing in neutral must
+  be refused instead of storing a gearbox that never shifts. Check the notification
+  queue keeps up (8 entries, 3 s each).
+- **An old calibration keeps working**: with a `data/gearbox_calibrations.json` written
+  by an older build (`max_gears`), the car must shift exactly as before; after a fresh
+  calibration the file holds `forward_gears` = the number of forward gears, and the
+  "Max gear set to" message shows the same number.
+- **Driving without lights is possible again**: with `high_beam_assist` on and all
+  lights off, drive at night. The app must **not** switch the low beam on. Switch the
+  low beam on by hand: the assist must then raise the high beam when nothing is ahead
+  and dip it when a car appears — one change at a time, no flicker. Dip by hand
+  afterwards: it must stay dipped until the traffic situation changes.
+- **Light packet rate**: the light commands are now sent only on change. Watch for any
+  light that gets *stuck* (e.g. high beam staying on after a car appears) — that would
+  mean the OutGauge light flags do not report what we assume (does LFS set `DL_DIPPED`
+  as well as `DL_FULLBEAM` on high beam?). This is the one assumption in the dedupe.
+- **Strobe speed**: as a `[COP]`, switch the strobe on and set `assistance_refresh_rate`
+  to 50 and then to 200. The blink pattern must look the same at 50 and 100 ms; at
+  200 ms it can only be half as fast (the cycle is the ceiling). Decide whether 0.1 s
+  per step is the right speed now that it is no longer tied to the refresh rate.
+- **Turning the siren off no longer switches your lights on**: with the siren/strobe on,
+  switch it off. Fog, extra and hazard lights go out, and the head lights must stay
+  exactly as you had them.
+- **Siren caption**: toggle the siren with the button, then with `$siren` in chat, then
+  again with the button. The caption must follow every time (`^4Siren` when on), and the
+  real LFS siren must match it.
+- **Adaptive brake light heading sector**: brake hard on a heading near north
+  (0/65535). The hazards must flash there too — the old subtraction treated that sector
+  as reversing. Reversing hard must still not flash them.
+- **Non-cop players get no light commands**: with `cop_assistance` on but a plain player
+  name, join a track and change your name. No light may change by itself.

@@ -69,6 +69,11 @@ tests/
                            replaced the gear gate, and the size-aware arrival window
   test_pdc.py              AXM object identity and the AXM→MCI scale, the -1/0 sensor
                            contract, and the single-threaded beeper
+  test_actuation.py        the input guard's refusal table, AutoHold/Gearbox key
+                           injection and its guards, live key rebinding, gearbox
+                           calibration (countdown, cancel, gear storage, legacy file),
+                           high-beam dedupe, strobe timing, and the single owner of
+                           the siren/strobe state
 ```
 
 ### Fixtures (`tests/conftest.py`)
@@ -107,7 +112,15 @@ Two traps in the packet factories:
 
 Anything driven by a wall clock (`UIManager`'s blink phase, the notification timer)
 needs a fake clock — `tests/test_screen_context.py` monkeypatches
-`ui.ui_manager.time.perf_counter`.
+`ui.ui_manager.time.perf_counter`. `Gearbox` and `LightAssists` instead expose an
+overridable `self.clock` (default `time.perf_counter`); replace it and **re-base the
+timestamps `__init__` already took from the real clock** — `test_actuation.py`'s
+`with_clock()` shows the pattern, and forgetting it makes every timer look like it is
+in the future.
+
+`make_outgauge_packet(flags=pyinsim.OG_SHIFT)` is how the held-Shift state reaches
+`misc/input_guard.py`; `InputGuard(bus, foreground_check=…)` is how the Win32
+foreground check is driven from both sides without a window manager.
 
 ### Tests that are expected to fail
 
@@ -174,7 +187,9 @@ emit once).
 Systems that inject keys (`AutoHold`, `Gearbox`) need no patching: off Windows the shim
 already swallows the keystrokes, and `platform_shim.recorded_calls()` reads them back.
 Assert the guards that way — no `pyautogui.keyDown` while `dialog` or `text_entry` is
-active. Call `reset_recorded_calls()` first, since the log is process-wide.
+active (`test_actuation.py`). Call `reset_recorded_calls()` first, since the log is
+process-wide, and skip those tests where the real `pyautogui` exists
+(`platform_shim.is_available('pyautogui')`), because then nothing is recorded.
 
 ## Layer 3 — packet round-trips (`pyinsim/`)
 

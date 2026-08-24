@@ -25,14 +25,6 @@ unconditionally *after* the import, so `vj` and `setJoy` are never bound and
 `press_wheel_brake` would raise `NameError`. Currently unreachable only because
 `ControllerEmulator` is commented out in `AssistanceManager`.
 
-**#11 — Global keypress injection is under-guarded.** `AutoHold` and `Gearbox` press
-real OS keys with `pyautogui`. `AutoHold` guards against `dialog`/`text_entry`;
-**`Gearbox` guards against nothing**. Neither checks whether the user is holding
-**Shift** (LFS binds many SHIFT+key commands, so an injected key becomes a command) nor
-whether LFS is the foreground window (so the app can type into the user's browser).
-Shift state is available as `OutGaugePack.Flags & OG_SHIFT` and is simply not read.
-Full rule set in `ui.md` §1.4.
-
 **#12 — `own_vehicle` is still mutated while workers read it.** The vehicle
 dict is safe now: `VehicleManager` publishes a fresh snapshot dict per MCI frame
 and swaps each `VehicleData` object instead of mutating it (`Vehicle.begin_frame`
@@ -69,11 +61,6 @@ fix. `tests/test_collision_warning.py` pins the current behaviour by placing tes
 vehicles on the axis. The same defect existed in the blind-spot corridors and was
 fixed there (WP8) — there the quad was pure geometry with no tuning attached to it,
 so reordering the corners was a fix rather than a product decision.
-
-**#17 — Siren/strobe state is duplicated.** `UIManager` and `LightAssists` each keep
-their own `siren_active` / `strobe_active` booleans, both driven by the same
-`button_clicked` event. They can desynchronise (e.g. when the chat command toggles only
-one of them). One owner should hold the state and publish it.
 
 **#34 — `point_in_rectangle` judges by cross-product sign only.** For a proper rectangle
 it is correct, but a **degenerate** one (zero width or all four corners equal) contains
@@ -150,9 +137,6 @@ name will confuse any test runner and any reader. Rename to something like
 
 **#21 — Unused module `vehicles/VehicleInfo.py`.** A parallel, richer vehicle data
 container that nothing constructs. Either adopt it or delete it.
-
-**#22 — Dead local variable** `adaptive_lights` in `LightAssists.process` — assigned in
-some branches, never read; the method returns a literal.
 
 ## Deliberately disabled — leave alone unless asked
 
