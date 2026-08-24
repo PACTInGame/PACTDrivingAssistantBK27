@@ -769,6 +769,36 @@ old `settings.json`.
   never ran (no settings key), so nothing should look different — confirm no menu entry,
   notification or HUD element disappeared.
 
+### WP7 — forward collision warning
+
+`tests/test_collision_warning.py` computes every expectation by hand, but the wedge, the
+warning levels and the acceleration input only meet reality in the game.
+
+- **The heading sector that used to be dead**: drive a long straight and note the
+  compass direction where FCW used to go quiet (heading near 0/65535, i.e. due north on
+  most tracks). Approach a stopped car on that heading — the warning must now come
+  exactly as it does on any other heading.
+- **Reversing still suppresses the warning**: reverse towards a car. No forward
+  collision warning may appear.
+- **No warning when the car ahead pulls away**: follow a car that accelerates harder
+  than you. There must be no warning at all — that case used to be able to raise one.
+- **The warning falls again**: approach a slower car until level 3 (red), then lift off
+  and let the gap open. The warning must step down 3 → 2 → 1 → off as the situation
+  relaxes. Before, it stayed at 3 until the required braking hit exactly zero.
+- **Refresh rate does not change the warning any more**: set
+  `assistance_refresh_rate` to 50 and then to 200 and repeat the same approach at the
+  same speed. The warning must come at roughly the same distance both times. Before, the
+  acceleration input was scaled by 2× in each direction.
+- **A modded car ahead**: approach a vehicle mod. The warning must come slightly earlier
+  than for a standard car of the same length, never later — its length falls back to
+  5.0 m.
+- **Frame rate on a busy track**: with ~40 cars, FCW now rejects almost all of them with
+  two number comparisons before building a polygon. Watch for a small improvement, never
+  a regression.
+- **The debug readout is gone**: `dist_debug` is no longer emitted. Its subscriber was
+  already commented out, so button 101 was never drawn — confirm nothing on screen
+  changed.
+
 ### WP8 — blind spot, cross traffic and PDC
 
 `tests/test_blind_spot.py`, `tests/test_cross_traffic.py` and `tests/test_pdc.py`
@@ -805,36 +835,6 @@ exist in the game.
 - **The beep**: reverse quickly towards a wall so the pattern goes 1 → 2 → 3. The tone
   must speed up smoothly and stop the moment PDC switches off or you exceed 10 km/h. It
   is now one thread; listen for stuck or overlapping tones.
-
-### WP7 — forward collision warning
-
-`tests/test_collision_warning.py` computes every expectation by hand, but the wedge, the
-warning levels and the acceleration input only meet reality in the game.
-
-- **The heading sector that used to be dead**: drive a long straight and note the
-  compass direction where FCW used to go quiet (heading near 0/65535, i.e. due north on
-  most tracks). Approach a stopped car on that heading — the warning must now come
-  exactly as it does on any other heading.
-- **Reversing still suppresses the warning**: reverse towards a car. No forward
-  collision warning may appear.
-- **No warning when the car ahead pulls away**: follow a car that accelerates harder
-  than you. There must be no warning at all — that case used to be able to raise one.
-- **The warning falls again**: approach a slower car until level 3 (red), then lift off
-  and let the gap open. The warning must step down 3 → 2 → 1 → off as the situation
-  relaxes. Before, it stayed at 3 until the required braking hit exactly zero.
-- **Refresh rate does not change the warning any more**: set
-  `assistance_refresh_rate` to 50 and then to 200 and repeat the same approach at the
-  same speed. The warning must come at roughly the same distance both times. Before, the
-  acceleration input was scaled by 2× in each direction.
-- **A modded car ahead**: approach a vehicle mod. The warning must come slightly earlier
-  than for a standard car of the same length, never later — its length falls back to
-  5.0 m.
-- **Frame rate on a busy track**: with ~40 cars, FCW now rejects almost all of them with
-  two number comparisons before building a polygon. Watch for a small improvement, never
-  a regression.
-- **The debug readout is gone**: `dist_debug` is no longer emitted. Its subscriber was
-  already commented out, so button 101 was never drawn — confirm nothing on screen
-  changed.
 
 ### WP9 — actuation: key injection and light commands
 
