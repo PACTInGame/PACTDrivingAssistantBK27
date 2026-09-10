@@ -7,6 +7,7 @@ leaves the rest of the app running.
 """
 
 import logging
+import time
 import threading
 
 import pytest
@@ -351,3 +352,67 @@ def test_state_data_without_on_track_does_not_raise(manager):
     manager._update_state_data({})
 
     assert manager.on_track is False
+
+
+class Slow(AssistanceSystem):
+    """A system that burns a fixed, known amount of the cycle budget."""
+
+    def __init__(self, bus, settings, name, seconds):
+        super().__init__(name, bus, settings)
+        self._seconds = seconds
+
+    def is_enabled(self):
+        return True
+
+    def process(self, own_vehicle, vehicles):
+        time.sleep(self._seconds)
+        return {}
+
+
+def test_an_overrun_names_the_system_that_caused_it(
+        manager, bus, settings, make_own_vehicle, caplog):
+    """ThreadManager reports *that* the budget broke, never *who* broke it.
+
+    Without the breakdown an overrun is a guessing game -- the 203 ms one that
+    turned out to be AutoHold's pyautogui delay (known-issues #43) took a
+    hand measurement to attribute.
+    """
+    settings.set('assistance_refresh_rate', 50)
+    manager.systems = {'quick': Slow(bus, settings, 'quick', 0.001),
+                       'sluggish': Slow(bus, settings, 'sluggish', 0.08)}
+    manager.own_vehicle = make_own_vehicle()
+    manager.on_track = True
+
+    with caplog.at_level(logging.WARNING, logger='assistance.manager'):
+        manager.process_all_systems()
+
+    assert 'sluggish' in caplog.text
+    assert 'of a 50 ms budget' in caplog.text
+
+
+def test_a_pass_inside_its_budget_says_nothing(
+        manager, bus, settings, make_own_vehicle, caplog):
+    """A breakdown per cycle would be worse than no breakdown at all."""
+    settings.set('assistance_refresh_rate', 200)
+    manager.systems = {'quick': Slow(bus, settings, 'quick', 0.001)}
+    manager.own_vehicle = make_own_vehicle()
+    manager.on_track = True
+
+    with caplog.at_level(logging.WARNING, logger='assistance.manager'):
+        manager.process_all_systems()
+
+    assert caplog.text == ''
+
+
+def test_a_permanently_slow_pass_is_reported_once_per_interval(
+        manager, bus, settings, make_own_vehicle, caplog):
+    settings.set('assistance_refresh_rate', 50)
+    manager.systems = {'sluggish': Slow(bus, settings, 'sluggish', 0.06)}
+    manager.own_vehicle = make_own_vehicle()
+    manager.on_track = True
+
+    with caplog.at_level(logging.WARNING, logger='assistance.manager'):
+        for _ in range(4):
+            manager.process_all_systems()
+
+    assert caplog.text.count('slowest:') == 1

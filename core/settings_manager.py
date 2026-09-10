@@ -99,6 +99,17 @@ _SCHEMA: Dict[str, Setting] = {
     'user_axis_clutch': Setting(13, int, minimum=0, maximum=31),
     'vjoy_axis_1': Setting(15, int, minimum=0, maximum=31),
 
+    # Kalibrierung der virtuellen Bremsachse. Die Rohwerte sind *gemessen*,
+    # nicht gesetzt: LFS bildet eine Achse je nach eigener Kalibrierung auch
+    # invertiert ab (auf der Entwicklungsmaschine bedeutet roh 0 = Vollbremsung
+    # und 32767 = keine Bremse). Rateraten ist hier nicht erlaubt - ein
+    # vertauschtes Vorzeichen heisst Vollbremsung statt Ruhestellung.
+    # Solange ``vjoy_brake_calibrated`` False ist, weigert sich der
+    # Achsen-Pfad zu arbeiten (reference/control-intervention.md §3.2).
+    'vjoy_raw_no_brake': Setting(32767, int, minimum=0, maximum=32767),
+    'vjoy_raw_full_brake': Setting(0, int, minimum=0, maximum=32767),
+    'vjoy_brake_calibrated': Setting(False, bool),
+
     # Vom Nutzer gewaehlter Eingabemodus. Wird *nicht* mehr aus IS_NPL
     # ueberschrieben - der erkannte Modus steht kameraunabhaengig in
     # ``vehicle.data.control_mode`` und im Event ``player_name_changed``

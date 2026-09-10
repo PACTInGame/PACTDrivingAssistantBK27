@@ -27,6 +27,7 @@ Rule for new code: never import ``pyautogui``, ``winsound``, ``pynput``,
 module.
 """
 
+import contextlib
 import importlib
 import logging
 import sys
@@ -46,6 +47,9 @@ _import_lock = threading.Lock()
 _MAX_RECORDED_CALLS = 500
 _recorded: List[Tuple[str, tuple, dict]] = []
 _record_lock = threading.Lock()
+
+# Held while :func:`instant_input` has ``pyautogui.PAUSE`` turned off.
+_input_pace_lock = threading.Lock()
 
 
 def _record(path: str, args: tuple, kwargs: dict):
@@ -129,6 +133,44 @@ def get_keyboard() -> Any:
     may be sent at all.
     """
     return _load('pyautogui')
+
+
+@contextlib.contextmanager
+def instant_input():
+    """Inject keys without ``pyautogui``'s built-in delay. Yields the module.
+
+    ``pyautogui.PAUSE`` defaults to **0.1 s and is applied after every single
+    call**, so one ``keyDown`` plus one ``keyUp`` costs 220 ms. Measured::
+
+        keyDown          112.9 ms     keyDown  (PAUSE=0)   0.4 ms
+        keyUp            108.5 ms     keyUp    (PAUSE=0)   0.2 ms
+
+    That is two whole assistance cycles (``CLAUDE.md`` §1) spent sleeping, on
+    the shared 100 ms thread, and it is where "100 ms cycle overran its budget:
+    203.0 ms" comes from.
+
+    **This is not a global switch, on purpose.** For a caller that presses and
+    releases a key back to back -- ``Gearbox`` does ``keyDown``/``keyUp`` in one
+    pass -- that delay is accidentally load-bearing: it is the only thing making
+    the press long enough for LFS to poll it. Turning PAUSE off everywhere would
+    make those presses ~0.2 ms and LFS would miss them. So only a caller whose
+    hold time is managed elsewhere may use this; ours spans assistance cycles.
+
+    The lock is real rather than decorative: this mutates module-global state.
+    All injecting call sites happen to share the assistance thread today,
+    but nothing enforces that, and a half-restored ``PAUSE`` is exactly the kind
+    of defect that only shows up under load.
+    """
+    keyboard = get_keyboard()
+    with _input_pace_lock:
+        previous = getattr(keyboard, 'PAUSE', 0)
+        if not isinstance(previous, (int, float)):
+            previous = 0        # a NullModule attribute, not a real setting
+        try:
+            keyboard.PAUSE = 0
+            yield keyboard
+        finally:
+            keyboard.PAUSE = previous
 
 
 def get_sound() -> Any:

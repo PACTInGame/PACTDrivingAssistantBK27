@@ -215,6 +215,15 @@ class LFSAssistantApp:
             logger.warning("Stopping worker threads failed: %s: %s", type(e).__name__, e)
 
         try:
+            # Nach dem Stoppen der Worker, damit kein process() mehr dazwischen
+            # funkt, und vor dem Verbindungsabbau: ein Handback braucht die
+            # InSim-Verbindung noch.
+            self.assistance_manager.shutdown()
+        except Exception as e:
+            logger.warning("Releasing assistance actuation failed: %s: %s",
+                           type(e).__name__, e)
+
+        try:
             self.message_sender.remove_all()
         except Exception as e:
             logger.warning("Removing buttons failed: %s: %s", type(e).__name__, e)

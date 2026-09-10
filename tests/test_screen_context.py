@@ -14,14 +14,15 @@ from lfs.lfs_state import (SCREEN_ENTRY, SCREEN_GAME, SCREEN_GARAGE,
                            StateHandler)
 from ui import ui_manager as ui_module
 from ui.menu_system import MenuSystem
-from ui.ui_manager import (ALL_BUTTONS_RANGE, BTN_HUD_GEAR, BTN_HUD_RPM,
-                           BTN_HUD_SPEED, BTN_IDLE_BANNER, BTN_NOTIFICATION,
-                           HUD_BOX_BOTTOM, HUD_BOX_LEFT, HUD_BOX_RIGHT,
-                           HUD_BOX_TOP, MAX_QUEUED_NOTIFICATIONS,
-                           NOTIFICATION_DISPLAY_S, RESERVED_BOTTOM,
-                           RESERVED_LEFT, RESERVED_RIGHT, RESERVED_TOP,
-                           SCREEN_MAX, UIManager, clamp_hud_position,
-                           hud_overlaps_reserved_area)
+from ui.ui_manager import (ALL_BUTTONS_RANGE, BTN_EMERGENCY_BRAKE,
+                           BTN_HUD_GEAR, BTN_HUD_RPM, BTN_HUD_SPEED,
+                           BTN_IDLE_BANNER, BTN_NOTIFICATION,
+                           EMERGENCY_BRAKE_TEXT, HUD_BOX_BOTTOM,
+                           HUD_BOX_LEFT, HUD_BOX_RIGHT, HUD_BOX_TOP,
+                           MAX_QUEUED_NOTIFICATIONS, NOTIFICATION_DISPLAY_S,
+                           RESERVED_BOTTOM, RESERVED_LEFT, RESERVED_RIGHT,
+                           RESERVED_TOP, SCREEN_MAX, UIManager,
+                           clamp_hud_position, hud_overlaps_reserved_area)
 
 
 # ─── Fake clock ──────────────────────────────────────────────────────────────
@@ -484,6 +485,140 @@ def test_the_blink_phase_does_not_depend_on_the_ui_refresh_rate(bus, ui,
     styles = _hud_styles(ui, fake_connector, clock, passes=10, step=0.01)
 
     assert len(set(styles)) == 1
+
+
+# ─── Emergency brake indicator (control-intervention.md §4) ──────────────────
+#
+# The intervention used to be announced with a ``notification``: queued, shown
+# for 3 s one at a time, so the driver read "!! BRAKE !!" about a second after
+# the braking had finished. The indicator is live instead.
+
+def test_an_engaging_emergency_brake_is_shown_at_once(bus, ui, fake_connector):
+    bus.emit('state_data', on_track_state())
+    fake_connector.reset()
+
+    bus.emit('emergency_brake_changed', {'active': True})
+
+    button = fake_connector.last_button(BTN_EMERGENCY_BRAKE)
+    assert button is not None
+    assert button[6] == EMERGENCY_BRAKE_TEXT.encode('latin-1')
+
+
+def test_a_releasing_emergency_brake_removes_the_indicator(bus, ui, fake_connector):
+    bus.emit('state_data', on_track_state())
+    bus.emit('emergency_brake_changed', {'active': True})
+    fake_connector.reset()
+
+    bus.emit('emergency_brake_changed', {'active': False})
+
+    assert BTN_EMERGENCY_BRAKE in fake_connector.deletes
+    ui.update_hud()
+    assert BTN_EMERGENCY_BRAKE not in fake_connector.drawn_ids()
+
+
+def test_the_emergency_brake_indicator_repaints_after_the_user_cleared_the_buttons(
+        bus, ui, fake_connector):
+    bus.emit('state_data', on_track_state())
+    bus.emit('emergency_brake_changed', {'active': True})
+    ui.update_hud()                       # unchanged -> suppressed by registry
+    fake_connector.reset()
+
+    bus.emit('buttons_cleared', {'sub_type': pyinsim.BFN_USER_CLEAR})
+    ui.update_hud()
+
+    assert BTN_EMERGENCY_BRAKE in fake_connector.drawn_ids()
+
+
+def test_no_emergency_brake_indicator_is_drawn_while_buttons_are_not_allowed(
+        bus, ui, fake_connector):
+    bus.emit('state_data', on_track_state(screen=SCREEN_OPTIONS,
+                                          buttons_allowed=False))
+    fake_connector.reset()
+
+    bus.emit('emergency_brake_changed', {'active': True})
+    ui.update_hud()
+
+    assert fake_connector.buttons == []
+
+
+def test_the_emergency_brake_indicator_ignores_the_hud_switch(bus, ui, settings,
+                                                              fake_connector):
+    """An intervention is reported even to a driver who turned the HUD off."""
+    settings.set('hud_active', False)
+    bus.emit('state_data', on_track_state())
+    bus.emit('emergency_brake_changed', {'active': True})
+    fake_connector.reset()
+
+    ui.update_hud()
+
+    assert BTN_HUD_SPEED not in fake_connector.drawn_ids()
+    assert ui.message_sender.is_live(BTN_EMERGENCY_BRAKE)
+
+
+def test_leaving_the_track_forgets_an_active_emergency_brake(bus, ui,
+                                                             fake_connector):
+    bus.emit('state_data', on_track_state())
+    bus.emit('emergency_brake_changed', {'active': True})
+
+    bus.emit('state_data', on_track_state(on_track=False, screen=SCREEN_ENTRY))
+
+    assert ui.emergency_brake_active is False
+    assert BTN_EMERGENCY_BRAKE in fake_connector.deletes
+
+
+def test_a_malformed_emergency_brake_payload_draws_nothing(bus, ui,
+                                                           fake_connector):
+    bus.emit('state_data', on_track_state())
+    fake_connector.reset()
+
+    bus.emit('emergency_brake_changed', None)
+    bus.emit('emergency_brake_changed', {})
+
+    assert fake_connector.buttons == []
+
+
+def test_the_emergency_brake_indicator_sits_in_the_notification_slot(
+        bus, ui, fake_connector):
+    """Under the HUD, where the driver already looks for a message line.
+
+    Above and to the right of the HUD was tried and rejected in game.
+    """
+    bus.emit('state_data', on_track_state())
+
+    bus.emit('emergency_brake_changed', {'active': True})
+
+    _id, _style, top, left, width, height, _text, _inst =         fake_connector.last_button(BTN_EMERGENCY_BRAKE)
+    assert (left, top, width, height) == ui.notification_slot()
+
+
+def test_an_active_intervention_keeps_the_slot_from_a_pending_notification(
+        bus, ui, fake_connector, clock):
+    """Shared slot, explicit priority: the brake indicator wins."""
+    bus.emit('state_data', on_track_state())
+    bus.emit('notification', {'notification': 'Gearbox calibrated'})
+    ui.update_hud()
+    assert ui.message_sender.is_live(BTN_NOTIFICATION)
+
+    bus.emit('emergency_brake_changed', {'active': True})
+    clock.advance(NOTIFICATION_DISPLAY_S + 1)
+    ui.update_hud()
+
+    assert ui.message_sender.is_live(BTN_EMERGENCY_BRAKE)
+    assert not ui.message_sender.is_live(BTN_NOTIFICATION)
+
+
+def test_the_notification_line_comes_back_once_the_intervention_ends(
+        bus, ui, fake_connector, clock):
+    bus.emit('state_data', on_track_state())
+    bus.emit('emergency_brake_changed', {'active': True})
+    bus.emit('notification', {'notification': 'Gearbox calibrated'})
+    ui.update_hud()
+
+    bus.emit('emergency_brake_changed', {'active': False})
+    ui.update_hud()
+
+    assert not ui.message_sender.is_live(BTN_EMERGENCY_BRAKE)
+    assert ui.message_sender.is_live(BTN_NOTIFICATION)
 
 
 # ─── Redline / shift light (WP5 scope 6) ─────────────────────────────────────

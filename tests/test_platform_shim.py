@@ -91,3 +91,58 @@ def test_real_module_is_returned_unchanged_when_importable():
 def test_is_available_rejects_unknown_names():
     with pytest.raises(KeyError):
         platform_shim.is_available('directx')
+
+
+class _FakeKeyboardModule:
+    """Stands in for pyautogui: only PAUSE matters here."""
+
+    def __init__(self, pause):
+        self.PAUSE = pause
+        self.pause_during_call = None
+
+    def keyDown(self, key):
+        self.pause_during_call = self.PAUSE
+
+
+def test_instant_input_removes_the_pause_pyautogui_applies_after_every_call(
+        monkeypatch):
+    """``pyautogui.PAUSE`` is 0.1 s per call -- two calls exceed a whole cycle.
+
+    Measured before this existed: keyDown 112.9 ms, keyUp 108.5 ms, versus
+    0.4 / 0.2 ms with PAUSE off, and the assistance thread has 100 ms in total.
+    """
+    fake = _FakeKeyboardModule(pause=0.1)
+    monkeypatch.setattr(platform_shim, 'get_keyboard', lambda: fake)
+
+    with platform_shim.instant_input() as keyboard:
+        keyboard.keyDown('b')
+
+    assert fake.pause_during_call == 0
+
+
+def test_instant_input_puts_the_pause_back_even_when_the_call_raises(monkeypatch):
+    """A half-restored global is worse than the delay it was meant to avoid.
+
+    Other call sites -- ``Gearbox`` presses and releases in one pass -- rely on
+    that delay to hold a key long enough for LFS to poll it.
+    """
+    fake = _FakeKeyboardModule(pause=0.1)
+    monkeypatch.setattr(platform_shim, 'get_keyboard', lambda: fake)
+
+    with pytest.raises(RuntimeError):
+        with platform_shim.instant_input():
+            raise RuntimeError("injection blew up")
+
+    assert fake.PAUSE == 0.1
+
+
+def test_instant_input_survives_a_null_module_without_a_real_pause(monkeypatch):
+    """Off Windows ``PAUSE`` resolves to a NullModule, not a number."""
+    monkeypatch.setattr(platform_shim, 'get_keyboard',
+                        lambda: NullModule('pyautogui'))
+
+    with platform_shim.instant_input() as keyboard:
+        keyboard.keyDown('b')
+
+    assert [call[0] for call in platform_shim.recorded_calls()] == [
+        'pyautogui.keyDown']
