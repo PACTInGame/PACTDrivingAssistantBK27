@@ -88,6 +88,7 @@ Read **only** what the task needs. Do not read the whole `reference/` folder.
 | **Which LFS screen are we on**, when buttons may be drawn, when key injection must be blocked | `reference/ui.md` §1 |
 | App does not connect / connects but nothing happens / `cfg.txt`, OutGauge, `autoexec.lfs`, setup wizard | `reference/lfs-setup.md` |
 | Automatic braking, cruise control, or anything that **actuates** the car instead of warning | `reference/control-intervention.md` |
+| Reading the driver's axis/button/key setup off disk — `data\misc\*.csf`, `*.con`, `*.ply` | `reference/lfs-config-files.md` |
 | Fixing bugs / hardening / "why is this broken" | `reference/known-issues.md` |
 | Writing or running tests | `reference/testing.md` |
 | Raw LFS protocol truth (when pyinsim seems wrong/incomplete) | `C:\LFS\docs\InSim.txt`, `OutSimPack.txt`, `Commands.txt` — see `reference/insim.md` §6 |
@@ -106,9 +107,13 @@ superseded by these docs but kept for context.
   bus. Before changing an event payload or name, grep for every emitter and
   subscriber. Report interactions you notice even outside the current task's scope.
 - **Do not silently widen scope.** Fix what was asked; list other defects you spot.
-- **Never re-enable automatic braking intervention** without being asked — it is
-  deliberately disabled (`assistance/collision_warning.py`, `controller_emulator`).
-  If asked, read `reference/control-intervention.md` first.
+- **Anything that actuates the car reads `reference/control-intervention.md` first.**
+  Emergency braking lives in `assistance/emergency_brake.py`, armed only by
+  `automatic_emergency_brake == 2`. The actuation path depends on the LFS control
+  mode and the two are **not** interchangeable: keys work only in `mouse_kb`, a
+  virtual axis only in `wheel_js`. Never inject a key without tracking the physical
+  key state (`misc/physical_keys.py`) — releasing a key the driver is holding takes
+  their brake away.
 - **`OutGauge` describes the car the *camera* is on, not necessarily the player's car.**
   Fine for the HUD gauges, wrong for anything that actuates. Gate actuation on
   `own_vehicle.is_local_driver`; the PLID itself comes from `IS_NPL`, not OutGauge.
@@ -122,6 +127,9 @@ superseded by these docs but kept for context.
   user holds **Shift**/**Ctrl**, while not `on_track`, while OutGauge describes another
   car, and when LFS is not the foreground window. Never press a key without it, and read
   the key from settings at press time. `reference/ui.md` §1.4 has the full table.
+  **Never press the key on the assistance thread**: a press LFS can see has to be
+  *held* (it polls per frame), and the hold belongs on `misc/key_tap.py`'s own
+  thread — `tapper.tap(key)`, never `keyDown`/`keyUp` in `process()` (`ui.md` §1.6).
 - **LFS is many screens, not one.** `StateHandler` derives the context from `IS_STA` +
   `IS_CIM`; branch on `state_data['buttons_allowed']` (and `['screen']`), never on
   `on_track` alone. Anything that draws only on change must also subscribe to

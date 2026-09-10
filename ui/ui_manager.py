@@ -27,6 +27,16 @@ BTN_IDLE_BANNER = 4          # eigener Slot, frueher 1
 HUD_RANGE = (1, 10)
 BTN_BSW_LEFT = 13
 BTN_BSW_RIGHT = 14
+# 15 liegt zwischen den Warnanzeigen (11-14) und dem Menue (ab 20) und war
+# als einzige ID dort noch frei: der Interventionsanzeiger gehoert genau in
+# diese Gruppe.
+BTN_EMERGENCY_BRAKE = 15
+# 16-17: die Getriebekalibrierung. Eigener Slot, weil sie eine zeitkritische,
+# modale Prozedur ist - ueber die Meldungsschlange (61) gelesen hing ihre
+# Aufforderung dem gemessenen Schritt hinterher (reference/ui.md §1.7).
+BTN_CALIBRATION_PROMPT = 16
+BTN_CALIBRATION_STATUS = 17
+CALIBRATION_RANGE = (16, 17)
 MENU_RANGE = (20, 40)        # gehoert MenuSystem
 BTN_PDC_FIRST = 41
 BTN_PDC_LABEL = 60
@@ -49,7 +59,8 @@ SCREEN_MAX = 200
 #   Sirene/Strobe  (x   … x+13,   y-5 … y)
 #   Speed/RPM/Gang (x   … x+29,   y   … y+8)
 #   PDC hinten     (x-3 … x,      y+2 … y+8)
-#   Notification   (x   … x+26,   y+8 … y+13)
+#   Notification / AEB-Anzeige (x … x+26, y+8 … y+13) - ein Slot, siehe
+#                  NOTIFICATION_SLOT und UIManager.notification_slot()
 HUD_BOX_LEFT = -3
 HUD_BOX_RIGHT = 29
 HUD_BOX_TOP = -6
@@ -68,10 +79,28 @@ RESERVED_BOTTOM = 170
 # zuruecksetzte.
 WARNING_BLINK_INTERVAL_S = 0.25
 
+# Meldungsslot: die Zeile direkt unter dem HUD, als (dx, dy, Breite, Hoehe)
+# relativ zur HUD-Position. Notification und Notbrems-Anzeiger teilen sich
+# diesen Platz - beides sind kurze Zeilen, und unten mittig unter dem HUD ist
+# die Stelle, an der der Fahrer sie ohne Blicksprung liest.
+NOTIFICATION_SLOT = (0, 8, 26, 5)
+# Kalibrierfeld: absolute Bildschirmkoordinaten, mittig ueber der Bildmitte.
+# Nicht relativ zum HUD, weil der Fahrer es waehrend der Prozedur ansehen
+# soll und der HUD-Platz frei konfigurierbar ist.
+CALIBRATION_SLOT_PROMPT = (55, 40, 90, 7)
+CALIBRATION_SLOT_STATUS = (55, 47, 90, 6)
+
+# Notbremseingriff: im Meldungsslot, direkt unter dem Tacho.
+# Bewusst nicht blinkend: ein Eingriff dauert oft unter einer Sekunde, ein
+# blinkendes Feld kann genau dann dunkel sein, wenn der Fahrer hinsieht.
+EMERGENCY_BRAKE_TEXT = "^1!! BRAKE !!"
+
 # Notifications: eine Zeile fuer 3 s. Ohne Obergrenze staut eine Serie
 # (z.B. die Getriebekalibrierung) minutenlang.
 NOTIFICATION_DISPLAY_S = 3
 MAX_QUEUED_NOTIFICATIONS = 8
+# Eine Ueberlaufmeldung je so viele Sekunden (sie kam frueher pro Zyklus).
+NOTIFICATION_OVERFLOW_LOG_S = 5.0
 
 
 def _as_int(value, default: int = 0) -> int:
@@ -136,11 +165,21 @@ class UIManager:
         self.pdc_data = None
         self.notifications = deque(maxlen=MAX_QUEUED_NOTIFICATIONS)
         self.notification_time = 0.0
+        # Ueberlauf-Buchhaltung: eine volle Warteschlange bedeutet, dass der
+        # Nutzer eine bis zu MAX_QUEUED_NOTIFICATIONS * NOTIFICATION_DISPLAY_S
+        # Sekunden alte Meldung liest - bei der Getriebekalibrierung also den
+        # Schritt davor. Eine Zeile pro verworfener Meldung war dabei selbst
+        # eine Flut und nannte nicht, *was* geflutet hat.
+        self._dropped_count = 0
+        self._dropped_logged_at = 0.0
         self.current_notification = None
         self.collision_warning_level = 0
         self.cross_traffic_warning_level = 0
         self.cross_traffic_warning_side = None
         self.hud_enabled = False
+        self.emergency_brake_active = False
+        # Zustand der Getriebekalibrierung, oder None wenn keine laeuft.
+        self.calibration_state = None
         self.siren_active = False
         self.strobe_active = False
         self.siren_ui_visible = False
@@ -153,6 +192,7 @@ class UIManager:
         self.event_bus.subscribe('collision_warning_changed', self._update_collision_warning_display)
         self.event_bus.subscribe('cross_traffic_warning_changed', self._update_cross_traffic_warning_display)
         self.event_bus.subscribe('blind_spot_warning_changed', self._update_blind_spot_display)
+        self.event_bus.subscribe('emergency_brake_changed', self._update_emergency_brake_display)
         self.event_bus.subscribe('outgauge_data', self._get_hud_data)
         self.event_bus.subscribe('state_data', self._state_change)
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
@@ -166,6 +206,8 @@ class UIManager:
         self.event_bus.subscribe("siren_state_changed", self._on_siren_state_changed)
         self.event_bus.subscribe("strobe_state_changed", self._on_strobe_state_changed)
         self.event_bus.subscribe("buttons_cleared", self._on_buttons_cleared)
+        self.event_bus.subscribe("gearbox_calibration_state",
+                                 self._update_calibration_panel)
         #self.event_bus.subscribe("decel_debug", self._decel_debug)
         #self.event_bus.subscribe("dist_debug", self._dist_debug)
 
@@ -181,6 +223,16 @@ class UIManager:
         """Geklemmte HUD-Position - einziger Zugriff auf die Einstellung"""
         return clamp_hud_position(self.settings.get("hud_width"),
                                   self.settings.get("hud_height"))
+
+    def notification_slot(self) -> Tuple[int, int, int, int]:
+        """(x, y, w, h) der Meldungszeile unter dem HUD
+
+        Einzige Quelle dieser Geometrie: Notification und Notbrems-Anzeiger
+        zeichnen beide genau hierhin (NOTIFICATION_SLOT).
+        """
+        hud_x, hud_y = self.hud_origin()
+        dx, dy, width, height = NOTIFICATION_SLOT
+        return hud_x + dx, hud_y + dy, width, height
 
     # ─── Sirene / Stroboskop (nur Darstellung) ────────────────────────
 
@@ -232,6 +284,41 @@ class UIManager:
         command = data['command']
         self.message_sender.send_command(command)
 
+    # ─── Getriebekalibrierung ─────────────────────────────────────────
+
+    def _update_calibration_panel(self, data):
+        """Nimmt den Zustand entgegen - gezeichnet wird im UI-Durchlauf
+
+        Das Ereignis kommt vom Assistenzthread, gezeichnet wird auf dem
+        UI-Thread: hier wird nur abgelegt.
+        """
+        if not isinstance(data, dict) or not data.get('active'):
+            self.calibration_state = None
+            self.message_sender.remove_range(*CALIBRATION_RANGE)
+            return
+        self.calibration_state = data
+
+    def _draw_calibration_panel(self):
+        """Aufforderung, Restzeit und der bisher gemessene Wert
+
+        Zwei Zeilen ueber der Bildmitte, ausserhalb von HUD (ab x 87), Menue
+        (0-50 x, 70-120 y) und Meldungszeile. Die Restzeit steht in ganzen
+        Sekunden, der Text aendert sich also einmal pro Sekunde und die
+        Button-Registry unterdrueckt alles dazwischen.
+        """
+        state = self.calibration_state
+        if state is None:
+            return
+        if not self.buttons_allowed:
+            return
+        remaining = int(state.get('remaining', 0) + 0.5)
+        self.message_sender.create_button(
+            BTN_CALIBRATION_PROMPT, *CALIBRATION_SLOT_PROMPT,
+            f"^3{state.get('prompt', '')}", pyinsim.ISB_DARK)
+        self.message_sender.create_button(
+            BTN_CALIBRATION_STATUS, *CALIBRATION_SLOT_STATUS,
+            f"^7{state.get('reading', '')}  ^3{remaining} s", pyinsim.ISB_DARK)
+
     # ─── Notifications ────────────────────────────────────────────────
 
     def _update_notifications(self, data):
@@ -241,8 +328,24 @@ class UIManager:
         if len(self.notifications) == self.notifications.maxlen:
             # deque wirft von selbst das aelteste weg - das aber melden,
             # sonst verschwindet eine Meldung spurlos.
-            logger.warning("Notification queue full - dropping the oldest entry.")
+            self._report_dropped(self.notifications[0], text)
         self.notifications.append(text)
+
+    def _report_dropped(self, dropped: str, incoming: str):
+        """Meldet den Ueberlauf ratenbegrenzt und mit Text
+
+        Wer flutet, steht im Text - ohne ihn war die Warnung nicht auswertbar.
+        Eine Zeile pro NOTIFICATION_OVERFLOW_LOG_S, mit der Anzahl seither.
+        """
+        self._dropped_count += 1
+        now = time.perf_counter()
+        if now - self._dropped_logged_at < NOTIFICATION_OVERFLOW_LOG_S:
+            return
+        self._dropped_logged_at = now
+        logger.warning("Notification queue full - %d dropped since the last "
+                       "report. Dropped now: %r, incoming: %r",
+                       self._dropped_count, dropped, incoming)
+        self._dropped_count = 0
 
     def show_notifications(self):
         """Zeigt eine Meldung fuer NOTIFICATION_DISPLAY_S Sekunden
@@ -252,6 +355,11 @@ class UIManager:
         es geht also nichts zusaetzlich raus - dafuer kommt die Zeile nach
         einem SHIFT+B von selbst zurueck.
         """
+        if self.emergency_brake_active:
+            # Der Anzeiger hat den Slot (_draw_emergency_brake) und behaelt
+            # ihn: eine Meldung kann drei Sekunden warten, eine laufende
+            # Notbremsung nicht.
+            return
         now = time.perf_counter()
         if now - self.notification_time >= NOTIFICATION_DISPLAY_S:
             self.current_notification = (self.notifications.popleft()
@@ -261,8 +369,8 @@ class UIManager:
         if self.current_notification is None:
             self.message_sender.remove_button(BTN_NOTIFICATION)
             return
-        hud_x, hud_y = self.hud_origin()
-        self.message_sender.create_button(BTN_NOTIFICATION, hud_x, hud_y + 8, 26, 5,
+        x, y, width, height = self.notification_slot()
+        self.message_sender.create_button(BTN_NOTIFICATION, x, y, width, height,
                                           self.current_notification, pyinsim.ISB_DARK)
 
     def clear_notifications(self):
@@ -377,7 +485,9 @@ class UIManager:
         self.collision_warning_level = 0
         self.cross_traffic_warning_level = 0
         self.cross_traffic_warning_side = None
+        self.emergency_brake_active = False
         self.current_menu = None
+        self.calibration_state = None
         self.clear_notifications()
 
     def _draw_idle_screen(self):
@@ -427,6 +537,19 @@ class UIManager:
         """Aktualisiert das Head-Up Display"""
         if not self.on_track:
             return
+        # Der Notbrems-Anzeiger haengt nicht an hud_active: er meldet, dass
+        # der Wagen gerade selbst bremst (control-intervention.md §4), und das
+        # muss auch sichtbar sein, wenn der Fahrer die Anzeigen abgeschaltet
+        # hat. Nur der Bildschirmkontext darf ihn unterdruecken. Er wird - wie
+        # HUD, PDC und Sirene - jeden Durchlauf neu gezeichnet, die Registry
+        # macht die Wiederholung frei und nach SHIFT+B kommt er von selbst
+        # zurueck (reference/ui.md §1.5).
+        self._draw_emergency_brake()
+        # Wie der Notbrems-Anzeiger unabhaengig von hud_active: eine laufende
+        # Kalibrierung fordert den Fahrer gerade zu etwas auf, das sie in
+        # 12 s misst. Jeden Durchlauf neu gezeichnet, damit sie nach SHIFT+B
+        # von selbst wiederkommt (reference/ui.md §1.5).
+        self._draw_calibration_panel()
         if not (self.settings.get('hud_active') and self.buttons_allowed):
             self.hide_hud()
             return
@@ -499,6 +622,38 @@ class UIManager:
 
         self.cross_traffic_warning_level = warning_level
         self.cross_traffic_warning_side = warning_side
+
+    def _update_emergency_brake_display(self, data):
+        """Notbremseingriff sichtbar machen (control-intervention.md §4)
+
+        Bewusst kein ``notification``: die Zeile wird eine nach der anderen
+        fuer 3 s gezeigt, der Fahrer haette den Hinweis also erst nach dem
+        Bremsvorgang gesehen. Der Anzeiger geht mit dem Eingriff an und aus.
+        """
+        self.emergency_brake_active = (bool(data.get('active', False))
+                                       if isinstance(data, dict) else False)
+        self._draw_emergency_brake()
+
+    def _draw_emergency_brake(self):
+        """Zeichnet oder entfernt den Interventionsanzeiger
+
+        Steht im Meldungsslot (notification_slot) - dem Platz, den sich
+        Anzeiger und Notification teilen. Solange der Eingriff laeuft,
+        gewinnt der Anzeiger: er meldet, dass der Wagen gerade selbst
+        bremst, eine Meldung kann warten (show_notifications haelt sich
+        dann zurueck).
+        """
+        if not (self.emergency_brake_active and self.on_track
+                and self.buttons_allowed):
+            self.message_sender.remove_button(BTN_EMERGENCY_BRAKE)
+            return
+        # Auch auf dem Sofort-Pfad (Event, nicht UI-Durchlauf) darf keine
+        # Meldung unter dem Anzeiger stehenbleiben.
+        self.message_sender.remove_button(BTN_NOTIFICATION)
+        x, y, width, height = self.notification_slot()
+        self.message_sender.create_button(BTN_EMERGENCY_BRAKE, x, y, width, height,
+                                          EMERGENCY_BRAKE_TEXT,
+                                          pyinsim.ISB_LIGHT)
 
     def _update_blind_spot_display(self, data):
         """Aktualisiert Toter-Winkel-Anzeige"""

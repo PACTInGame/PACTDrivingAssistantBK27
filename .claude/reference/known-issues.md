@@ -20,10 +20,42 @@ means the whole OutSim pipeline runs for nothing.
 `{'command': str}`, subscriber `UIManager`). Different shapes, different routes, same
 purpose. Should be unified into one event with one payload shape.
 
-**#8 — `Controls/wheel.py` cannot work.** Its `try` block raises `ImportError`
-unconditionally *after* the import, so `vj` and `setJoy` are never bound and
-`press_wheel_brake` would raise `NameError`. Currently unreachable only because
-`ControllerEmulator` is commented out in `AssistanceManager`.
+**#8 — `Controls/wheel.py` and `assistance/controller_emulator.py` are dead.** Both
+are superseded by `assistance/emergency_brake.py` + `Controls/brake_key.py` and are no
+longer imported anywhere. `wheel.py` never worked: its `try` block raises `ImportError`
+unconditionally *after* the import, so `vj` and `setJoy` were never bound. Delete both
+once the vJoy axis path is rebuilt in their place.
+
+**#41 — Installing vJoy destroys the user's LFS controller configuration.** LFS treats
+a device it has not seen before as new hardware and discards every existing controller
+assignment. A wheel driver who installs vJoy for automatic braking has to rebuild their
+whole control setup by hand, which is the actual reason users call the feature
+unfriendly. It happens once, at install, so a backup/restore of `cfg.txt` and
+`data\misc\*.csf`/`*.con` around it should be able to fix it. The format is no longer
+undocumented -- see `lfs-config-files.md` -- and the numbers in it are device-local, so a
+restore is not obviously invalidated by the new device. Still unverified: whether LFS
+honours a restored file, and whether the numeric suffix in the filename shifts when a
+device is added. `control-intervention.md` §3.2, experiment in `lfs-config-files.md` §7.
+
+**#42 — `auto_hold` may be pressing a handbrake key a wheel driver does not have.**
+In `wheel_js` mode LFS lets the driver choose *per function* whether clutch and
+handbrake come from an axis or a key. `InputGuard`'s docstring still claims a wheel
+user always has a keyboard handbrake binding; for anyone who set handbrake to an axis,
+`AutoHold`'s injected key does nothing and reports success. Same class of silent
+failure as the one emergency braking just had. Which of the two the driver chose is
+readable off disk without touching LFS: the `handbrake` entry of the axis table in
+`data\misc\<Device>.csf` is `0xFFFF` exactly when the function is not on an axis
+(`lfs-config-files.md` §4).
+
+**#45 — Something emits a notification at cycle rate, and nobody knows what.**
+Two bursts were seen live (14:15:33 and 14:15:47) at roughly **ten dropped notifications
+per second**, i.e. one per assistance cycle. The queue holds 8 and shows each entry for
+3 s, so while that runs the driver reads a message up to 24 s old — which is what made
+the gearbox calibration unusable (`ui.md` §1.7). Not reproduced since, and the emitter is
+still unidentified: the old warning printed one anonymous line per drop. It now names the
+dropped and the incoming text and is rate-limited to one line per 5 s, so the next
+occurrence identifies itself. Note that the queue is *structurally* at its limit — see
+§1.7 for why anything periodic must not use it at all.
 
 **#12 — `own_vehicle` is still mutated while workers read it.** The vehicle
 dict is safe now: `VehicleManager` publishes a fresh snapshot dict per MCI frame

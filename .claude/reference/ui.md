@@ -114,6 +114,11 @@ Rules that shaped the implementation:
   cheapest first; the Win32 call is last.
 - **A refusal is logged at debug level, once per reason per 30 s.** It is normal
   operation, not an error, and must never become one message per cycle.
+- **A key press is never executed on the assistance thread.** It has two costs that
+  both exceed the whole 100 ms budget: importing `pyautogui` takes ~255 ms on the first
+  call, and `pyautogui.PAUSE` sleeps 0.1 s after *every* call (measured: `keyDown`
+  112.9 ms, `keyUp` 108.5 ms, against 0.4 / 0.2 ms with `PAUSE = 0`). Both live on
+  `misc/key_tap.py`'s own thread now — see §1.6.
 - **The foreground check fails *open*.** Off Windows, and on any Win32 error, it returns
   `True`: refusing because we could not ask would silently kill both features. What it
   accepts is decided by `looks_like_lfs(title, process_name)`: the **process** is
@@ -143,6 +148,7 @@ nothing verifies it — a wrong binding means the injection does nothing, or doe
 something else entirely. `/key <key> <function>` would let us push our binding *into*
 LFS instead of guessing; see `control-intervention.md` §3.1.
 
+
 ### 1.5 The user can clear our buttons — and we never notice
 
 `IS_BFN` is bidirectional. Two subtypes arrive **from** LFS, both bound:
@@ -154,13 +160,86 @@ LFS instead of guessing; see `control-intervention.md` §3.1.
 Both are republished as `buttons_cleared`. `MessageSender` drops its registry (so the
 next repaint really sends), `UIManager` redraws the idle banner and `MenuSystem`
 redraws the menu page that is open. Everything else `UIManager` owns — HUD, PDC, siren
-buttons, the notification line — is repainted every UI pass and comes back on its own;
-the registry makes those repeats free on the wire. **A new UI element that only draws
+buttons, the notification line, the emergency-brake indicator — is repainted every UI
+pass and comes back on its own; the registry makes those repeats free on the wire. **A new UI element that only draws
 on change must subscribe to `buttons_cleared` itself.**
 
 Conversely, `BFN_CLEAR` (1) sent **to** LFS clears every button this instance created in
 a single packet — the right replacement for the current 239-packet delete loop
 (`known-issues.md` #10).
+
+### 1.6 A key press is a *hold*, and the hold does not belong on the assistance thread
+
+LFS samples the keyboard **once per rendered frame**. A key that goes down and up in
+0.2 ms is therefore never seen at all — the press has to survive at least one frame.
+Until WP11 that hold came from `pyautogui.PAUSE`, i.e. from `time.sleep` **inside
+`process()`**: one auto-hold engagement measured 323.6 ms of a 100 ms budget (201 ms
+once pyautogui was imported), one gear change ~440 ms, and every other assistance
+system was that late.
+
+`misc/key_tap.py` keeps the hold and moves the waiting off the cycle. One shared
+`KeyTapper` owns **one** daemon thread; `tap(key, hold_s=0.10, delay_s=0.0)` pushes two
+events onto a heap and returns in microseconds.
+
+```python
+self.tapper = get_key_tapper()          # in __init__
+self.tapper.tap(handbrake_key)          # 100 ms tap, costs the cycle nothing
+self.tapper.tap(clutch, hold_s=0.30)                    # gear change:
+self.tapper.tap(shift,  hold_s=0.10, delay_s=0.10)      # gear inside the clutch
+```
+
+What is load-bearing about the design:
+
+- **One thread, not a `threading.Timer` per press.** `pyautogui.PAUSE` is module-global
+  state that `instant_input()` switches off and back on; with a single injecting thread
+  no caller's restore can undo another caller's press. It also guarantees the order of
+  events for one key, and it is where the pyautogui import happens.
+- **`tap()` never asks `is_available('pyautogui')`.** That call *is* the 255 ms import.
+- **Re-tapping a key that is still held does not press it again** — LFS would see a key
+  repeat. The later tap only pushes the release out.
+- **Key names go through `misc/key_names.py`.** The old call sites handed the value from
+  `settings.json` straight to pyautogui, where `page_up` is not a key and `mousel` is
+  not a key at all; a handbrake bound to either silently did nothing.
+- **`release_all()` on shutdown**, from `AutoHold.shutdown()` and `Gearbox.shutdown()`
+  (idempotent, the tapper is shared). A clutch left down outlives the process.
+- **`tap()` returns `False` when no keystroke can happen** (unnameable key). Callers
+  treat that exactly like an `InputGuard` refusal: `AutoHold` then does not claim
+  "Auto Hold", `Gearbox` does not start its shift cooldown.
+
+`platform_shim.instant_input()` is still the low-level door and is still **not** a global
+switch: only a caller that manages its own hold time may use it. Two do —
+`misc/key_tap.py` (hold on its own thread) and `Controls/brake_key.py` (hold across
+cycles, following a control demand). Nothing else may call `keyDown` directly.
+
+### 1.7 The notification queue is the wrong medium for a timed procedure
+
+`UIManager` shows one notification at a time, for `NOTIFICATION_DISPLAY_S` = **3 s**, from
+a queue of `MAX_QUEUED_NOTIFICATIONS` = **8**. That is a ticker for things that already
+happened ("Auto Hold", "Siren: enabled"). It is **not** a display, and anything that
+tells the driver to *do something now* must not use it.
+
+The gearbox calibration did, and it broke in the field. Each of its three 12 s steps
+emitted five messages — prompt, "Recording…", two countdowns, plus the previous step's
+result — which is **15 s of display time for a 12 s step**. The lag grew by 3 s per step,
+so the driver was still revving for step 1 while step 2 was already measuring the gear.
+The log said `step 2 ended - gear 1`; the driver had shifted, just later than the program
+thought. Two independent defects looked like one.
+
+The fix, and the pattern for anything similar:
+
+- **The producer publishes state, every cycle, not messages.** `Gearbox` emits
+  `gearbox_calibration_state` (`events.md`) with `active`, `prompt`, `remaining` and
+  `reading` — the current truth, not a log of it.
+- **The consumer owns a slot and redraws it every UI pass** (IDs 16–17), like the HUD and
+  the emergency-brake indicator. The button registry suppresses the unchanged repaint, and
+  the panel comes back by itself after SHIFT+B (§1.5).
+- **The panel shows what has been measured so far.** A driver who can see the rpm being
+  recorded knows their input arrived; twelve blind seconds followed by a verdict is what
+  made the procedure impossible to debug from the cockpit.
+- Results and one-off events stay notifications. Those are what the ticker is for.
+
+Watch the queue: `known-issues.md` #45 records a still-unidentified emitter that floods it
+at cycle rate.
 
 ## 2. Button ID allocation — respect this map
 
@@ -175,9 +254,11 @@ rather than writing literals.
 | 1–10 | `UIManager` | HUD: `1` speed, `2` rpm, `3` gear, `4` the "PACT Driving Assist Active." idle banner (its own slot since WP5 — it used to share id `1` with the speed field) |
 | 11–12 | `UIManager` | Forward collision warning *(reserved; the warning currently repaints the HUD instead)* |
 | 13–14 | `UIManager` | Blind spot warning: `13` left, `14` right |
+| 15 | `UIManager` | Automatic emergency braking indicator (`BTN_EMERGENCY_BRAKE`) — shares the notification slot with ID 61 and outranks it while an intervention runs |
+| 16–17 | `UIManager` | Gearbox calibration panel (`CALIBRATION_RANGE`): `16` the current prompt, `17` the live reading plus remaining seconds — see §1.7 |
 | 20–40 | `MenuSystem` | `20` floating "Main Menu" opener, `21` title, `22`–`31` entries, `40` close/cancel |
 | 41–60 | `UIManager` | PDC display: `41–43`/`44–46`/`47–49` front green/yellow/red, `51–53`/`54–56`/`57–59` rear, `60` "PDC" label |
-| 61 | `UIManager` | Notification line |
+| 61 | `UIManager` | Notification line — the slot under the HUD (`NOTIFICATION_SLOT`), shared with ID 15 |
 | 62–63 | `LightAssists` (state) + `UIManager` (drawing) | `62` Siren, `63` Strobe (cop mode) |
 | 100–101 | `UIManager` | Debug readouts (deceleration, distance) — subscribers commented out |
 
@@ -216,9 +297,30 @@ lied.
   and the server list get nothing (§1.1).
 - Notifications: `notification` events queue in a `deque(maxlen=MAX_QUEUED_NOTIFICATIONS)`
   (8); one is shown for 3 s on ID 61 and the queue is cleared on track exit. Overflow
-  drops the oldest and logs a warning.
+  drops the oldest and logs a warning. The line sits in the **notification slot**,
+  `NOTIFICATION_SLOT = (0, 8, 26, 5)` relative to the HUD origin, i.e.
+  `hud_x … hud_x+26`, `hud_y+8 … hud_y+13`, directly under the gauges.
+  `UIManager.notification_slot()` is the only source of that rectangle — the
+  emergency-brake indicator draws into the same one, so never hardcode a second copy.
 - Audio: `UIManager` emits `play_audio` (three times, to lengthen the tone) when a
   warning crosses level 2. `AudioPlayer` suppresses repeats of `fcw` within 3 s.
+- **The automatic-emergency-braking indicator** (`emergency_brake_changed` → ID 15,
+  `^1!! BRAKE !!` on `ISB_LIGHT`) occupies the **notification slot**:
+  `UIManager.notification_slot()`, i.e. `hud_x … hud_x+26`, `hud_y+8 … hud_y+13`,
+  centred under the gauges. It was tried above and to the right of the HUD (`hud_x+13`,
+  `hud_y-5`) and rejected in game — off to one side, it reads as unrelated to the car.
+  It is drawn from the event *and* repainted every UI pass, which is what brings it back
+  after SHIFT+B. Three deliberate differences from the other elements: it is **not**
+  gated on `hud_active` — an active intervention has to be visible even with the gauges
+  switched off (`control-intervention.md` §4); it does **not** blink, because an
+  intervention often lasts under a second and a blinking field can be dark exactly when
+  the driver looks; and it **wins the shared slot**. While `emergency_brake_active`,
+  `_draw_emergency_brake()` removes ID 61 and `show_notifications()` returns without
+  drawing, so a queued message waits (nothing is dropped — the queue and its 3 s timer
+  simply resume when the intervention ends). Rationale: a notification can wait three
+  seconds, a car braking itself cannot. It was a queued `notification` before, i.e.
+  shown for 3 s about a second after the braking had already ended, which is why it is
+  its own button.
 
 ## 4. Menus — `ui/menu_system.py`
 

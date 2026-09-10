@@ -26,6 +26,7 @@ from misc.input_guard import (REASON_AI_CONTROLLED, REASON_DIALOG,
                               REASON_LFS_NOT_FOCUSED, REASON_MODIFIER_HELD,
                               REASON_NOT_LOCAL_DRIVER, REASON_OFF_TRACK,
                               REASON_TEXT_ENTRY, InputGuard, looks_like_lfs)
+from misc.key_tap import get_key_tapper
 from ui.ui_manager import BTN_SIREN as UI_BTN_SIREN
 from ui.ui_manager import UIManager
 
@@ -68,7 +69,15 @@ def track_state(**overrides) -> dict:
 
 
 def keys_pressed():
-    """Every key ``pyautogui.keyDown`` was called with since the last reset."""
+    """Every key ``pyautogui.keyDown`` was called with since the last reset.
+
+    The keystroke no longer happens on the caller's thread: ``AutoHold`` and
+    ``Gearbox`` hand it to the shared :class:`misc.key_tap.KeyTapper`, which
+    presses, holds and releases on its own thread (known-issues #43). So wait
+    for the tapper to run dry first. With nothing scheduled that is immediate,
+    which keeps the "no key was pressed" assertions fast.
+    """
+    assert get_key_tapper().wait_idle(timeout=3.0), "the key tapper never finished"
     return [args[0] for path, args, _ in platform_shim.recorded_calls()
             if path == 'pyautogui.keyDown' and args]
 
@@ -437,21 +446,47 @@ def notifications(seen):
     return [p['notification'] for p in seen.payloads('notification')]
 
 
-def run_calibration(gearbox, clock, bus, own_vehicle, gear_at_the_end=8):
-    """Drives the three 12 s steps to the end."""
+def run_calibration(gearbox, clock, bus, own_vehicle, gear_at_the_end=8,
+                    redline_rpm=7000, gear_at_the_very_end=None):
+    """Drives the three 12 s steps to the end, doing what each one asks for.
+
+    Every step is *measured over its whole 12 s* — lowest rpm, highest rpm,
+    highest gear — so this has to actually idle, actually rev and actually
+    shift, not just sit at one value. ``gear_at_the_very_end`` is what the gear
+    has fallen back to when the step expires; LFS drops a standing car back into
+    neutral, which is what broke the calibration in the field.
+    """
     bus.emit('gearbox_calibrate', {})
-    gearbox.process(own_vehicle, {})     # step 0
-    for _ in range(2):
-        clock.advance(12.1)
-        gearbox.process(own_vehicle, {})
+    gearbox.process(own_vehicle, {})            # step 0: idle
+
     clock.advance(12.1)
-    own_vehicle.gear = gear_at_the_end
+    gearbox.process(own_vehicle, {})            # -> idle stored, step 1 starts
+
+    own_vehicle.rpm = redline_rpm               # the driver revs it
+    gearbox.process(own_vehicle, {})
+    clock.advance(12.1)
+    gearbox.process(own_vehicle, {})            # -> redline stored, step 2 starts
+
+    own_vehicle.gear = gear_at_the_end          # the driver shifts up
+    gearbox.process(own_vehicle, {})
+    if gear_at_the_very_end is not None:
+        own_vehicle.gear = gear_at_the_very_end
+    clock.advance(12.1)
     gearbox.process(own_vehicle, {})
 
 
-def test_calibration_counts_down_instead_of_waiting_blindly(
+def test_calibration_publishes_a_live_panel_instead_of_queued_messages(
         bus, gearbox_factory, make_own_vehicle, recorder):
-    seen = recorder('notification')
+    """The prompts must not go through the 3-s-per-message notification queue.
+
+    A step emitted five of them for twelve seconds of display time, so the
+    driver read the *previous* step's instruction and the calibration measured
+    something they were no longer doing (`reference/ui.md` §1.7). The panel
+    carries the current prompt, the remaining time and what has been measured
+    so far, and it is republished every cycle.
+    """
+    seen = recorder('gearbox_calibration_state')
+    notified = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
     standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
@@ -461,12 +496,31 @@ def test_calibration_counts_down_instead_of_waiting_blindly(
     gearbox.process(standing, {})
     clock.advance(6.1)
     gearbox.process(standing, {})
-    clock.advance(3.0)
-    gearbox.process(standing, {})
 
-    texts = notifications(seen)
-    assert any('6 s' in text for text in texts)
-    assert any('3 s' in text for text in texts)
+    states = seen.payloads('gearbox_calibration_state')
+    assert states, "the calibration published no state at all"
+    assert all(state['active'] for state in states)
+    assert states[0]['remaining'] == pytest.approx(12.0, abs=0.01)
+    assert states[-1]['remaining'] == pytest.approx(5.9, abs=0.01)
+    assert 'idle' in states[-1]['prompt'].lower()
+    # The step's live reading, so the driver can see it is being measured.
+    assert '900' in states[-1]['reading']
+    # And none of that reached the queue.
+    assert not any('12 s' in text or '6 s' in text for text in notifications(notified))
+
+
+def test_the_calibration_panel_is_taken_down_when_it_ends(
+        bus, gearbox_factory, make_own_vehicle, recorder):
+    seen = recorder('gearbox_calibration_state')
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    run_calibration(gearbox, clock, bus, standing)
+
+    states = seen.payloads('gearbox_calibration_state')
+    assert states[-1] == {'active': False}
 
 
 def test_calibration_can_be_cancelled_from_the_menu(
@@ -518,6 +572,140 @@ def test_calibration_refuses_neutral_as_the_highest_gear(
 
     assert gearbox.forward_gears == 0
     assert gearbox.calibrating is False
+    assert any('Aborted' in text for text in notifications(seen))
+
+
+def test_calibration_keeps_the_highest_gear_even_when_it_drops_back_to_neutral(
+        bus, gearbox_factory, make_own_vehicle, recorder):
+    """The field failure: LFS puts a standing car back into neutral.
+
+    The step used to be read in the single cycle in which it expired, and the
+    log then said "step 2 ended - gear 1" although the driver had shifted all
+    the way up. What the step is asking for is the highest gear *reached*.
+    """
+    seen = recorder('notification')
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    run_calibration(gearbox, clock, bus, standing,
+                    gear_at_the_end=8, gear_at_the_very_end=1)
+
+    assert gearbox.forward_gears == 7
+    assert gearbox.calibrating is False
+    assert any('Max gear set to 7' in text for text in notifications(seen))
+
+
+def test_calibration_keeps_the_highest_rpm_of_the_step_not_the_last_one(
+        bus, gearbox_factory, make_own_vehicle):
+    """Letting off a moment early used to store idle rpm as the redline."""
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(standing, {})
+    clock.advance(12.1)
+    gearbox.process(standing, {})               # idle stored, step 1 starts
+
+    standing.rpm = 7200                         # revved ...
+    gearbox.process(standing, {})
+    standing.rpm = 1100                         # ... and off the throttle again
+    clock.advance(12.1)
+    gearbox.process(standing, {})
+
+    assert gearbox.redline == 7200
+
+
+def pump_idle_step(gearbox, clock, own_vehicle, rpm_sequence):
+    """Run the idle step through *rpm_sequence*, one assistance cycle each."""
+    for rpm in rpm_sequence:
+        own_vehicle.rpm = rpm
+        clock.advance(0.1)
+        gearbox.process(own_vehicle, {})
+    clock.advance(12.1)
+    gearbox.process(own_vehicle, {})
+
+
+def test_calibration_takes_the_rpm_that_was_there_most_of_the_idle_step(
+        bus, gearbox_factory, make_own_vehicle):
+    """A blip during the idle step must not become the idle speed.
+
+    The median, not the minimum and not the last value: the idle governor
+    hunts around its target, and a step regularly contains rpm that is not
+    idle at all.
+    """
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(standing, {})
+    # 100 cycles of idle hunting around 900, with a 20-cycle blip in the middle.
+    pump_idle_step(gearbox, clock, standing,
+                   [890, 900, 910] * 20 + [3000] * 20 + [895, 905] * 10)
+
+    assert gearbox.idle == pytest.approx(900, abs=15)
+
+
+def test_a_stopped_engine_is_not_mistaken_for_idle_speed(
+        bus, gearbox_factory, make_own_vehicle):
+    """The field failure: LFS shuts a standing engine down, and rpm is then 0.
+
+    Starting the calibration before starting the engine used to store an idle
+    speed of 0, which makes every shift threshold nonsense.
+    """
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=0, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(standing, {})
+    # Engine off for the first third of the step, then started and idling.
+    pump_idle_step(gearbox, clock, standing, [0] * 40 + [900, 905, 895] * 27)
+
+    assert gearbox.idle == pytest.approx(900, abs=15)
+
+
+def test_calibration_aborts_when_the_engine_never_runs(
+        bus, gearbox_factory, make_own_vehicle, recorder):
+    """Better to say so than to store an idle speed of zero."""
+    seen = recorder('notification')
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=0, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(standing, {})
+    pump_idle_step(gearbox, clock, standing, [0] * 50)
+
+    assert gearbox.calibrating is False
+    assert gearbox.is_calibrated is False
+    assert any('Aborted' in text for text in notifications(seen))
+
+
+def test_calibration_refuses_a_redline_that_was_never_revved(
+        bus, gearbox_factory, make_own_vehicle, recorder):
+    """Storing redline == idle leaves an automatic that never shifts.
+
+    It used to be stored silently, and the driver had no way to tell why the
+    gearbox did nothing afterwards.
+    """
+    seen = recorder('notification')
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
+    gearbox.car = 'XFG'
+
+    run_calibration(gearbox, clock, bus, standing, redline_rpm=1200)
+
+    assert gearbox.calibrating is False
+    assert gearbox.is_calibrated is False
     assert any('Aborted' in text for text in notifications(seen))
 
 

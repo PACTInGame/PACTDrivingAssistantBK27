@@ -75,6 +75,18 @@ tests/
                            calibration (countdown, cancel, gear storage, legacy file),
                            high-beam dedupe, strobe timing, and the single owner of
                            the siren/strobe state
+  test_key_tap.py          KeyTapper: that ``tap()`` returns without waiting for the
+                           hold, that the hold happens anyway on the tapper's thread,
+                           the gearbox's clutch/gear ordering, re-tap extension, the
+                           stored->pyautogui name translation, and release_all()
+  test_emergency_brake.py  the key-name table (stored/VK/LFS/pyautogui spellings),
+                           the two low-level hook filters called directly, the
+                           brake-key arbitration incl. the key-release trap, and
+                           EmergencyBrake's hysteresis, guards and lifecycle
+  test_brake_axis.py       the wheel_js path: the measured vJoy mapping in both
+                           polarities, the engage/release orderings, the handover
+                           marker, guardian.py's marker/settings fallbacks, its
+                           packets against pyinsim's, and VJoyDevice without a DLL
   test_ai_traffic.py       the windowed route search against a full scan over the real
                            track_data files, the teleport resync, route-file validation,
                            PType-based adoption, the routes/worker race, the AI traffic
@@ -136,6 +148,30 @@ marker then.
 | Test | Waiting for |
 |---|---|
 | `test_helpers.py` degenerate-rectangle cases | `point_in_rectangle` judges by cross-product sign only, so a zero-area rectangle swallows its whole line |
+
+### Testing anything that injects a real key
+
+`test_actuation.py` reads the keystrokes back through `platform_shim.recorded_calls()`,
+which only works where the real `pyautogui` is missing — hence its module-level `skipif`.
+`test_emergency_brake.py` takes the other route and patches a recorder over
+`Controls.brake_key.get_keyboard` (and `misc.platform_shim.get_keyboard`), so it runs on
+Windows too. Prefer that for new modules.
+
+**Never call `PhysicalKeyState.start()` from a test** — it installs a machine-wide pynput
+hook. Call `_keyboard_filter` / `_mouse_filter` directly with a namespace object carrying
+`vkCode` and `flags`, and inject a stand-in with the `is_running` / `physically_down` /
+`down_for_lfs` / `forget` surface everywhere above it. A faithful stand-in also has to
+feed our *own* injected presses back into `down_for_lfs` (never into `physically_down`),
+because that is what the real hook does — without it `KeyBrakeOutput.apply(True)`
+re-presses on every cycle.
+
+### Comparing against pyinsim
+
+`pyinsim/__init__.py` does `from pyinsim.core import *`, and `core` defines a function
+called `insim` — so `pyinsim.insim` is that **function**, not the submodule, and
+`from pyinsim import insim` silently gives you the wrong object. Reach packet classes
+through the package itself (`pyinsim.IS_ISI`, `pyinsim.INSIM_VERSION`), as
+`test_brake_axis.py` does when it checks `guardian.py`'s hand-written packets.
 
 ## Guiding constraint
 

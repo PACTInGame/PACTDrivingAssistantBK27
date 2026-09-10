@@ -39,6 +39,28 @@ Component construction order matters: every subscriber must exist before the eve
 cares about are first emitted. Because subscription happens in `__init__`, adding a
 component late in `main.py` can silently miss early events (e.g. the first `IS_STA`).
 
+## A second process: `guardian.py`
+
+The app is not alone any more. When automatic emergency braking arms its analog path,
+`Controls/brake_axis.py` spawns `guardian.py` as a **detached** child that waits on the
+main process's PID and restores LFS's brake axis if the main process dies while holding
+it. It exists because `/axis` can only be sent by something that is alive, and vJoy holds
+its last value forever — see `control-intervention.md` §3.2.
+
+Rules for it, because a watchdog that fails is worse than none:
+
+- **It imports nothing from this codebase.** It reads one integer from `settings.json`
+  and speaks the two InSim packets it needs by hand. A watchdog that dies with the thing
+  it watches, or that breaks because a package was half-imported, is decoration.
+- **It acts only on evidence**, the `brake_axis_held.marker` file, never on a timer or an
+  assumption.
+- It is detached (`DETACHED_PROCESS`, no console) so a Ctrl+C or a kill of the main
+  process does not take it with them.
+- It exits on its own once it has acted.
+
+If it ever grows a UI — the standalone status window that is wanted eventually — that
+belongs on top of this process, not inside the main one.
+
 ## 2. Threading model
 
 | Thread | Runs | Started by |
@@ -158,12 +180,16 @@ misc/
   logging_setup.py         setup_logging() (console + rotating file) and the ErrorThrottle rate limiter
   helpers.py               resolve_path, is_lfs_running, geometry helpers (calc_polygon_points, point_in_rectangle, is_reversing)
   input_guard.py           InputGuard: may a key be injected right now? — every pyautogui call site asks it (ui.md §1.4)
+  key_tap.py               KeyTapper: timed key press on its own thread — the hold never runs on an assistance cycle (ui.md §1.6)
+  key_names.py             One key, four spellings: settings.json / VK code / LFS /key / pyautogui
+  physical_keys.py         PhysicalKeyState: is the *hardware* holding this key, and what does LFS believe? (control-intervention.md §3.1)
   language.py              LanguageManager: 8-language translation table
   key_binder.py            pynput listener to capture a key/mouse button for rebinding
   audio_player.py          pygame.mixer playback of audio/*.wav with repeat suppression
   pdc_beep.py              winsound beep patterns for PDC
   spacial_hash_grid.py     SpatialHashGrid: broad-phase + polygon overlap for PDC
   vjoy.py                  Raw vJoy ctypes binding
+  vjoy_device.py           VJoyDevice: one vJoy device for one axis — acquire/feed, driver touched only on acquire
 
 tests/                     pytest suite + shared fixtures — see reference/testing.md
 pyinsim/                   Forked & extended pyinsim 2.1.0 — see reference/insim.md

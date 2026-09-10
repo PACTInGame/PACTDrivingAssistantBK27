@@ -78,13 +78,21 @@ grep before editing. Keys may be added, never removed or renamed.
 | `cross_traffic_warning_changed` | `{level: 0..2, side: 'left'\|'right'\|None}` | `CrossTrafficWarning` | `UIManager` |
 | `blind_spot_warning_changed` | `{left: bool, right: bool}` | `BlindSpotWarning` | `UIManager` |
 | `pdc_changed` | `Dict[0..5, int]` — sensor → `-1` inactive, `0` clear, `1..3` near…nearest | `ParkDistanceControl` | `UIManager`, `PDCBeepController` |
-| `needed_deceleration_update` | `{deceleration: float}` m/s² | `ForwardCollisionWarning` | `ControllerEmulator`\* |
+| `needed_deceleration_update` | `{deceleration: float}` m/s² — 0 unless FCW is at level 3 | `ForwardCollisionWarning` | `EmergencyBrake` |
+| `emergency_brake_changed` | `{active: bool}` | `EmergencyBrake` | `UIManager` |
 | `ai_traffic_state_changed` | `{active: bool}` | `AIDriver` | `MenuSystem` |
 
 PDC sensor index order: `0,1,2` = front left/middle/right, `3,4,5` = rear left/middle/right.
 
 Warning-output events are emitted **only on change**, not every cycle. Keep that
 contract — the UI relies on it and the bus is synchronous.
+
+`needed_deceleration_update` is the exception and is emitted **every cycle**, because
+its subscriber actuates the car: a demand that stopped arriving must be distinguishable
+from a demand of zero. `EmergencyBrake` acts on it only in the mode and control path
+that `control-intervention.md` allows, and it also listens to `state_data` — leaving
+the track has to release an intervention even though `AssistanceManager` stops calling
+`process()` at that moment.
 
 ## Commands and actuation (app → LFS / hardware)
 
@@ -123,11 +131,17 @@ payload shapes and different subscribers. This is a trap — see `known-issues.m
 | `strobe_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
 | `ai_traffic_start` / `ai_traffic_stop` | `{}` | `MenuSystem` | `AIDriver` |
 | `gearbox_calibrate` | `{}` | `MenuSystem` | `Gearbox` — **toggle**: starts the calibration, or cancels the one that is running |
+| `gearbox_calibration_state` | `{active: bool}` while idle, otherwise `{active: True, step: int, prompt: str, remaining: float, reading: str}` | `Gearbox` (every cycle while calibrating) | `UIManager` — draws the calibration panel, button IDs 16–17 |
 | `await_keybinding` | `{setting: str}` | `MenuSystem` | `Keybinder` |
 | `new_keybinding` | `{button: str, setting: str}` | `Keybinder` | `MenuSystem` |
 
 Notifications are queued in `UIManager.notifications` and displayed one at a time for
 3 s on button ID 61. A burst of notifications therefore takes `3 × n` seconds to drain.
+The queue holds 8, so it can put the driver **24 s behind reality**. Anything periodic or
+time-critical publishes *state* instead and gets its own slot —
+`gearbox_calibration_state` is the worked example, `ui.md` §1.7 the reasoning.
+`prompt` and `reading` arrive already translated; the drawing side does not own a
+`LanguageManager`.
 
 ## Debug-only
 

@@ -219,11 +219,14 @@ It is the only system that should be driving lights.
 
 ## Automatic Gearbox — `gearbox.py`
 
-Shifts by injecting `pyautogui` keypresses (clutch down, shift key, release), through
-`InputGuard.may_inject()` like every other injection site (`ui.md` §1.4). A refused
-shift is a shift that did **not** happen: the cooldown does not start, so the next
-allowed cycle still shifts. The keys are read from the settings at press time, so a
-rebind in the menu works without a restart.
+Shifts by injecting keypresses through the shared `KeyTapper` (`ui.md` §1.6) and
+`InputGuard.may_inject()` (`ui.md` §1.4). The sequence is clutch down at 0 ms, gear key
+at 100 ms, gear key up at 200 ms, clutch up at 300 ms — `CLUTCH_LEAD_S` / `SHIFT_HOLD_S` /
+`CLUTCH_HOLD_S`. Those timings ran on the assistance thread until WP11, where they were
+`pyautogui.PAUSE` and cost ~440 ms of a 100 ms budget per gear change; they are unchanged,
+they simply run on the tapper's thread now. A refused shift is a shift that did **not**
+happen: the cooldown does not start, so the next allowed cycle still shifts. The keys are
+read from the settings at press time, so a rebind in the menu works without a restart.
 
 - **Requires per-car calibration**: idle rpm, redline, number of forward gears. This is
   the pattern to copy for any car-specific parameter — it works for vehicle mods by
@@ -231,10 +234,28 @@ rebind in the menu works without a restart.
   three 12-second steps, persisted to `data/gearbox_calibrations.json` keyed by car
   name. Without calibration the system does nothing, and a car with no entry does not
   inherit the previous car's numbers.
-- **Calibration UX**: each step announces itself, counts down at 6 s and 3 s remaining,
-  and aborts on its own if the car moves or the camera leaves the own car. The same
-  menu entry pressed again **cancels**. Finishing in neutral or reverse is rejected
-  instead of storing "0 gears" and silently never shifting again.
+- **Every step is measured over its whole 12 s, never in the cycle it ends in.** This
+  is the part that kept breaking in the field, and each variant looked like a different
+  bug:
+  - *idle* = the **median** of the samples at or above `ENGINE_RUNNING_MIN_RPM` (300).
+    Not the minimum: LFS shuts a standing engine down and then reports `rpm 0`, which a
+    minimum cannot defend itself against — it stored an idle speed of 0. Not the mean
+    either: a blip of throttle would move it. The median is "the rpm that was there most
+    of the time", and both the start-up transient and a blip are minorities among ~120
+    samples. No sample with the engine running at all aborts the calibration.
+  - *redline* = the **highest** rpm of the step. Letting off a moment early used to store
+    idle speed as the redline (`step 1 ended - rpm 962` while the step's peak was 7481).
+    A redline less than `MIN_RPM_RANGE` (1000) above idle is rejected rather than stored:
+    it leaves an automatic that never shifts, with nothing to explain why.
+  - *top gear* = the **highest gear engaged** during the step. LFS drops a standing car
+    back into neutral, so reading the gear at the end produced `step 2 ended - gear 1`
+    from a driver who had shifted all the way up.
+- **Calibration UX**: the prompt, the remaining seconds and the value measured *so far*
+  are published every cycle as `gearbox_calibration_state` and drawn in the calibration's
+  own slot (`ui.md` §1.7) — deliberately not through the notification queue, which put the
+  driver a whole step behind. It aborts on its own if the car moves or the camera leaves
+  the own car; the same menu entry pressed again **cancels**. Finishing in neutral or
+  reverse is rejected instead of storing "0 gears" and silently never shifting again.
 - **`forward_gears` is the number of forward gears**, not the raw OutGauge gear index —
   one representation, displayed as it is stored. Files written by older builds carry
   the raw index under `max_gears` and are converted on load.
@@ -286,12 +307,43 @@ it: cars are adopted by `IS_NPL.PType` bit 1, never by name, and the nearest-poi
 search is windowed around the previous index — hand it `previous_index=` or it falls
 back to scanning the whole route.
 
-## Controller Emulator — `controller_emulator.py` (disabled)
-
-Would convert `needed_deceleration_update` into a vJoy brake axis for wheel users,
-switching LFS's brake axis via `/axis` commands. Commented out in `manager.py`; its
-`Controls/wheel.py` dependency is also broken (`known-issues.md` #8).
+## Automatic Emergency Braking — `emergency_brake.py`
 
 **Read `reference/control-intervention.md` before touching this or any other feature
-that actuates the car.** It covers arbitration, handback, fail-safe behaviour, the axis
-configuration requirement, and the keyboard key-release trap.
+that actuates the car.** It covers arbitration, handback, fail-safe behaviour, what LFS
+actually accepts in each control mode, and the key-release trap. What follows is only
+the shape of the system.
+
+Turns FCW's `needed_deceleration_update` into real braking. FCW stays a pure warning
+system; everything that takes control away from the driver lives here, behind
+`automatic_emergency_brake == 2` (0 off, 1 warn only, 2 warn and brake).
+
+- **Path selection:** by `own_vehicle.data.control_mode`, and the two paths are not
+  interchangeable. Mouse and keyboard (`mouse_kb`) get `Controls/brake_key.py`, which
+  injects the driver's own LFS brake key; wheel/joystick (`wheel_js`) gets
+  `Controls/brake_axis.py`, a vJoy axis swapped in with `/axis` for the duration of the
+  intervention, because LFS ignores keys for brake in that mode.
+- **Arbitration:** we only ever *add* braking. The driver's input reaches LFS on its
+  own path and is never reduced. `misc/physical_keys.py` separates what the hardware
+  holds from what LFS believes, using `LLKHF_INJECTED`; without it running, the key
+  path refuses to arm rather than risk releasing a key the driver is holding.
+- **Binding:** `/key <user_brake_key> brake` is pushed once per session, after IS_NPL
+  identifies the local driver and only in `mouse_kb`. LFS holds exactly one key per
+  function, so this replaces whatever the driver had — it is their brake key we are
+  writing, from the value they set in the menu.
+- **Output value:** the key path is digital, so it presses or it does not. The axis path
+  runs a feed-forward (`demand / 10 m/s²`, i.e. what a road car reaches on dry tarmac
+  with the pedal down) plus a proportional correction on the deceleration actually
+  achieved, floored at 0.2 so a flattering reading cannot lift the pedal mid-intervention.
+- **Engagement:** demand ≥ 6.0 m/s² engages, < 3.0 m/s² for two consecutive cycles
+  releases, plus floors at 10 km/h (do not engage) and 3 km/h (release), and a 10 s
+  runaway cap. The key output is digital, so this is full braking or none; modulation
+  waits for the analog path.
+- **Release paths:** every one of them, because a stranded press is the worst failure
+  here — demand gone, guard refusal, control mode change, feature switched off
+  mid-intervention (`is_enabled()` deliberately stays True while a press is
+  outstanding), `state_data` reporting off-track, and `AssistanceManager.shutdown()`
+  from `main.shutdown()`.
+
+`controller_emulator.py` and `Controls/wheel.py` are the superseded predecessors and are
+no longer wired up (`known-issues.md` #8).

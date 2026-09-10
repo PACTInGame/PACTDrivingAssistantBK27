@@ -5,8 +5,8 @@ from assistance.base_system import AssistanceSystem
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.input_guard import InputGuard
+from misc.key_tap import get_key_tapper
 from misc.language import LanguageManager
-from misc.platform_shim import get_keyboard
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 import json
@@ -56,6 +56,15 @@ class Gearbox(AssistanceSystem):
     COOLDOWN_AFTER_DOWNSHIFT = 0.8  # before an upshift is allowed
     COOLDOWN_SAME_DIRECTION = 0.4   # before another shift in the same direction
 
+    # Schaltablauf (Sekunden). LFS liest die Tastatur einmal pro gerendertem
+    # Bild, eine Haltezeit unterhalb einer Bildperiode wird schlicht verpasst -
+    # 0.1 s sind auch bei 30 fps mehrere Bilder. Die Werte sind die, die die
+    # alte, blockierende Fassung ungewollt aus pyautogui.PAUSE bekam; sie sind
+    # kuerzer als COOLDOWN_SAME_DIRECTION, ueberlappen sich also nie.
+    CLUTCH_LEAD_S = 0.10   # Kupplung ist getrennt, bevor der Gang kommt
+    SHIFT_HOLD_S = 0.10    # Haltezeit der Gangtaste
+    CLUTCH_HOLD_S = 0.30   # Kupplung ueber den ganzen Vorgang
+
     # Throttle smoothing
     THROTTLE_HISTORY_SIZE = 5
 
@@ -67,11 +76,6 @@ class Gearbox(AssistanceSystem):
     # Drehzahl zu stabilisieren; was fehlte, war die Rueckmeldung waehrend
     # der Wartezeit.
     CALIBRATION_STEP_S = 12.0
-    # Verbleibende Sekunden, bei denen eine Erinnerung ausgegeben wird. Zwei
-    # Meldungen pro Schritt: die Notification-Zeile zeigt jede 3 s, mit den
-    # beiden Schrittmeldungen fuellt das die 12 s genau aus, ohne die auf 8
-    # begrenzte Warteschlange zu ueberlaufen (reference/ui.md §3).
-    CALIBRATION_COUNTDOWN_S = (6.0, 3.0)
     # Ueber dieser Geschwindigkeit gilt das Auto als bewegt (km/h).
     CALIBRATION_MAX_SPEED_KMH = 1.0
     # ──────────────────────────────────────────────────────────────────
@@ -98,7 +102,8 @@ class Gearbox(AssistanceSystem):
         self.car = None
         self.calibration_step = 0
         self.time_in_step = self.clock()
-        self._countdowns_done = set()
+        # Extremwerte des laufenden Kalibrierschritts (siehe _observe_step).
+        self._reset_step_extremes()
         self.last_throttle_values = []
         self.time_since_last_gear_change = self.clock()
         self.last_shift_direction = None  # 'up', 'down', or None
@@ -107,6 +112,11 @@ class Gearbox(AssistanceSystem):
         # Gearbox ueberhaupt nichts: ein Schaltvorgang waehrend des Chats
         # tippte Kupplung und Gang in die Chatzeile (known-issues #11).
         self.guard = InputGuard(event_bus)
+        # Schaltvorgang ueber den gemeinsamen KeyTapper: die Haltezeiten laufen
+        # auf dessen Thread, der Assistenzzyklus zahlt nur vier Heap-Pushes.
+        # Vorher hielt pyautogui.PAUSE die Tasten - mit time.sleep im
+        # 100-ms-Thread, also ~440 ms Blockade pro Gangwechsel (#43).
+        self.tapper = get_key_tapper()
 
         # Listen for calibration request from menu
         self.event_bus.subscribe('gearbox_calibrate', self._on_calibration_requested)
@@ -228,34 +238,155 @@ class Gearbox(AssistanceSystem):
     def _enter_step(self, step: int):
         self.calibration_step = step
         self.time_in_step = self.clock()
-        self._countdowns_done = set()
-        prompt, recording = self._CALIBRATION_PROMPTS[step]
-        self._notify('^1' + self._t(prompt))
-        self._notify('^1' + self._t(recording))
+        self._reset_step_extremes()
+        prompt, _ = self._CALIBRATION_PROMPTS[step]
+        # Der Nutzer sieht nur die Anzeige, und die kann hinterherhaengen.
+        # Was der Schritt wirklich tut, gehoert deshalb ins Log.
+        logger.info("Gearbox calibration step %d (%.0f s): %s", step,
+                    self.CALIBRATION_STEP_S, prompt)
 
     def _abort_calibration(self, reason=""):
         """Bricht die Kalibrierung ab"""
+        logger.info("Gearbox calibration aborted in step %d: %s",
+                    self.calibration_step, reason or "cancelled by the user")
+        self._clear_calibration_state()
         self.calibrating = False
         self.calibration_step = 0
         self.calibration_requested = False
-        self._countdowns_done = set()
         msg = self._t('Gearbox Calibration Aborted')
         if reason:
             msg += f' - {self._t(reason)}'
         self._notify(f'^1{msg}')
 
-    def _announce_countdown(self, elapsed: float):
-        """Sagt an, wie lange der laufende Schritt noch dauert"""
-        remaining = self.CALIBRATION_STEP_S - elapsed
-        for mark in self.CALIBRATION_COUNTDOWN_S:
-            if remaining <= mark and mark not in self._countdowns_done:
-                self._countdowns_done.add(mark)
-                prompt = self._CALIBRATION_PROMPTS[self.calibration_step][0]
-                self._notify(f'^3{self._t(prompt)} - {int(mark)} s')
+    # Mindestabstand zwischen Leerlauf und Redline, damit die Schaltpunkte
+    # ueberhaupt eine Spanne haben. Der kleinste Wert unter den LFS-Serienautos
+    # ist die UF1 mit gut 1000 min-1 Leerlauf und rund 6500 min-1 Abregeldrehzahl;
+    # 1000 min-1 Spanne ist damit sicher unterschritten nur von einem
+    # Fehlversuch, nicht von einem echten Auto.
+    MIN_RPM_RANGE = 1000.0
+
+    # Unterhalb dieser Drehzahl laeuft der Motor nicht (aus, oder er wird
+    # gerade angelassen). Kein Viertakter leerlauft unter 500 min-1, und die
+    # niedrigste Leerlaufdrehzahl unter den LFS-Serienautos liegt bei rund
+    # 900 min-1 - 300 liegt sicher unter jedem Leerlauf und ueber einem
+    # stehenden Motor.
+    ENGINE_RUNNING_MIN_RPM = 300.0
+    # Obergrenze fuer die Messwertliste eines Schritts (12 s * 10 Hz = 120).
+    MAX_STEP_SAMPLES = 600
+
+    def _reset_step_extremes(self):
+        """Setzt die Messwerte fuer den naechsten Kalibrierschritt zurueck"""
+        self._step_rpm_samples = []
+        self._step_max_rpm = 0.0
+        self._step_max_gear = 0
+
+    def _observe_step(self, own_vehicle: OwnVehicle):
+        """Fuehrt die Messwerte des laufenden Schritts nach
+
+        Ein Vergleich, ein Anhaengen. Laeuft nur waehrend einer Kalibrierung,
+        also hoechstens 12 s * 10 Hz = 120 Werte je Schritt.
+        """
+        rpm = own_vehicle.rpm
+        if rpm > self._step_max_rpm:
+            self._step_max_rpm = rpm
+        # Nur Werte mit laufendem Motor. LFS stellt einen stehenden Motor nach
+        # einer Weile selbst ab, und rpm ist dann 0 - ein Minimum haette dagegen
+        # keine Abwehr und hat live tatsaechlich 0 als Leerlaufdrehzahl
+        # gespeichert.
+        if rpm >= self.ENGINE_RUNNING_MIN_RPM:
+            if len(self._step_rpm_samples) < self.MAX_STEP_SAMPLES:
+                self._step_rpm_samples.append(rpm)
+        gear = _as_int(own_vehicle.gear)
+        if gear > self._step_max_gear:
+            self._step_max_gear = gear
+
+    def _idle_rpm(self):
+        """Die Drehzahl, die im Schritt die meiste Zeit anlag - oder None
+
+        Der Median statt des Minimums, aus zwei Gruenden: die Leerlaufregelung
+        pendelt um ihren Sollwert, und der Schritt enthaelt regelmaessig
+        Werte, die kein Leerlauf sind - der Anlassvorgang am Anfang, ein
+        Gasstoss zwischendurch. Beides sind Minderheiten unter 120 Messwerten
+        und koennen den Median nicht verschieben. ``None`` heisst: der Motor
+        lief in diesem Schritt nie.
+        """
+        samples = self._step_rpm_samples
+        if not samples:
+            return None
+        ordered = sorted(samples)
+        return ordered[len(ordered) // 2]
+
+    def _redline_is_plausible(self) -> bool:
+        """Wurde ueberhaupt hochgedreht?
+
+        Ohne diese Pruefung speichert die Kalibrierung stillschweigend eine
+        Redline auf Leerlaufhoehe. Die Automatik schaltet danach nie oder
+        dauernd, und der Nutzer hat keinen Hinweis darauf, warum.
+        """
+        if self.redline - self.idle >= self.MIN_RPM_RANGE:
+            return True
+        logger.info("Gearbox calibration: redline %s is only %s min-1 above "
+                    "idle %s - the engine was never revved.",
+                    self.redline, self.redline - self.idle, self.idle)
+        return False
+
+    def _publish_calibration_state(self, remaining: float):
+        """Speist das eigene Anzeigefeld der Kalibrierung
+
+        **Nicht** ueber die Meldungsschlange: die zeigt jede Meldung 3 s lang
+        nacheinander, ein Schritt erzeugte fuenf davon, und der Rueckstand
+        wuchs pro Schritt um 3 s. Der Fahrer las dann die Aufforderung des
+        vorigen Schritts und drehte hoch, waehrend laengst der Gang gemessen
+        wurde - live beobachtet als "step 2 ended - gear 1" (reference/ui.md
+        §1.7). Eine zeitkritische Prozedur braucht eine Anzeige, die den
+        *jetzigen* Zustand zeigt, keine Warteschlange.
+
+        Kosten: ein dict und ein emit pro Zyklus, nur waehrend einer
+        Kalibrierung. Der Text aendert sich einmal pro Sekunde, die
+        Button-Registry unterdrueckt den Rest.
+        """
+        step = self.calibration_step
+        self.event_bus.emit('gearbox_calibration_state', {
+            'active': True,
+            'step': step,
+            'prompt': self._t(self._CALIBRATION_PROMPTS[step][0]),
+            'remaining': max(0.0, remaining),
+            'reading': self._step_reading(step),
+        })
+
+    def _step_reading(self, step: int) -> str:
+        """Was der laufende Schritt bisher gemessen hat - live mitlesbar
+
+        Der Fahrer sieht damit, ob seine Handlung ueberhaupt ankommt, statt
+        12 s blind zu warten und erst am Ende ein Ergebnis zu bekommen.
+        """
+        if step == 0:
+            idle_rpm = self._idle_rpm()
+            if idle_rpm is None:
+                return '...'
+            return f'{self._t("Idle RPM set to")} {round(idle_rpm)}'
+        if step == 1:
+            return f'{self._t("Redline RPM set to")} {round(self._step_max_rpm)}'
+        return f'{self._t("Max gear set to")} {self._gear_label(self._step_max_gear)}'
+
+    @staticmethod
+    def _gear_label(gear_index: int) -> str:
+        """Gangindex in LFS' eigener Schreibweise (0 = R, 1 = N, 2 = 1.)"""
+        if gear_index <= 0:
+            return 'R'
+        if gear_index == 1:
+            return 'N'
+        return str(gear_index - 1)
+
+    def _clear_calibration_state(self):
+        self.event_bus.emit('gearbox_calibration_state', {'active': False})
 
     def _process_calibration(self, own_vehicle: OwnVehicle):
         """Ein Kalibrierschritt pro Zyklus - drei Vergleiche im Normalfall"""
         if own_vehicle.data.speed > self.CALIBRATION_MAX_SPEED_KMH:
+            logger.info("Gearbox calibration: speed %.2f km/h exceeds the "
+                        "%.1f km/h standstill limit.",
+                        own_vehicle.data.speed, self.CALIBRATION_MAX_SPEED_KMH)
             self._abort_calibration("Vehicle moved during calibration!")
             return
         # OutGauge folgt der Kamera: was hier aufgezeichnet wuerde, waere
@@ -264,33 +395,75 @@ class Gearbox(AssistanceSystem):
             self._abort_calibration("Camera needs to be on own vehicle.")
             return
 
+        # Ueber den ganzen Schritt messen, nicht im Augenblick seines Endes.
+        # Genau das war der Fehler: der Nutzer wird 12 s lang aufgefordert,
+        # etwas zu tun, gemessen wurde aber nur der letzte Zyklus - wer eine
+        # Sekunde zu frueh vom Gas ging, bekam Leerlauf als Redline
+        # gespeichert, und wer den Gang nicht bis zum Schluss hielt, bekam
+        # einen Abbruch. Kosten: drei Vergleiche pro Zyklus, nur waehrend
+        # einer Kalibrierung.
+        self._observe_step(own_vehicle)
+
         elapsed = self.clock() - self.time_in_step
         if elapsed <= self.CALIBRATION_STEP_S:
-            self._announce_countdown(elapsed)
+            self._publish_calibration_state(self.CALIBRATION_STEP_S - elapsed)
             return
 
+        logger.info("Gearbox calibration: step %d ended - rpm %.0f, gear %s, "
+                    "throttle %.2f, speed %.2f km/h", self.calibration_step,
+                    own_vehicle.rpm, own_vehicle.gear, own_vehicle.throttle,
+                    own_vehicle.data.speed)
+
         if self.calibration_step == 0:
-            self.idle = round(own_vehicle.rpm)
+            idle_rpm = self._idle_rpm()
+            if idle_rpm is None:
+                logger.info("Gearbox calibration: the engine never ran during "
+                            "the idle step (no sample at or above %.0f min-1).",
+                            self.ENGINE_RUNNING_MIN_RPM)
+                self._abort_calibration('Keep the rpm at idle!')
+                return
+            self.idle = round(idle_rpm)
+            logger.info("Gearbox calibration: idle rpm %d (median of %d samples "
+                        "with the engine running).",
+                        self.idle, len(self._step_rpm_samples))
             self._notify(f'{self._t("Idle RPM set to")} {self.idle}')
             self._enter_step(1)
         elif self.calibration_step == 1:
-            self.redline = round(own_vehicle.rpm)
+            # Die *hoechste* Drehzahl des Schritts - der Nutzer muss sie nicht
+            # ausgerechnet in der letzten Zehntelsekunde anliegen haben.
+            self.redline = round(self._step_max_rpm)
+            logger.info("Gearbox calibration: redline rpm %d (highest of the "
+                        "step).", self.redline)
+            if not self._redline_is_plausible():
+                self._abort_calibration('Rev it to the redline!')
+                return
             self._notify(f'{self._t("Redline RPM set to")} {self.redline}')
             self._enter_step(2)
         else:
             self._finish_calibration(own_vehicle)
 
     def _finish_calibration(self, own_vehicle: OwnVehicle):
-        gear_index = _as_int(own_vehicle.gear)
+        # Der *hoechste* waehrend des Schritts eingelegte Gang. Am Ende des
+        # Schritts steht das Auto oft wieder im Leerlauf - LFS legt bei
+        # Stillstand von selbst aus, und gemessen wurde bisher genau dieser
+        # Augenblick (live gesehen: "step 2 ended - gear 1", also Leerlauf,
+        # obwohl durchgeschaltet wurde).
+        gear_index = max(self._step_max_gear, _as_int(own_vehicle.gear))
         if gear_index < self.FIRST_FORWARD_GEAR:
+            logger.info("Gearbox calibration: highest gear index seen was %s, "
+                        "below the first forward gear (%d) - nothing to store.",
+                        gear_index, self.FIRST_FORWARD_GEAR)
             # Leerlauf oder Rueckwaerts: mit 0 Vorwaertsgaengen wuerde die
             # Automatik danach schweigend nichts mehr tun.
             self._abort_calibration('Shift into the highest gear!')
             return
 
         self.forward_gears = gear_index - (self.FIRST_FORWARD_GEAR - 1)
+        self._clear_calibration_state()
         self.calibrating = False
-        self._countdowns_done = set()
+        logger.info("Gearbox calibration finished for %s: idle %s, redline %s, "
+                    "forward gears %s", own_vehicle.data.cname, self.idle,
+                    self.redline, self.forward_gears)
         self._notify(f'{self._t("Max gear set to")} {self.forward_gears}')
         self.save_calibrations_for_cars(own_vehicle.data.cname)
         self._notify(self._t('Gearbox Calibration Completed'))
@@ -349,11 +522,23 @@ class Gearbox(AssistanceSystem):
                                       else 'user_shift_down_key')
         clutch_key = self.settings.get('user_clutch_key')
 
-        keyboard = get_keyboard()
-        keyboard.keyDown(clutch_key)
-        keyboard.keyDown(shift_key)
-        keyboard.keyUp(shift_key)
-        keyboard.keyUp(clutch_key)
+        # Zeitlicher Ablauf, unveraendert gegenueber der blockierenden
+        # Fassung (dort kam er aus pyautogui.PAUSE zwischen den vier Aufrufen):
+        #
+        #   t = 0 ms    Kupplung runter
+        #   t = 100 ms  Gangtaste runter   (Kupplung ist getrennt)
+        #   t = 200 ms  Gangtaste hoch
+        #   t = 300 ms  Kupplung hoch
+        #
+        # LFS liest die Tastatur einmal pro Bild; 100 ms Haltezeit sind auch
+        # bei 30 fps mehrere Bilder. Der Aufruf kehrt sofort zurueck.
+        if not self.tapper.tap(clutch_key, hold_s=self.CLUTCH_HOLD_S):
+            return False
+        if not self.tapper.tap(shift_key, hold_s=self.SHIFT_HOLD_S,
+                               delay_s=self.CLUTCH_LEAD_S):
+            # Kupplung faellt von selbst wieder hoch; ohne Gangtaste hat aber
+            # kein Schaltvorgang stattgefunden.
+            return False
         self.time_since_last_gear_change = self.clock()
         self.last_shift_direction = direction
         return True
@@ -449,3 +634,11 @@ class Gearbox(AssistanceSystem):
             self._process_shifting(own_vehicle)
 
         return {'auto_gearbox_active': True}
+
+    def shutdown(self):
+        """Kupplung oder Gangtaste duerfen den Prozess nicht ueberleben
+
+        Der KeyTapper ist prozessweit geteilt und ``release_all()`` idempotent
+        (reference/control-intervention.md §1, Fail-Safe).
+        """
+        self.tapper.release_all()
