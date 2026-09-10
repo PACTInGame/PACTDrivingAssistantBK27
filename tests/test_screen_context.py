@@ -12,6 +12,7 @@ import pyinsim
 from lfs.lfs_state import (SCREEN_ENTRY, SCREEN_GAME, SCREEN_GARAGE,
                            SCREEN_MAIN_MENU, SCREEN_OPTIONS, SCREEN_SHIFTU,
                            StateHandler)
+from vehicles.car_profiles import REDLINE_SETTLE_S, CarProfiles
 from ui import ui_manager as ui_module
 from ui.menu_system import MenuSystem
 from ui.ui_manager import (ALL_BUTTONS_RANGE, BTN_EMERGENCY_BRAKE,
@@ -21,7 +22,7 @@ from ui.ui_manager import (ALL_BUTTONS_RANGE, BTN_EMERGENCY_BRAKE,
                            HUD_BOX_LEFT, HUD_BOX_RIGHT, HUD_BOX_TOP,
                            MAX_QUEUED_NOTIFICATIONS, NOTIFICATION_DISPLAY_S,
                            RESERVED_BOTTOM, RESERVED_LEFT, RESERVED_RIGHT,
-                           RESERVED_TOP, SCREEN_MAX, UIManager,
+                           RED_ZONE_RPM, RESERVED_TOP, SCREEN_MAX, UIManager,
                            clamp_hud_position, hud_overlaps_reserved_area)
 
 
@@ -55,6 +56,21 @@ def state(fake_connector) -> StateHandler:
 @pytest.fixture
 def ui(bus, message_sender, settings, clock) -> UIManager:
     return UIManager(bus, message_sender, settings)
+
+
+@pytest.fixture
+def ui_with_profiles(bus, message_sender, settings, clock, tmp_path):
+    """A UIManager that knows the measured rev limits, on its own clock.
+
+    Returns ``(ui, profiles, profile_clock)``. The profile clock is separate
+    from the UI clock because the redline needs settling time
+    (``REDLINE_SETTLE_S``) while the UI needs display time.
+    """
+    profile_clock = Clock()
+    profiles = CarProfiles(bus, path=str(tmp_path / 'car_profiles.json'),
+                           clock=profile_clock)
+    ui = UIManager(bus, message_sender, settings, car_profiles=profiles)
+    return ui, profiles, profile_clock
 
 
 @pytest.fixture
@@ -623,29 +639,70 @@ def test_the_notification_line_comes_back_once_the_intervention_ends(
 
 # ─── Redline / shift light (WP5 scope 6) ─────────────────────────────────────
 
-def test_the_rpm_readout_uses_the_lfs_shift_light(bus, ui, fake_connector,
-                                                  make_outgauge_packet):
-    bus.emit('state_data', on_track_state())
+def test_the_rpm_readout_goes_red_near_the_measured_limit(
+        bus, ui_with_profiles, fake_connector, make_outgauge_packet):
+    """Not from LFS's shift light -- that is only active in the race cars.
 
-    bus.emit('outgauge_data', make_outgauge_packet(rpm=3000.0))
+    `ShowLights & DL_SHIFT` looked like a redline handed to us by LFS and was
+    used here until it was checked in the game: most road cars never set it, so
+    the readout simply never turned red for them. The source is now the highest
+    rpm measured in *this* car (`vehicles/car_profiles.py`).
+    """
+    ui, profiles, clock = ui_with_profiles
+    bus.emit('state_data', on_track_state())
+    # Learn a limit and let it settle.
+    bus.emit('outgauge_data', make_outgauge_packet(rpm=7000.0, car=b'XFG'))
+    clock.advance(REDLINE_SETTLE_S + 0.1)
+
+    bus.emit('outgauge_data', make_outgauge_packet(rpm=3000.0, car=b'XFG'))
     ui.update_hud()
     assert fake_connector.last_button(BTN_HUD_RPM)[6] == b'3.0 rpm'
+
+    # Within RED_ZONE_RPM of the limit.
+    bus.emit('outgauge_data', make_outgauge_packet(rpm=6500.0, car=b'XFG'))
+    ui.update_hud()
+    assert fake_connector.last_button(BTN_HUD_RPM)[6] == b'^16.5 rpm'
+
+
+def test_the_shift_light_alone_no_longer_colours_the_readout(
+        bus, ui_with_profiles, fake_connector, make_outgauge_packet):
+    """A race car sets DL_SHIFT; that is not what decides the colour any more."""
+    ui, _profiles, _clock = ui_with_profiles
+    bus.emit('state_data', on_track_state())
 
     bus.emit('outgauge_data', make_outgauge_packet(
         rpm=7000.0, show_lights_mask=pyinsim.DL_SHIFT))
     ui.update_hud()
-    assert fake_connector.last_button(BTN_HUD_RPM)[6] == b'^17.0 rpm'
+
+    assert not fake_connector.last_button(BTN_HUD_RPM)[6].startswith(b'^1')
 
 
 def test_a_new_maximum_rpm_alone_never_turns_the_readout_red(
-        bus, ui, fake_connector, make_outgauge_packet):
-    """The old heuristic went red at every new highest RPM ever seen."""
+        bus, ui_with_profiles, fake_connector, make_outgauge_packet):
+    """The old heuristic went red at every new highest RPM ever seen.
+
+    It still must not: while the engine is climbing for the first time, the
+    highest rpm ever seen *is* the current rpm, so a limit is only trusted once
+    it has stopped rising (`REDLINE_SETTLE_S`).
+    """
+    ui, _profiles, _clock = ui_with_profiles
     bus.emit('state_data', on_track_state())
 
     for rpm in (1000.0, 2000.0, 3000.0, 9000.0):
         bus.emit('outgauge_data', make_outgauge_packet(rpm=rpm))
         ui.update_hud()
         assert not fake_connector.last_button(BTN_HUD_RPM)[6].startswith(b'^1')
+
+
+def test_the_readout_stays_white_for_a_car_we_know_nothing_about(
+        bus, ui, fake_connector, make_outgauge_packet):
+    """No profiles at all: better no warning colour than a wrong one."""
+    bus.emit('state_data', on_track_state())
+
+    bus.emit('outgauge_data', make_outgauge_packet(rpm=9000.0))
+    ui.update_hud()
+
+    assert not fake_connector.last_button(BTN_HUD_RPM)[6].startswith(b'^1')
 
 
 # ─── Notification queue (WP5 scope 8) ────────────────────────────────────────

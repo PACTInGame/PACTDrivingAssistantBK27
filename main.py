@@ -17,9 +17,14 @@ from misc.audio_player import AudioPlayer
 from misc.logging_setup import setup_logging
 from ui.menu_system import MenuSystem
 from ui.ui_manager import UIManager
+from vehicles.car_profiles import CarProfiles
 from vehicles.vehicle_manager import VehicleManager
 
 logger = logging.getLogger(__name__)
+
+# Wie oft die gelernten Fahrzeugprofile weggeschrieben werden (ms). Bewusst
+# traege: die Datei ist ein Cache, kein Protokoll.
+PROFILE_SAVE_INTERVAL_MS = 30000
 
 # Warten auf LFS: exponentiell, aber mit einer harten Obergrenze pro Wartezeit,
 # damit ein Nutzer nicht 60 s auf die naechste Meldung starrt.
@@ -48,13 +53,19 @@ class LFSAssistantApp:
         self.message_sender = MessageSender(self.lfs_connector)
 
         # Fahrzeug-Management
+        # Lernt idle/redline/Gangzahl je Fahrzeugmodell aus den
+        # OutGauge-Paketen und abonniert sie selbst. Vor UIManager und
+        # AssistanceManager gebaut, weil beide es lesen.
+        self.car_profiles = CarProfiles(self.event_bus)
         self.vehicle_manager = VehicleManager(self.event_bus)
 
         # Assistenzsysteme
-        self.assistance_manager = AssistanceManager(self.event_bus, self.settings)
+        self.assistance_manager = AssistanceManager(self.event_bus, self.settings,
+                                                    car_profiles=self.car_profiles)
 
         # UI
-        self.ui_manager = UIManager(self.event_bus, self.message_sender, self.settings)
+        self.ui_manager = UIManager(self.event_bus, self.message_sender, self.settings,
+                                    car_profiles=self.car_profiles)
         self.menu_system = MenuSystem(self.ui_manager, self.settings)
 
         # Audio Player
@@ -129,6 +140,17 @@ class LFSAssistantApp:
             self.settings.get('ui_refresh_rate')
         )
         self.thread_manager.add_task(ui_task)
+
+        # Fahrzeugprofile wegschreiben. Eigenes, langsames Intervall: gelernt
+        # wird auf dem Paket-Thread, und dort darf keine Datei geschrieben
+        # werden (CLAUDE.md §1). maybe_save() schreibt nur, wenn sich etwas
+        # geaendert hat, hoechstens alle 30 s.
+        profile_task = ScheduledTask(
+            "car_profiles_save",
+            self.car_profiles.maybe_save,
+            PROFILE_SAVE_INTERVAL_MS
+        )
+        self.thread_manager.add_task(profile_task)
 
     def _on_lfs_connected(self, data=None):
         """Wird aufgerufen wenn LFS-Verbindung hergestellt wurde"""
@@ -213,6 +235,13 @@ class LFSAssistantApp:
             self.thread_manager.stop()
         except Exception as e:
             logger.warning("Stopping worker threads failed: %s: %s", type(e).__name__, e)
+
+        try:
+            # Nach dem Stoppen der Worker: was bis eben gelernt wurde, gehoert
+            # in die Datei, und der schreibende Task steht jetzt.
+            self.car_profiles.maybe_save(force=True)
+        except Exception as e:
+            logger.warning("Saving car profiles failed: %s: %s", type(e).__name__, e)
 
         try:
             # Nach dem Stoppen der Worker, damit kein process() mehr dazwischen

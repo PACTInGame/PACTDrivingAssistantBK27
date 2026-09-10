@@ -17,6 +17,8 @@ env/
 settings.json
 .setup_done
 data/gearbox_calibrations.json
+# Gelernte Fahrzeugprofile - Messwerte des jeweiligen Rechners, kein Quelltext.
+data/car_profiles.json
 pact_assistant.log
 pact_assistant.log.*
 

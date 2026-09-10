@@ -12,13 +12,15 @@ wait for LFS.exe process       # exponential backoff, sys.exit after ~60 s
 LfsConnectionTest().run_test() # fresh InSim conn per attempt, 5 s timeout, then closes all
 LFSConnector(bus, settings)    # the real connection: InSim + OutGauge + OutSim
 MessageSender(connector)
+CarProfiles(bus)               # learns per-car rpm/gear from OutGauge; before its readers
 VehicleManager(bus)
-AssistanceManager(bus, settings)   # constructs all assistance systems
-UIManager(bus, message_sender, settings)
+AssistanceManager(bus, settings, car_profiles)   # constructs all assistance systems
+UIManager(bus, message_sender, settings, car_profiles)
 MenuSystem(ui_manager, settings)
 AudioPlayer(bus, settings)
 ScheduledTask("assistance_processing", assistance_manager.process_all_systems, 100 ms)
 ScheduledTask("ui_updates",            ui_manager.update_hud,                   50 ms)
+ScheduledTask("car_profiles_save",     car_profiles.maybe_save,              30000 ms)
 thread_manager.start()         # one thread per interval + a watchdog thread
 install_signal_handlers()      # SIGINT/SIGTERM/SIGBREAK -> KeyboardInterrupt
 pyinsim.run()                  # BLOCKS the main thread in the asyncore loop
@@ -38,6 +40,20 @@ goodbye.
 Component construction order matters: every subscriber must exist before the events it
 cares about are first emitted. Because subscription happens in `__init__`, adding a
 component late in `main.py` can silently miss early events (e.g. the first `IS_STA`).
+
+**Services may be passed by reference; subsystems may not.** The rule "the EventBus is
+the only interface between components" is about *subsystems* — one assistance system must
+never reach into another. A **service** is different: read-mostly, owned by `main.py`,
+answering questions rather than doing things. `SettingsManager` and `MessageSender` were
+always passed this way, and `CarProfiles` is the same kind of object. Pushing per-car
+values through events would mean every reader keeping its own copy of the same table,
+which is more coupling, not less. The test for "is this a service": it has no `process()`,
+it does not act on the game, and two readers asking it the same question must get the
+same answer.
+
+`CarProfiles` learns on the **packet thread** and is read from the assistance and UI
+threads, so it holds a lock for the handful of comparisons it makes, and it never writes
+its file there — `maybe_save` runs from its own slow scheduled task and from `shutdown()`.
 
 ## A second process: `guardian.py`
 
@@ -156,6 +172,7 @@ vehicles/
   vehicle.py               Vehicle + VehicleData dataclass; position, heading, distance/angle to player, decoded names, IS_NPL identity; frame staging (begin_frame/commit_frame)
   own_vehicle.py           OwnVehicle(Vehicle): OutGauge data (rpm, gear, pedals, dash lights) + local_plid / viewed_plid / is_local_driver
   vehicle_manager.py       Consumes MCI/NPL/PLL/OutGauge → reassembles MCI frames on CCI_FIRST/CCI_LAST → emits an immutable vehicles_updated snapshot / own_vehicle_updated
+  car_profiles.py          CarProfiles: idle rpm / rev limit / gear count per car *model*, learned from OutGauge and persisted to data/car_profiles.json
 
 assistance/
   base_system.py           AssistanceSystem ABC: process(), is_enabled()

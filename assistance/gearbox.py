@@ -12,6 +12,9 @@ from vehicles.vehicle import Vehicle
 import json
 from pathlib import Path
 from misc.helpers import resolve_path
+from vehicles.car_profiles import (automatic_gearbox_allowed,
+                                   automatic_gearbox_by_default, car_key,
+                                   stock_profile)
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +87,8 @@ class Gearbox(AssistanceSystem):
     # 2 = 1. Gang. Der hoechste Gang hat also den Index forward_gears + 1.
     FIRST_FORWARD_GEAR = 2
 
-    def __init__(self, event_bus: EventBus, settings: SettingsManager):
+    def __init__(self, event_bus: EventBus, settings: SettingsManager,
+                 car_profiles=None):
         super().__init__("automatic_gearbox", event_bus, settings)
         self.translator = LanguageManager()
         # Ueberschreibbar, damit Tests die Kalibrierung und die Cooldowns
@@ -112,6 +116,15 @@ class Gearbox(AssistanceSystem):
         # Gearbox ueberhaupt nichts: ein Schaltvorgang waehrend des Chats
         # tippte Kupplung und Gang in die Chatzeile (known-issues #11).
         self.guard = InputGuard(event_bus)
+        # Gelernte Fahrzeugprofile (vehicles/car_profiles.py). Optional: ohne
+        # sie verhaelt sich der Gearbox wie vorher und braucht die manuelle
+        # Kalibrierung.
+        self.car_profiles = car_profiles
+        # True, solange die Werte aus der Kalibrierdatei des Fahrers stammen.
+        # Nur dann sind sie endgueltig; Tabelle und Messung werden pro Zyklus
+        # nachgezogen, damit eine besser werdende Messung auch ankommt.
+        self._from_calibration_file = False
+        self._learned_logged_at = None
         # Schaltvorgang ueber den gemeinsamen KeyTapper: die Haltezeiten laufen
         # auf dessen Thread, der Assistenzzyklus zahlt nur vier Heap-Pushes.
         # Vorher hielt pyautogui.PAUSE die Tasten - mit time.sleep im
@@ -184,6 +197,7 @@ class Gearbox(AssistanceSystem):
         self.redline = 0
         self.idle = 0
         self.forward_gears = 0
+        self._from_calibration_file = False
 
         if not calibration_file.exists():
             return
@@ -201,8 +215,85 @@ class Gearbox(AssistanceSystem):
             else:
                 legacy_index = _as_int(car_data.get('max_gears', 0))
                 self.forward_gears = max(0, legacy_index - (self.FIRST_FORWARD_GEAR - 1))
+            self._from_calibration_file = self.is_calibrated
         except (OSError, json.JSONDecodeError, KeyError, AttributeError):
             pass
+
+    def _apply_known_values(self, cname):
+        """Ergaenzt idle/redline/forward_gears aus Tabelle und Messung
+
+        Rangfolge, absichtlich in dieser Reihenfolge:
+
+        1. **Die Kalibrierung des Fahrers.** Eine ausdrueckliche Aussage; sie
+           wird nicht angefasst, auch nicht von einer spaeter gemessenen
+           hoeheren Drehzahl. Wer selbst kalibriert hat, bekommt genau das.
+        2. **Die eingebaute Tabelle** der Serienautos (``STOCK_PROFILES``) -
+           damit ein nie angefasstes Auto schon in der ersten Runde schaltet.
+        3. **Das gelernte Profil** aus den OutGauge-Paketen. Fuer Mods und
+           fuer alles, was die Tabelle nicht kennt, ist das die einzige
+           Quelle - und sie wird mit jeder Runde besser.
+
+        Wird pro Zyklus aufgerufen, solange die Werte *nicht* aus der
+        Kalibrierdatei stammen: nur so kommt eine hoehere gemessene Drehzahl
+        auch an. Kosten: zwei dict-Zugriffe, der Leerlauf-Median ist
+        zwischengespeichert.
+        """
+        if self._from_calibration_file:
+            return
+
+        # Formelwagen und das MRT5 duerfen sich nicht selbst scharfschalten:
+        # dort schaltet der Fahrer (vehicles/car_profiles.py). Wer es trotzdem
+        # will, kalibriert - das ist dann eine ausdrueckliche Entscheidung.
+        if not automatic_gearbox_by_default(cname):
+            self.idle = self.redline = self.forward_gears = 0
+            return
+
+        stock = stock_profile(cname) or {}
+        idle = stock.get('idle')
+        redline = stock.get('redline')
+        forward_gears = stock.get('forward_gears')
+
+        profiles = self.car_profiles
+        if profiles is not None:
+            if idle is None:
+                idle = profiles.idle(cname)
+            if redline is None:
+                redline = profiles.redline(cname)
+            if not forward_gears:
+                forward_gears = profiles.forward_gears(cname)
+
+        idle = _as_int(idle)
+        redline = _as_int(redline)
+        forward_gears = max(0, _as_int(forward_gears))
+
+        # Dieselbe Plausibilitaetsschwelle wie in der Kalibrierung: ohne
+        # Spanne zwischen Leerlauf und Redline gibt es keine Schaltpunkte,
+        # und ein Auto, das noch nie hochgedreht wurde, hat schlicht noch
+        # keine brauchbare Redline.
+        if redline - idle < self.MIN_RPM_RANGE:
+            idle = redline = 0
+
+        was = (self.idle, self.redline, self.forward_gears)
+        self.idle, self.redline, self.forward_gears = idle, redline, forward_gears
+        if was != (idle, redline, forward_gears) and self.is_calibrated:
+            self._log_learned_values(cname)
+
+    def _log_learned_values(self, cname):
+        """Meldet die gemessenen Werte - hoechstens eine Zeile je Intervall
+
+        Ohne Ratenbegrenzung ist das eine Logzeile *pro Zyklus*: der gemessene
+        Leerlauf wandert um ein paar Umdrehungen, und jede Aenderung zaehlte als
+        Ereignis. Live gesehen waren das zwanzig Zeilen in einer Sekunde -
+        genau das, was CLAUDE.md §1 verbietet.
+        """
+        now = self.clock()
+        if (self._learned_logged_at is not None
+                and now - self._learned_logged_at < self.LEARNED_LOG_INTERVAL_S):
+            return
+        self._learned_logged_at = now
+        logger.info("Gearbox values for %s without a calibration: idle %s, "
+                    "redline %s, forward gears %s.",
+                    car_key(cname), self.idle, self.redline, self.forward_gears)
 
     @property
     def is_calibrated(self) -> bool:
@@ -273,6 +364,8 @@ class Gearbox(AssistanceSystem):
     ENGINE_RUNNING_MIN_RPM = 300.0
     # Obergrenze fuer die Messwertliste eines Schritts (12 s * 10 Hz = 120).
     MAX_STEP_SAMPLES = 600
+    # Mindestabstand zwischen zwei Meldungen der gemessenen Werte (Sekunden).
+    LEARNED_LOG_INTERVAL_S = 30.0
 
     def _reset_step_extremes(self):
         """Setzt die Messwerte fuer den naechsten Kalibrierschritt zurueck"""
@@ -459,6 +552,7 @@ class Gearbox(AssistanceSystem):
             return
 
         self.forward_gears = gear_index - (self.FIRST_FORWARD_GEAR - 1)
+        self._from_calibration_file = True
         self._clear_calibration_state()
         self.calibrating = False
         logger.info("Gearbox calibration finished for %s: idle %s, redline %s, "
@@ -612,11 +706,26 @@ class Gearbox(AssistanceSystem):
         if not self.is_enabled():
             return {'auto_gearbox_active': False}
 
+        # Fahrzeuge, deren Getriebe diese Logik nicht beschreibt. Vor allem
+        # anderen geprueft, damit auch eine vorhandene Kalibrierung sie nicht
+        # scharfschaltet (vehicles/car_profiles.py, NEVER_AUTOMATIC).
+        if not automatic_gearbox_allowed(own_vehicle.data.cname):
+            if self.calibration_requested:
+                self.calibration_requested = False
+                self._notify('^1' + self._t('Automatic Gearbox not available'))
+            if self.calibrating:
+                self._abort_calibration()
+            return {'auto_gearbox_active': False}
+
         # Kalibrierung laden wenn das Fahrzeug wechselt
         if self.car != own_vehicle.data.cname:
             if not self.calibrating:
                 self.load_calibrations_for_cars(own_vehicle.data.cname)
                 self.car = own_vehicle.data.cname
+
+        # Ohne eigene Kalibrierung: Tabelle und laufende Messung nachziehen.
+        if not self.calibrating:
+            self._apply_known_values(own_vehicle.data.cname)
 
         # Menuebefehl: startet die Kalibrierung - oder bricht sie ab.
         if self.calibration_requested:

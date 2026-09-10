@@ -101,6 +101,9 @@ NOTIFICATION_DISPLAY_S = 3
 MAX_QUEUED_NOTIFICATIONS = 8
 # Eine Ueberlaufmeldung je so viele Sekunden (sie kam frueher pro Zyklus).
 NOTIFICATION_OVERFLOW_LOG_S = 5.0
+# So weit unter der gemessenen Hoechstdrehzahl faerbt sich die HUD-Drehzahl
+# rot. Der Wert ist der, mit dem dieses Projekt frueher gearbeitet hat.
+RED_ZONE_RPM = 1000
 
 
 def _as_int(value, default: int = 0) -> int:
@@ -153,10 +156,14 @@ def hud_overlaps_reserved_area(x, y) -> bool:
 class UIManager:
     """Verwaltet alle UI-Elemente und Menüs"""
 
-    def __init__(self, event_bus: EventBus, message_sender: MessageSender, settings: SettingsManager):
+    def __init__(self, event_bus: EventBus, message_sender: MessageSender,
+                 settings: SettingsManager, car_profiles=None):
         self.event_bus = event_bus
         self.message_sender = message_sender
         self.settings = settings
+        # Gelernte Fahrzeugprofile (vehicles/car_profiles.py); optional, ohne
+        # sie bleibt die Drehzahlanzeige einfarbig.
+        self.car_profiles = car_profiles
         self.active_elements: Dict[str, bool] = {}
         self.current_menu = None
         self.on_track = False
@@ -521,9 +528,32 @@ class UIManager:
         # bei jedem neuen Maximum rot und blieb nach einem Fahrzeugwechsel
         # falsch stehen. ShowLights ist pro Auto richtig und funktioniert
         # auch fuer Mods (reference/conventions.md §4).
-        self.shift_light = bool(_as_int(getattr(data, 'ShowLights', 0)) & pyinsim.DL_SHIFT)
+        # Rot ab kurz vor der Hoechstdrehzahl. Die Quelle dafuer ist die
+        # *gemessene* Hoechstdrehzahl dieses Autos, nicht mehr LFS'
+        # Schaltleuchte: ShowLights & DL_SHIFT ist nur in den Rennwagen
+        # ueberhaupt aktiv, in den meisten Strassenautos also nie - dort wurde
+        # die Anzeige nie rot (live geprueft, siehe vehicles/car_profiles.py).
+        # Das Auto kommt aus *diesem* Paket, nicht aus einer zweiten Quelle:
+        # bei einem Kamerawechsel gehoeren Drehzahl und Fahrzeugname sonst
+        # fuer einen Takt nicht zusammen (conventions.md §5.2).
+        self.shift_light = self._near_redline(getattr(data, 'Car', None),
+                                              _as_float(getattr(data, 'RPM', 0.0)))
         gear = _as_int(getattr(data, 'Gear', 1), 1)
         self.gear = "R" if gear == 0 else "N" if gear == 1 else str(gear - 1)
+
+    def _near_redline(self, car, rpm: float) -> bool:
+        """Ist die Drehzahl nah genug an der Hoechstdrehzahl fuer Rot?
+
+        ``RED_ZONE_RPM`` unterhalb des hoechsten je in diesem Auto gemessenen
+        Werts. Solange nichts gemessen ist, bleibt die Anzeige weiss - lieber
+        keine Warnfarbe als eine falsche.
+        """
+        if self.car_profiles is None or rpm <= 0:
+            return False
+        redline = self.car_profiles.redline(car)
+        if not redline:
+            return False
+        return rpm >= redline - RED_ZONE_RPM
 
     def _advance_blink(self) -> bool:
         """Blinkphase - eine Uhr, unabhaengig von ui_refresh_rate"""

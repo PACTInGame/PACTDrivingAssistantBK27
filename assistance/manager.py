@@ -42,9 +42,12 @@ class AssistanceManager:
     """Verwaltet alle Fahrerassistenzsysteme"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager,
-                 error_throttle: ErrorThrottle = None):
+                 error_throttle: ErrorThrottle = None, car_profiles=None):
         self.event_bus = event_bus
         self.settings = settings
+        # Durchgereicht an die Systeme, die fahrzeugspezifische Werte brauchen
+        # (bisher nur der Gearbox). Optional, damit Tests ohne auskommen.
+        self.car_profiles = car_profiles
         self._errors = error_throttle or ErrorThrottle(logger)
         # Systeme, die sich nach wiederholten Fehlern selbst deaktiviert haben.
         self.failed_systems = set()
@@ -75,7 +78,8 @@ class AssistanceManager:
         self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
         self.systems['autoh'] = AutoHold(self.event_bus, self.settings)
         self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
-        self.systems['gearbox'] = Gearbox(self.event_bus, self.settings)
+        self.systems['gearbox'] = Gearbox(self.event_bus, self.settings,
+                                          car_profiles=self.car_profiles)
         self.systems['ctw'] = CrossTrafficWarning(self.event_bus, self.settings)
         self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
         # NavigationSystem gibt es nicht mehr: es hatte nie einen

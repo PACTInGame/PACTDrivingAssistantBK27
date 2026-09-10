@@ -75,6 +75,10 @@ tests/
                            calibration (countdown, cancel, gear storage, legacy file),
                            high-beam dedupe, strobe timing, and the single owner of
                            the siren/strobe state
+  test_car_profiles.py     CarProfiles: the redline that only counts once it stops
+                           rising, idle sampled only at a standstill, a stopped
+                           engine never becoming an idle speed, and the camera
+                           trap — packets whose Car field changes mid-stream
   test_key_tap.py          KeyTapper: that ``tap()`` returns without waiting for the
                            hold, that the hold happens anyway on the tapper's thread,
                            the gearbox's clutch/gear ordering, re-tap extension, the

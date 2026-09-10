@@ -583,6 +583,16 @@ class LanguageManager:
                 "dk": "Køretøj flyttede sig!",
                 "se": "Fordon rörde sig!"
             },
+            "Automatic Gearbox not available": {
+                "en": "Automatic Gearbox not available",
+                "de": "Automatikgetriebe nicht verfügbar",
+                "it": "Cambio Automatico non disponibile",
+                "fr": "Boîte Automatique non disponible",
+                "tr": "Otomatik Vites kullanılamıyor",
+                "no": "Automatgir ikke tilgjengelig",
+                "dk": "Automatgear ikke tilgængeligt",
+                "se": "Automatlåda inte tillgänglig"
+            },
             "Vehicle must be stationary to calibrate!": {
                 "en": "Vehicle must be stationary to calibrate!",
                 "de": "Fahrzeug muss stillstehen!",

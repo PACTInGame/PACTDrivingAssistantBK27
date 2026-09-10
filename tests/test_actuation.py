@@ -328,6 +328,10 @@ def gearbox_factory(bus, make_settings, tmp_path, monkeypatch):
         if calibrated:
             gearbox.idle, gearbox.redline, gearbox.forward_gears = 900, 7000, 6
             gearbox.car = 'XFG'
+            # As if these had come out of the driver's own calibration file:
+            # they are then final and the stock table / learned profile must
+            # not overwrite them per cycle.
+            gearbox._from_calibration_file = True
         return gearbox
 
     return _make
@@ -489,8 +493,9 @@ def test_calibration_publishes_a_live_panel_instead_of_queued_messages(
     notified = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
@@ -514,8 +519,9 @@ def test_the_calibration_panel_is_taken_down_when_it_ends(
     seen = recorder('gearbox_calibration_state')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     run_calibration(gearbox, clock, bus, standing)
 
@@ -523,13 +529,218 @@ def test_the_calibration_panel_is_taken_down_when_it_ends(
     assert states[-1] == {'active': False}
 
 
+# ─── Values without a calibration ────────────────────────────────────────────
+
+class FakeProfiles:
+    """Stands in for ``CarProfiles`` -- the gearbox only ever queries it."""
+
+    def __init__(self, idle=None, redline=None, forward_gears=0):
+        self._idle, self._redline, self._gears = idle, redline, forward_gears
+
+    def idle(self, car):
+        return self._idle
+
+    def redline(self, car):
+        return self._redline
+
+    def forward_gears(self, car):
+        return self._gears
+
+
+def test_a_car_with_no_calibration_shifts_on_measured_values(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """36 s of standing still should not be the price of an automatic gearbox."""
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings,
+                      car_profiles=FakeProfiles(idle=950, redline=7979,
+                                                forward_gears=5))
+    gearbox.clock = FakeClock()
+    # Far enough back that the shift cooldown is over (the clock was swapped
+    # after __init__ took its first reading).
+    gearbox.time_since_last_gear_change = gearbox.clock() - 10.0
+    gearbox.guard.foreground_check = lambda: True
+    bus.emit('state_data', track_state())
+    revving = make_own_vehicle(speed=90, gear=4, rpm=7800, throttle=1.0,
+                               local_plid=1, plid=1)
+
+    gearbox.process(revving, {})
+
+    assert gearbox.is_calibrated is True
+    assert (gearbox.idle, gearbox.redline, gearbox.forward_gears) == (950, 7979, 5)
+    assert keys_pressed() == ['c', 's']
+
+
+def test_measured_values_without_a_usable_rev_range_do_not_arm_the_gearbox(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """A car that has never been revved has no shift points to compute.
+
+    A mod name throughout, so the built-in ``STOCK_PROFILES`` cannot answer
+    instead of the measurement under test.
+    """
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings,
+                      car_profiles=FakeProfiles(idle=950, redline=1200,
+                                                forward_gears=5))
+    gearbox.clock = FakeClock()
+    bus.emit('state_data', track_state())
+    standing = make_own_vehicle(speed=0, gear=2, rpm=950, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+
+    gearbox.process(standing, {})
+
+    assert gearbox.is_calibrated is False
+
+
+def test_the_drivers_own_calibration_outranks_the_measured_values(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """An explicit statement is not overwritten by a later measurement."""
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / 'gearbox_calibrations.json').write_text(json.dumps(
+        {'XFG': {'idle': 900, 'redline': 7000, 'forward_gears': 5}}))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings,
+                      car_profiles=FakeProfiles(idle=1100, redline=8500,
+                                                forward_gears=6))
+    gearbox.clock = FakeClock()
+    bus.emit('state_data', track_state())
+    driving = make_own_vehicle(speed=50, gear=3, rpm=3000, local_plid=1, plid=1)
+
+    gearbox.process(driving, {})
+
+    assert (gearbox.idle, gearbox.redline, gearbox.forward_gears) == (900, 7000, 5)
+
+
+def test_a_better_measurement_reaches_the_gearbox_without_a_car_change(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """The learned redline rises as the car is driven; freezing it on car
+    change would leave the first, worst estimate in place for the session."""
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    profiles = FakeProfiles(idle=950, redline=6000, forward_gears=5)
+    gearbox = Gearbox(bus, settings, car_profiles=profiles)
+    gearbox.clock = FakeClock()
+    bus.emit('state_data', track_state())
+    driving = make_own_vehicle(speed=50, gear=3, rpm=3000, cname=b'ZZZ',
+                               local_plid=1, plid=1)
+    gearbox.process(driving, {})
+    assert gearbox.redline == 6000
+
+    profiles._redline = 7979
+    gearbox.process(driving, {})
+
+    assert gearbox.redline == 7979
+
+
+def test_a_stock_car_shifts_without_anyone_calibrating_it(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """The built-in table covers the LFS standard cars (`STOCK_PROFILES`)."""
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings)          # no learned profiles at all
+    gearbox.clock = FakeClock()
+    bus.emit('state_data', track_state())
+    driving = make_own_vehicle(speed=50, gear=3, rpm=3000, cname='XFG',
+                               local_plid=1, plid=1)
+
+    gearbox.process(driving, {})
+
+    assert gearbox.is_calibrated is True
+    assert (gearbox.idle, gearbox.redline, gearbox.forward_gears) == (950, 7979, 5)
+
+
+def test_a_single_seater_does_not_arm_itself(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """On a formula car the driver wants the gears; calibrating is opt-in."""
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings,
+                      car_profiles=FakeProfiles(idle=3000, redline=19000,
+                                                forward_gears=7))
+    gearbox.clock = FakeClock()
+    bus.emit('state_data', track_state())
+    driving = make_own_vehicle(speed=200, gear=5, rpm=17000, cname='BF1',
+                               local_plid=1, plid=1)
+
+    gearbox.process(driving, {})
+
+    assert gearbox.is_calibrated is False
+    assert keys_pressed() == []
+
+
+def test_a_single_seater_still_works_if_the_driver_calibrates_it(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch):
+    """Opt-in means opt-in: an explicit calibration is honoured."""
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / 'gearbox_calibrations.json').write_text(json.dumps(
+        {'BF1': {'idle': 4000, 'redline': 19000, 'forward_gears': 7}}))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings)
+    gearbox.clock = FakeClock()
+    bus.emit('state_data', track_state())
+    driving = make_own_vehicle(speed=200, gear=5, rpm=17000, cname='BF1',
+                               local_plid=1, plid=1)
+
+    gearbox.process(driving, {})
+
+    assert gearbox.is_calibrated is True
+
+
+def test_the_motorbike_gearbox_is_refused_even_with_a_calibration(
+        bus, make_settings, make_own_vehicle, tmp_path, monkeypatch, recorder):
+    """The MRT5 has a motorbike gearbox - this shift logic does not describe it.
+
+    Ignoring a calibration silently would leave the driver wondering; the
+    calibration request is refused out loud instead.
+    """
+    seen = recorder('notification')
+    monkeypatch.setattr('assistance.gearbox.resolve_path',
+                        lambda *parts: str(tmp_path.joinpath(*parts)))
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / 'gearbox_calibrations.json').write_text(json.dumps(
+        {'MRT': {'idle': 2000, 'redline': 11000, 'forward_gears': 6}}))
+    settings = make_settings(automatic_gearbox=True, language='en')
+    gearbox = Gearbox(bus, settings)
+    gearbox.clock = FakeClock()
+    gearbox.time_since_last_gear_change = gearbox.clock() - 10.0
+    gearbox.guard.foreground_check = lambda: True
+    bus.emit('state_data', track_state())
+    revving = make_own_vehicle(speed=60, gear=3, rpm=10500, throttle=1.0,
+                               cname='MRT', local_plid=1, plid=1)
+
+    result = gearbox.process(revving, {})
+
+    assert result['auto_gearbox_active'] is False
+    assert keys_pressed() == []
+
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(revving, {})
+
+    assert gearbox.calibrating is False
+    assert any('not available' in text for text in notifications(seen))
+
+
 def test_calibration_can_be_cancelled_from_the_menu(
         bus, gearbox_factory, make_own_vehicle, recorder):
     seen = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
@@ -547,8 +758,9 @@ def test_calibration_stores_the_number_of_forward_gears(
     seen = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     run_calibration(gearbox, clock, bus, standing, gear_at_the_end=8)
 
@@ -556,8 +768,8 @@ def test_calibration_stores_the_number_of_forward_gears(
     assert gearbox.forward_gears == 7
     assert any('Max gear set to 7' in text for text in notifications(seen))
     stored = json.loads((tmp_path / 'data' / 'gearbox_calibrations.json').read_text())
-    assert stored['XFG']['forward_gears'] == 7
-    assert 'max_gears' not in stored['XFG']
+    assert stored['ZZZ']['forward_gears'] == 7
+    assert 'max_gears' not in stored['ZZZ']
 
 
 def test_calibration_refuses_neutral_as_the_highest_gear(
@@ -565,8 +777,9 @@ def test_calibration_refuses_neutral_as_the_highest_gear(
     seen = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     run_calibration(gearbox, clock, bus, standing, gear_at_the_end=1)
 
@@ -586,8 +799,9 @@ def test_calibration_keeps_the_highest_gear_even_when_it_drops_back_to_neutral(
     seen = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     run_calibration(gearbox, clock, bus, standing,
                     gear_at_the_end=8, gear_at_the_very_end=1)
@@ -602,8 +816,9 @@ def test_calibration_keeps_the_highest_rpm_of_the_step_not_the_last_one(
     """Letting off a moment early used to store idle rpm as the redline."""
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
@@ -639,8 +854,9 @@ def test_calibration_takes_the_rpm_that_was_there_most_of_the_idle_step(
     """
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
@@ -660,8 +876,9 @@ def test_a_stopped_engine_is_not_mistaken_for_idle_speed(
     """
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=0, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=0, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
@@ -677,8 +894,9 @@ def test_calibration_aborts_when_the_engine_never_runs(
     seen = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=0, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=0, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
@@ -699,8 +917,9 @@ def test_calibration_refuses_a_redline_that_was_never_revved(
     seen = recorder('notification')
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
 
     run_calibration(gearbox, clock, bus, standing, redline_rpm=1200)
 
@@ -713,8 +932,9 @@ def test_calibration_aborts_when_the_camera_leaves_the_own_car(
         bus, gearbox_factory, make_own_vehicle):
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
-    standing = make_own_vehicle(speed=0.0, rpm=900, local_plid=1, plid=1)
-    gearbox.car = 'XFG'
+    standing = make_own_vehicle(speed=0.0, rpm=900, cname=b'ZZZ',
+                                local_plid=1, plid=1)
+    gearbox.car = 'ZZZ'
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
 

@@ -118,7 +118,7 @@ for every modded car.** Two exist today:
 | Table | Location | Fallback | Effect on a mod |
 |---|---|---|---|
 | `get_vehicle_size(cname)` → `(length, width)` | `assistance/park_distance_control.py` | `(4.5, 1.8)` | PDC sensor geometry is wrong for anything that is not a mid-size saloon — a bus or a kart gets saloon dimensions. **FCW no longer trusts it**: `ForwardCollisionWarning._vehicle_length` checks whether the `CName` is one the table really knows and otherwise uses `FALLBACK_VEHICLE_LENGTH_M` (5.0 m, the longest standard car), because for a warning threshold "too short" means "too late" |
-| gearbox calibration | `data/gearbox_calibrations.json` | none | handled correctly: the file is keyed by `CName` and the user calibrates each car once, so mods work by construction |
+| gearbox calibration | `data/gearbox_calibrations.json` | `vehicles/car_profiles.py` (measured), then `STOCK_PROFILES` | all three tiers of the list below, in that order: the driver's own calibration wins, the built-in stock table seeds the ~20 standard cars, and everything else — every mod — is measured at runtime |
 
 The gearbox is the model to follow: **derive car-specific parameters at runtime instead
 of tabulating them.**
@@ -127,6 +127,16 @@ When you need a vehicle parameter, prefer, in this order:
 
 1. **Measure it at runtime** from data LFS already sends (OutGauge rpm/gear, OutSim
    per-wheel positions and forces, MCI motion) — works for every car including mods.
+   `vehicles/car_profiles.py` is the worked example: idle rpm, rev limit and gear
+   count, learned from the OutGauge stream and persisted. Two things it had to get
+   right and the next such measurement will too: a value only counts once it has
+   **stopped changing** (while an engine is first revved, the highest rpm ever seen
+   *is* the current rpm, so using it would mean "at the rev limit" at every rpm), and
+   the absence of a reading is not a reading (a stopped engine reports `rpm 0`, and
+   neutral is the gear a parked car is in). A third one is subtler: **a transient
+   passes through every value on its way**, so an engine being shut down looks like
+   an engine idling slowly, at every speed below idle, and dragged one mod's learned
+   idle from 627 to 446 min-1 before the rate gate was added.
 2. **Ask the user once and persist it**, keyed by `CName`, like the gearbox calibration.
 3. **Table with an explicit, conservative fallback** — acceptable only when a wrong
    value is harmless. If the value feeds a warning threshold or a braking calculation,
@@ -175,9 +185,34 @@ Consequences:
   **your** car via `SMALL_LCL`/`SMALL_LCS`/keypresses. Gate it on
   `own_vehicle.is_local_driver`; shifting or braking on a spectated car's rpm is a
   real hazard.
+- **Anything that *learns* per car takes the car name out of the same packet.** `Car`,
+  `RPM`, `Gear`, `Throttle` and `Speed` are unpacked together
+  (`OutGaugePack.unpack`), so within one packet they are consistent by construction.
+  Pairing `packet.RPM` with a car name from a *different* channel (`IS_NPL`, MCI,
+  `own_vehicle.data.cname`) is a race: those turn over at their own pace, and a camera
+  change would file one packet's values under the previous car.
+  `vehicles/car_profiles.py` is built on this rule; it therefore learns about the
+  spectated car while spectating, which is correct — the values belong to a car
+  *model*, not to a driver.
 
 `IS_STA.ViewPLID` carries the same information over InSim and is unpacked by pyinsim,
 but is not read anywhere in this project.
+
+**A mod's car name is a number, not a name.** For the stock cars `CName` and
+`OutGaugePack.Car` hold text — `XFG`, `RB4`. A mod puts its numeric id in the same three
+bytes; measured live, two mods sent `06 C8 D3` and `AC C6 55`. Decoded as characters they
+still work as a dict key (latin-1 is a lossless byte↔char map) but are unreadable in a
+file or a log, so `car_profiles.car_key` renders non-text bytes as the six-digit hex id
+instead. Also confirmed by the same measurement: for a mod, **`IS_NPL`'s `CName` and
+OutGauge's `Car` carry the same three bytes**, so a profile learned from OutGauge is
+found again by a lookup made with `own_vehicle.data.cname`.
+
+**`ShowLights & DL_SHIFT` is not a redline.** It looks like one — LFS's own shift
+light, per car, mods included — and the HUD used it to colour the rpm readout red.
+Checked in the game: **the shift light is only active in the race cars**; the road cars
+never set it, so for most of the fleet the readout simply never turned red. `DashLights`
+says which lights a car *has* and would be the way to ask, but the answer is "not this
+one" often enough that it cannot be the source. The measured rev limit is.
 
 ### 5.3 Two additional conditions on OutGauge
 

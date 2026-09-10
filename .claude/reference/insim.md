@@ -331,11 +331,17 @@ Authoritative protocol definitions ship with the game:
 
 | File | Use it for |
 |---|---|
-| `C:\LFS\docs\InSim.txt` | **The reference.** Every packet struct, every flag and enum, byte-exact layouts, and a changelog per LFS version. Consult it whenever adding a packet to `pyinsim/insim.py` or when a field looks wrong. |
+| `C:\LFS\docs\InSim.txt` | **No longer the reference on this install.** As of LFS 0.8C26 it is nine lines pointing at <https://www.lfs.net/programmer>; the packet structs, flags and byte layouts are only online now. Checked 2026-09-10. Older installs still carry the full text — check the file size before trusting a memory of what is in it. |
 | `C:\LFS\docs\OutSimPack.txt` | OutSim packet layout and the `OSO_*` option bits that decide which blocks are present. |
 | `C:\LFS\docs\Commands.txt` | All in-game `/` commands — needed when sending `ISP_MST` (e.g. `/axload`, `/restart`, `/axis`). |
 
-**Caveat:** the installed `InSim.txt` documents `INSIM_VERSION = 9` (LFS 0.7E) and does
-**not** contain `IS_AIC` / `IS_AII`. Our fork targets version 10 (0.7F+). For AI control
-the code in `pyinsim/insim.py` and `AI_Control.py` is the reference; if the local LFS
-install is updated, re-read `InSim.txt` and reconcile.
+**Caveat:** an older installed `InSim.txt` documented `INSIM_VERSION = 9` (LFS 0.7E) and
+did **not** contain `IS_AIC` / `IS_AII`. Our fork targets version 10 (0.7F+). For AI
+control the code in `pyinsim/insim.py` and `AI_Control.py` is the reference.
+
+**When the local docs cannot answer, measure instead of guessing.** `OutSimPack.txt` and
+`Commands.txt` are still full text, and the game itself is available: this project has
+settled several protocol questions by feeding LFS a case and reading the packets back
+(the `DL_SHIFT` shift light, the three `Car` bytes a mod sends — `conventions.md` §4/§5).
+A measured answer belongs in the docs *with the measurement*, because the next session
+cannot repeat it without LFS running.

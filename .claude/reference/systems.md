@@ -228,12 +228,31 @@ they simply run on the tapper's thread now. A refused shift is a shift that did 
 happen: the cooldown does not start, so the next allowed cycle still shifts. The keys are
 read from the settings at press time, so a rebind in the menu works without a restart.
 
-- **Requires per-car calibration**: idle rpm, redline, number of forward gears. This is
-  the pattern to copy for any car-specific parameter — it works for vehicle mods by
-  construction (`conventions.md` §4). Started from the menu (`gearbox_calibrate`),
-  three 12-second steps, persisted to `data/gearbox_calibrations.json` keyed by car
-  name. Without calibration the system does nothing, and a car with no entry does not
-  inherit the previous car's numbers.
+- **Three sources for idle rpm, redline and gear count, in this order** (`_apply_known_values`):
+  1. **The driver's own calibration**, `data/gearbox_calibrations.json`, keyed by car
+     name. An explicit statement: once it exists it is used unchanged, and a later
+     measurement does not move it.
+  2. **`STOCK_PROFILES`** in `vehicles/car_profiles.py` — measured values for the LFS
+     standard cars, so a car nobody has calibrated shifts on the first lap.
+  3. **The learned profile**, measured from the OutGauge stream while the game runs
+     (`vehicles/car_profiles.py`). The only source for mods, and it improves with every
+     lap, so 2 and 3 are re-resolved **every cycle** rather than on car change — freezing
+     them at car change would leave the first, worst estimate in place for the session.
+
+  If nothing yields a rev range of at least `MIN_RPM_RANGE`, the gearbox stays inactive
+  rather than shifting on invented numbers. A car with no entry never inherits the
+  previous car's values.
+- **Two cars-by-name policies, both in `vehicles/car_profiles.py`.** This is the one
+  place where naming cars is deliberate rather than a mistake (`conventions.md` §4), and
+  the failure direction is stated: a *mod* is not recognised by either list.
+  - `NO_AUTOMATIC_BY_DEFAULT` — the single-seaters (`FBM`, `FOX`, `FO8`, `BF1`) are
+    absent from the table and a *learned* profile does not arm them. On a formula car the
+    driver wants the gears. Anyone who disagrees calibrates it, and that explicit
+    calibration is honoured.
+  - `NEVER_AUTOMATIC` — the `MRT` has a motorbike gearbox, which this shift logic does
+    not describe at all. Checked before anything else, so even an existing calibration
+    cannot arm it, and a calibration request is **refused out loud** ("Automatic Gearbox
+    not available") rather than accepted and then ignored.
 - **Every step is measured over its whole 12 s, never in the cycle it ends in.** This
   is the part that kept breaking in the field, and each variant looked like a different
   bug:
