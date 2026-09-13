@@ -25,3 +25,9 @@ pact_assistant.log.*
 # OS
 Thumbs.db
 desktop.ini
+
+# Simulation test harness — run output and scratch tracers are machine-local
+simulation_tests/runs/*
+!simulation_tests/runs/.gitkeep
+simulation_tests/_temp/*
+!simulation_tests/_temp/README.md

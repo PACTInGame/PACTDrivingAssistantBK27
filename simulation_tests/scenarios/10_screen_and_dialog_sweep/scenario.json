@@ -1,0 +1,42 @@
+{
+  "name": "10_screen_and_dialog_sweep",
+  "description": "Every LFS screen state the UI has to survive: SHIFT+U, dialogs, text entry, SHIFT+B, camera changes, pit and garage.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [
+    "on_track",
+    "text_entry",
+    "shift_u",
+    "shift_b",
+    "camera_sweep",
+    "tab_view",
+    "pits",
+    "back_on_track",
+    "leaving",
+    "back_at_menu"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "BFN",
+      "BTC",
+      "MSO",
+      "NPL",
+      "PLP",
+      "PLL"
+    ],
+    "mci_interval_ms": 0,
+    "outgauge_interval_ms": 0,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}

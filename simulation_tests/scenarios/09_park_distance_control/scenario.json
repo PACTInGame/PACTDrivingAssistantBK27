@@ -1,0 +1,41 @@
+{
+  "name": "09_park_distance_control",
+  "description": "Creep up to a layout object until the parking sensors must react, front and rear.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu",
+    "An autocross layout with objects is loaded"
+  ],
+  "markers": [
+    "on_track",
+    "approach_front",
+    "stop_front",
+    "approach_rear",
+    "stop_rear",
+    "leaving",
+    "back_at_menu"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLL",
+      "MCI",
+      "AXM",
+      "OBH",
+      "CON",
+      "MSO"
+    ],
+    "mci_interval_ms": 50,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}

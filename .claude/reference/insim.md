@@ -106,7 +106,7 @@ Sent by this project:
 | `ISP_BTN` | draw a UI button (the only way to render anything in LFS) |
 | `ISP_BFN` | delete a button by `ClickID` |
 | `ISP_TINY` | request state (`TINY_SST`), players (`TINY_NPL`), layout (`TINY_AXM`) |
-| `ISP_SMALL` + `SMALL_SSG` | *(not used)* start OutGauge streaming without `cfg.txt` |
+| `ISP_SMALL` + `SMALL_SSG` | start OutGauge streaming without `cfg.txt` — *not used by the add-on*, but `simulation_tests/insim_trace.py` runs on it, which is the working proof it does what §1 says |
 | `ISP_SMALL` + `SMALL_LCL` | **local car lights** — indicators, low/high beam, fog, extra |
 | `ISP_SMALL` + `SMALL_LCS` | **local car switches** — siren, horn, flash |
 | `ISP_MST` | send a command to LFS (e.g. `/axload AI_Traffic`, `/restart`) |

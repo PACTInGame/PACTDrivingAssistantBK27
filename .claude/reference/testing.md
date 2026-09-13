@@ -285,10 +285,42 @@ is worth preferring wherever it fits:
   caches dropped each cycle is the pre-optimisation behaviour, and the assertion is on
   the ratio. Any absolute number stays as a loose ceiling with a comment saying why.
 
+## In-game tests: `simulation_tests/`
+
+Everything above runs without LFS. The other half — does this actually behave in the
+game — lives in `simulation_tests/`, a **standalone harness** that replays recorded
+mouse/keyboard input into LFS and records what the game reports back. Full usage:
+`simulation_tests/README.md`.
+
+What matters when working on the add-on:
+
+- **It is not part of the app.** Nothing in `simulation_tests/` imports `core`,
+  `assistance`, `ui`, `lfs`, `vehicles` or `misc`; the only shared code is `pyinsim`.
+  `tests/test_simulation_tests.py` enforces that, so a refactor of the add-on cannot
+  silently break the harness (and vice versa).
+- **It runs beside a live session.** Its tracer opens a second InSim connection and
+  asks LFS for its *own* OutGauge stream via `SMALL_SSG` on UDP 30011, so it never
+  contends with the add-on's OutGauge (30000) or OutSim (29998).
+- **A run produces a JSONL trace** — one record per packet, in capture order, with SI
+  values (`x_m`, `speed_kmh`, `heading_deg`) and decoded flag lists next to the raw
+  fields. `analyze_trace.py` summarises it, extracts signals and exports CSV. The
+  summary flags an OutGauge stall, which is the usual reason a capture looks like an
+  add-on bug (`conventions.md` §5.3).
+- **Markers tie the input to the trace.** The replay pushes each recorded marker into
+  the tracer over a loopback control channel, so "the brake key went down" and "the
+  brake pressure rose" are comparable on one clock.
+- To measure something the base tracer does not log, **copy `insim_trace.py` into
+  `_temp/`** and run `run_scenario.py <scenario> --tracer _temp/<copy>.py`. The
+  scenarios themselves are fixed references and are not edited.
+
+Scenarios ship without their `input.jsonl`: a recording is screen-resolution specific
+and has to be made once on the machine that runs the tests. Each scenario's
+`timeline.md` carries the step-by-step recording guide.
+
 ## Not worth automating
 
 - The Tkinter setup wizard, `MapBuilder.debug_plot`, `winsound`/`pygame` playback,
   vJoy — verify manually.
-- Anything requiring LFS to actually render. Manual test checklist instead: fresh
-  install → wizard → join track → each menu → each assistance system → leave track →
-  rejoin (checks button cleanup and state reset).
+- Anything requiring LFS to actually render, beyond what `simulation_tests/` covers.
+  Manual checklist: fresh install → wizard → join track → each menu → each assistance
+  system → leave track → rejoin (checks button cleanup and state reset).

@@ -1,0 +1,44 @@
+{
+  "name": "07_cross_traffic",
+  "description": "Approach a junction while an AI car crosses in front, from the left and from the right.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu",
+    "A junction layout is loaded",
+    "At least one AI driver is added"
+  ],
+  "markers": [
+    "on_track",
+    "approach_1",
+    "crossed_1",
+    "approach_2",
+    "crossed_2",
+    "leaving",
+    "back_at_menu"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST"
+    ],
+    "mci_interval_ms": 50,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 3.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}

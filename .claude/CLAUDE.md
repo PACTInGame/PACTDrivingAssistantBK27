@@ -91,6 +91,7 @@ Read **only** what the task needs. Do not read the whole `reference/` folder.
 | Reading the driver's axis/button/key setup off disk — `data\misc\*.csf`, `*.con`, `*.ply` | `reference/lfs-config-files.md` |
 | Fixing bugs / hardening / "why is this broken" | `reference/known-issues.md` |
 | Writing or running tests | `reference/testing.md` |
+| **Testing a change in the running game** — replaying an LFS scenario, recording one, reading a trace | `simulation_tests/README.md` (standalone, not part of the add-on) |
 | Raw LFS protocol truth (when pyinsim seems wrong/incomplete) | `C:\LFS\docs\OutSimPack.txt`, `Commands.txt` — **`InSim.txt` is now only a link to lfs.net**, so measure against the running game instead; `reference/insim.md` §6 |
 
 `kontext_prompt` (project root) is the author's original hand-written briefing. It is
