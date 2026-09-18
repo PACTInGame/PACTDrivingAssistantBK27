@@ -1,0 +1,42 @@
+{
+  "name": "04_drive_and_stop",
+  "description": "Menu -> pick a car and track -> drive off, accelerate, brake to a full stop -> menu.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [
+    "on_track",
+    "throttle_on",
+    "cruise",
+    "brake_on",
+    "stopped",
+    "leaving",
+    "back_at_menu"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 25,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 3.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}

@@ -98,6 +98,7 @@ Read **only** what the task needs. Do not read the whole `reference/` folder.
 | Reading the driver's axis/button/key setup off disk — `data\misc\*.csf`, `*.con`, `*.ply` | `reference/lfs-config-files.md` |
 | Fixing bugs / hardening / "why is this broken" | `reference/known-issues.md` |
 | Writing or running tests | `reference/testing.md` |
+| Recording/replaying live LFS scenarios or reading traces | `reference/testing.md` (two independent harnesses: `simulations-tests/` and `simulation_tests/`; follow the selected harness's README) |
 | Agent setup, shared instructions, documentation maintenance | `reference/agent-workflow.md` |
 | Raw LFS protocol truth (when pyinsim seems wrong/incomplete) | `C:\LFS\docs\OutSimPack.txt`, `Commands.txt` — **`InSim.txt` is now only a link to lfs.net**, so measure against the running game instead; `reference/insim.md` §6 |
 

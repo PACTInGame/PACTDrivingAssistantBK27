@@ -308,44 +308,50 @@ is worth preferring wherever it fits:
   caches dropped each cycle is the pre-optimisation behaviour, and the assertion is on
   the ratio. Any absolute number stays as a loose ceiling with a comment saying why.
 
-## Standalone live LFS scenarios (planned)
+## Live harness variants
 
-The intended live runner is a separate program, independent of PACT's modules and
-EventBus. It replays recorded mouse/keyboard input while an independent telemetry
-observer records the game. Each scenario starts and ends at the main menu. Initial
-coverage: menu navigation, garage settings, standing still, driving then stopping,
-and encounters for collision, blind-spot and cross-traffic warnings.
+Two independently developed tools are currently retained: `simulations-tests/`
+(the record/replay tool described at the top of this document) and
+`simulation_tests/` (the separately developed harness described below). They use
+different commands and artifact formats; do not mix their recordings, monitors or
+port settings. Both still require real recordings and live validation.
 
-Reusable ABS benchmark code is present in the locally inspected remote-tracking
-branches `origin/ki-benchmark` and
-`origin/claude/lfs-abs-benchmark-setup-ft10oq`: `harness/input_recorder.py`,
-`harness/orchestrator.py` and `lfs_link.py`. It is not a ready-to-run PACT scenario
-suite in `refactoring`: the inspected traces/baselines contain only placeholders,
-and the harness drives its own ABS controller. Check the branch contents before
-reusing it; do not switch a working tree containing unrelated changes to obtain it.
+## In-game tests: `simulation_tests/`
 
-Before claiming autonomous live coverage, provide:
+Everything above runs without LFS. The other half — does this actually behave in the
+game — lives in `simulation_tests/`, a **standalone harness** that replays recorded
+mouse/keyboard input into LFS and records what the game reports back. Full usage:
+`simulation_tests/README.md`.
 
-- Recorded scenarios, timestamped semantic markers, explicit expected outcomes
-  and measurement windows on a shared time base.
-- State checks between replay phases, repeatable vehicle/track/setup conditions,
-  and verified main-menu start/end states instead of timing alone.
-- Independent telemetry delivery alongside PACT. Both the existing benchmark and
-  PACT bind OutGauge port 30000 and OutSim port 29998; resolve port ownership and
-  delivery before running them together.
-- A way to observe the actual PACT warning/output as well as the driving situation;
-  a dangerous encounter or contact alone does not prove a warning was shown.
-- Prompt cancellation during idle gaps, release of replay-owned inputs on every
-  exit path, foreground checks and explicit failure reporting for invalid runs.
-  The inspected ABS recorder sleeps until the next event before noticing an abort.
+What matters when working on the add-on:
 
-Keep raw traces and machine-readable results so agents can inspect the evidence.
-Validate the runner and repeatability in LFS before calling any scenario ready.
+- **It is not part of the app.** Nothing in `simulation_tests/` imports `core`,
+  `assistance`, `ui`, `lfs`, `vehicles` or `misc`; the only shared code is `pyinsim`.
+  `tests/test_simulation_tests.py` enforces that, so a refactor of the add-on cannot
+  silently break the harness (and vice versa).
+- **It runs beside a live session.** Its tracer opens a second InSim connection and
+  asks LFS for its *own* OutGauge stream via `SMALL_SSG` on UDP 30011, so it never
+  contends with the add-on's OutGauge (30000) or OutSim (29998).
+- **A run produces a JSONL trace** — one record per packet, in capture order, with SI
+  values (`x_m`, `speed_kmh`, `heading_deg`) and decoded flag lists next to the raw
+  fields. `analyze_trace.py` summarises it, extracts signals and exports CSV. The
+  summary flags an OutGauge stall, which is the usual reason a capture looks like an
+  add-on bug (`conventions.md` §5.3).
+- **Markers tie the input to the trace.** The replay pushes each recorded marker into
+  the tracer over a loopback control channel, so "the brake key went down" and "the
+  brake pressure rose" are comparable on one clock.
+- To measure something the base tracer does not log, **copy `insim_trace.py` into
+  `_temp/`** and run `run_scenario.py <scenario> --tracer _temp/<copy>.py`. The
+  scenarios themselves are fixed references and are not edited.
+
+Scenarios ship without their `input.jsonl`: a recording is screen-resolution specific
+and has to be made once on the machine that runs the tests. Each scenario's
+`timeline.md` carries the step-by-step recording guide.
 
 ## Manual checks until covered by a validated live scenario
 
 - The Tkinter setup wizard, `MapBuilder.debug_plot`, `winsound`/`pygame` playback,
   vJoy — verify manually.
-- Anything requiring LFS to actually render. Manual test checklist instead: fresh
-  install → wizard → join track → each menu → each assistance system → leave track →
-  rejoin (checks button cleanup and state reset).
+- Anything requiring LFS to actually render, beyond what `simulation_tests/` covers.
+  Manual checklist: fresh install → wizard → join track → each menu → each assistance
+  system → leave track → rejoin (checks button cleanup and state reset).

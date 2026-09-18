@@ -1,0 +1,40 @@
+{
+  "name": "08_lights_and_indicators",
+  "description": "Exercise indicators, hazards, low/high beam and the brake light.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [
+    "on_track",
+    "indicator_left",
+    "indicator_right",
+    "hazards",
+    "lights_low",
+    "lights_high",
+    "braking",
+    "leaving",
+    "back_at_menu"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLL",
+      "MCI",
+      "MSO",
+      "BTC"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 25,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "02_garage_settings",
+  "description": "Open the garage (the 'box') and click through every vehicle setup page.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [
+    "garage_open",
+    "page_colours",
+    "page_brake_tc",
+    "page_susp",
+    "page_steer",
+    "page_drive",
+    "page_tyres",
+    "page_aero",
+    "page_pass",
+    "leaving_garage"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "SLC",
+      "MSO",
+      "BTC",
+      "BFN"
+    ],
+    "mci_interval_ms": 0,
+    "outgauge_interval_ms": 0,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}

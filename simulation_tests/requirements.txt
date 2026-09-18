@@ -1,0 +1,12 @@
+# Dependencies of the simulation-test harness only.
+#
+# The harness is standalone: it imports pyinsim (the LFS protocol library that
+# lives in this repo) and nothing else from the add-on. Recording and replaying
+# input needs Windows.
+#
+# Python 3.11 or older -- pyinsim uses asyncore, removed in 3.12.
+
+pynput>=1.7        # global mouse/keyboard capture and injection (Windows)
+
+# Nothing else. pytest (requirements-dev.txt) runs the harness's own tests,
+# which need neither pynput nor LFS.

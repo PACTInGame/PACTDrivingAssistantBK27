@@ -1,0 +1,43 @@
+{
+  "name": "05_fcw_rear_end",
+  "description": "Add an AI driver, approach it from behind and close in until the collision warning must fire.",
+  "created_utc": "2026-09-13T09:06:46Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu",
+    "At least one AI driver is added before the race starts"
+  ],
+  "markers": [
+    "on_track",
+    "ai_ahead",
+    "closing",
+    "warning_expected",
+    "contact_or_avoid",
+    "leaving",
+    "back_at_menu"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST"
+    ],
+    "mci_interval_ms": 50,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 3.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  }
+}
