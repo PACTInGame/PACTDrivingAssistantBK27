@@ -42,12 +42,16 @@ class AssistanceManager:
     """Verwaltet alle Fahrerassistenzsysteme"""
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager,
-                 error_throttle: ErrorThrottle = None, car_profiles=None):
+                 error_throttle: ErrorThrottle = None, car_profiles=None,
+                 pedals=None):
         self.event_bus = event_bus
         self.settings = settings
         # Durchgereicht an die Systeme, die fahrzeugspezifische Werte brauchen
         # (bisher nur der Gearbox). Optional, damit Tests ohne auskommen.
         self.car_profiles = car_profiles
+        # Die Pedalerkennung gehoert ``main.py``, weil sie auf dem Mainthread
+        # gepumpt werden muss (misc/pedal_watch.py). Hier nur durchgereicht.
+        self.pedals = pedals
         self._errors = error_throttle or ErrorThrottle(logger)
         # Systeme, die sich nach wiederholten Fehlern selbst deaktiviert haben.
         self.failed_systems = set()
@@ -73,7 +77,8 @@ class AssistanceManager:
         # Direkt hinter FCW: es veroeffentlicht die Sollverzoegerung, auf die
         # der Bremseingriff reagiert - so wirkt sie im selben Zyklus statt
         # einen spaeter.
-        self.systems['aeb'] = EmergencyBrake(self.event_bus, self.settings)
+        self.systems['aeb'] = EmergencyBrake(self.event_bus, self.settings,
+                                            pedals=self.pedals)
         self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
         self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
         self.systems['autoh'] = AutoHold(self.event_bus, self.settings)

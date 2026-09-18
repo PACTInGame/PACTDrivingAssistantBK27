@@ -4,7 +4,7 @@ Design reference for any feature that actuates the car rather than only warning:
 automatic emergency braking, cruise control / ACC, lane keeping, auto-hold, the
 automatic gearbox.
 
-Treat everything here with the ECU mindset from `CLAUDE.md` §1: an intervention that
+Treat everything here with the ECU mindset from `AGENTS.md` §1: an intervention that
 works 95 % of the time is not a feature, it is a hazard.
 
 ---
@@ -281,7 +281,7 @@ process lives. That means LFS must be started after us, and — the deciding poi
 restart of PACT during a running LFS session makes the pad vanish and reappear, after
 which LFS's brake-axis assignment is silently wrong. vJoy's devices are created by the
 driver at boot and are always present, so axis numbering is stable and the start order
-is free. Robustness (`CLAUDE.md` §3) beats the slightly nicer install.
+is free. Robustness (`AGENTS.md` §3) beats the slightly nicer install.
 
 **The axis numbers cannot be discovered by sweeping — verify them, do not search.**
 They live in settings (`user_axis_brake`, `vjoy_axis_1`) and hand-entering a wrong number

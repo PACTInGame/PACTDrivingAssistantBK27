@@ -231,6 +231,87 @@ class LanguageManager:
                 "dk": "Sent",
                 "se": "Sen"
             },
+            # ─── Notbremsassistent (Kollisionswarnung, Zeile 1) ───────
+            "Warn only": {
+                "en": "Warn only",
+                "de": "Nur warnen",
+                "it": "Solo avviso",
+                "fr": "Alerte seule",
+                "tr": "Sadece uyar",
+                "no": "Kun varsel",
+                "dk": "Kun advarsel",
+                "se": "Endast varning"
+            },
+            "Warn & Brake": {
+                "en": "Warn & Brake",
+                "de": "Warnen & Bremsen",
+                "it": "Avviso e frenata",
+                "fr": "Alerte et freinage",
+                "tr": "Uyar ve frenle",
+                "no": "Varsle og bremse",
+                "dk": "Advar og brems",
+                "se": "Varna och bromsa"
+            },
+            "Braking unavailable": {
+                "en": "Braking unavailable",
+                "de": "Bremseingriff nicht moeglich",
+                "it": "Frenata non disponibile",
+                "fr": "Freinage indisponible",
+                "tr": "Fren mudahalesi yok",
+                "no": "Bremsing utilgjengelig",
+                "dk": "Bremsning utilgaengelig",
+                "se": "Bromsning otillgaenglig"
+            },
+            "vJoy is not installed": {
+                "en": "vJoy is not installed",
+                "de": "vJoy ist nicht installiert",
+                "it": "vJoy non e installato",
+                "fr": "vJoy n'est pas installe",
+                "tr": "vJoy kurulu degil",
+                "no": "vJoy er ikke installert",
+                "dk": "vJoy er ikke installeret",
+                "se": "vJoy ar inte installerat"
+            },
+            "vJoy is not ready": {
+                "en": "vJoy is not ready",
+                "de": "vJoy ist nicht bereit",
+                "it": "vJoy non e pronto",
+                "fr": "vJoy n'est pas pret",
+                "tr": "vJoy hazir degil",
+                "no": "vJoy er ikke klar",
+                "dk": "vJoy er ikke klar",
+                "se": "vJoy ar inte redo"
+            },
+            "vJoy brake axis not calibrated": {
+                "en": "vJoy brake axis not calibrated",
+                "de": "vJoy-Bremsachse nicht kalibriert",
+                "it": "Asse freno vJoy non calibrato",
+                "fr": "Axe de frein vJoy non calibre",
+                "tr": "vJoy fren ekseni kalibre degil",
+                "no": "vJoy-bremseakse ikke kalibrert",
+                "dk": "vJoy-bremseakse ikke kalibreret",
+                "se": "vJoy-bromsaxel ej kalibrerad"
+            },
+            "Key tracking unavailable": {
+                "en": "Key tracking unavailable",
+                "de": "Tastenerkennung nicht verfuegbar",
+                "it": "Rilevamento tasti non disponibile",
+                "fr": "Suivi des touches indisponible",
+                "tr": "Tus takibi yok",
+                "no": "Tasteoppfoelging utilgjengelig",
+                "dk": "Tastesporing utilgaengelig",
+                "se": "Tangentspaarning otillgaenglig"
+            },
+            "Brake key cannot be used": {
+                "en": "Brake key cannot be used",
+                "de": "Bremstaste unbrauchbar",
+                "it": "Tasto freno inutilizzabile",
+                "fr": "Touche de frein inutilisable",
+                "tr": "Fren tusu kullanilamiyor",
+                "no": "Bremsetast ubrukelig",
+                "dk": "Bremsetast ubrugelig",
+                "se": "Bromstangent oanvandbar"
+            },
             # ─── Parking Menu ─────────────────────────────────────────
             "Parking Settings": {
                 "en": "Parking Settings",
@@ -405,6 +486,56 @@ class LanguageManager:
                 "no": "Gir Ned Tast",
                 "dk": "Gear Ned Tast",
                 "se": "Växla Ned Knapp"
+            },
+            "Brake Key": {
+                "en": "Brake Key",
+                "de": "Bremstaste",
+                "it": "Tasto Freno",
+                "fr": "Touche Frein",
+                "tr": "Fren Tusu",
+                "no": "Bremsetast",
+                "dk": "Bremsetast",
+                "se": "Bromstangent"
+            },
+            "Throttle Key": {
+                "en": "Throttle Key",
+                "de": "Gastaste",
+                "it": "Tasto Gas",
+                "fr": "Touche Accel.",
+                "tr": "Gaz Tusu",
+                "no": "Gasstast",
+                "dk": "Speedertast",
+                "se": "Gastangent"
+            },
+            "Measuring the throttle axis": {
+                "en": "Measuring the throttle axis",
+                "de": "Gasachse wird noch gemessen",
+                "it": "Misurazione asse gas",
+                "fr": "Mesure de l'axe accel.",
+                "tr": "Gaz ekseni olculuyor",
+                "no": "Maaler gassaksen",
+                "dk": "Maaler speederaksen",
+                "se": "Maeter gasaxeln"
+            },
+            "Throttle axis not found": {
+                "en": "Throttle axis not found",
+                "de": "Gasachse nicht gefunden - kein Gaswegnehmen",
+                "it": "Asse gas non trovato",
+                "fr": "Axe accel. introuvable",
+                "tr": "Gaz ekseni bulunamadi",
+                "no": "Fant ikke gassaksen",
+                "dk": "Speederakse ikke fundet",
+                "se": "Gasaxeln hittades inte"
+            },
+            "Throttle key cannot be used": {
+                "en": "Throttle key cannot be used",
+                "de": "Gastaste unbrauchbar",
+                "it": "Tasto gas inutilizzabile",
+                "fr": "Touche accel. inutilisable",
+                "tr": "Gaz tusu kullanilamiyor",
+                "no": "Gasstast ubrukelig",
+                "dk": "Speedertast ubrugelig",
+                "se": "Gastangent oanvandbar"
             },
             "Clutch Key": {
                 "en": "Clutch Key",

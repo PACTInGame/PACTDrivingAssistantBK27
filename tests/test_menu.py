@@ -108,6 +108,43 @@ def test_close_from_the_main_menu_closes_everything(menu, fake_connector):
     assert fake_connector.drawn_ids() == {BTN_OPEN_MENU}
 
 
+# ─── Emergency braking sits next to the warning distance ─────────────────────
+
+def test_the_aeb_button_only_cycles_between_warn_and_brake(menu, settings):
+    """0 (off) belongs to the warning switch itself, not to this button."""
+    menu.open_driving_menu()
+    settings.set('automatic_emergency_brake', 1)
+
+    menu._handle_menu_click(32)
+    assert settings.get('automatic_emergency_brake') == 2
+
+    menu._handle_menu_click(32)
+    assert settings.get('automatic_emergency_brake') == 1
+
+
+def test_the_aeb_button_is_red_while_braking_cannot_be_armed(menu, settings, bus):
+    """"Switched on" and "actually working" were indistinguishable before."""
+    settings.set('automatic_emergency_brake', 2)
+    menu.open_driving_menu()
+
+    def text_of(button_id):
+        return next(text for bid, _x, _y, _w, _h, text, _style
+                    in menu.buttons_for('driving') if bid == button_id)
+
+    assert text_of(32).startswith("^2")
+
+    bus.emit('emergency_brake_availability', {'reason': 'vjoy_not_installed'})
+
+    assert text_of(32).startswith("^1")
+    detail = text_of(33)
+    assert 'vJoy' in detail
+
+    bus.emit('emergency_brake_availability', {'reason': None})
+
+    assert text_of(32).startswith("^2")
+    assert 33 not in {bid for bid, *_rest in menu.buttons_for('driving')}
+
+
 # ─── Toggles write the setting they claim to ─────────────────────────────────
 
 @pytest.mark.parametrize("button_id, key", [
@@ -292,7 +329,8 @@ def test_the_key_menu_shows_the_bound_keys(menu, settings):
     labels = {button_id: text
               for button_id, _x, _y, _w, _h, text, _s in menu.buttons_for('keys')}
 
-    assert labels[30] == 'V'                  # 25 is the clutch row, 30 its value
+    # 25 is the clutch row; its value sits KEY_DISPLAY_OFFSET IDs higher.
+    assert labels[25 + MenuSystem.KEY_DISPLAY_OFFSET] == 'V'
 
 
 def test_cancelling_a_rebind_returns_to_the_key_menu(menu):

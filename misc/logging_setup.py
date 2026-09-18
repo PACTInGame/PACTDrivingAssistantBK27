@@ -1,6 +1,6 @@
 """Central logging setup and the rate limiter the three hot loops share.
 
-Rationale (``CLAUDE.md`` rule 1): this add-on runs a 100 ms assistance pass and
+Rationale (``AGENTS.md`` rule 1): this add-on runs a 100 ms assistance pass and
 a 50 ms UI pass. A ``print()`` in either of them is unbuffered blocking I/O to
 the console and costs more than the work it reports on, which is why the
 original code had to comment out its exception handlers to stay usable. The

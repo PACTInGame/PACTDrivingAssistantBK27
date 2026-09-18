@@ -81,7 +81,7 @@ _SCHEMA: Dict[str, Setting] = {
     # assistance_refresh_rate ist zugleich das MCI-``Interval`` (LFSConnector)
     # und die Periode des Assistenz-Threads. LFS akzeptiert 40…8000 ms; unter
     # 50 ms haelt der Zyklus das Budget nicht mehr ein, ueber 200 ms wird die
-    # Kollisionswarnung zu traege (CLAUDE.md §1).
+    # Kollisionswarnung zu traege (AGENTS.md §1).
     'assistance_refresh_rate': Setting(100, int, minimum=50, maximum=200),
     'ui_refresh_rate': Setting(50, int, minimum=20, maximum=500),
 
@@ -92,6 +92,12 @@ _SCHEMA: Dict[str, Setting] = {
     'user_clutch_key': Setting("c", str),
     'user_ignition_key': Setting("i", str),
     'user_brake_key': Setting("down", str),
+    # Gas. Gebraucht wird sie nicht zum Druecken - Gas geben tut der Fahrer -
+    # sondern zum *Abhaengen*: waehrend einer Notbremsung wird die Funktion
+    # ``throttle`` in LFS auf nichts gelegt und danach wieder auf diese Taste.
+    # Die App schreibt die Bindung selbst (``/key <taste> throttle``), damit
+    # die Rueckgabe garantiert dorthin geht, wo LFS das Gas auch erwartet.
+    'user_throttle_key': Setting("up", str),
 
     'user_axis_steering': Setting(8, int, minimum=0, maximum=31),
     'user_axis_throttle': Setting(9, int, minimum=0, maximum=31),
@@ -109,6 +115,41 @@ _SCHEMA: Dict[str, Setting] = {
     'vjoy_raw_no_brake': Setting(32767, int, minimum=0, maximum=32767),
     'vjoy_raw_full_brake': Setting(0, int, minimum=0, maximum=32767),
     'vjoy_brake_calibrated': Setting(False, bool),
+
+    # Gilt ``user_axis_throttle`` als geprueft? Die Gaswegnahme im
+    # Lenkrad-Modus haengt die Funktion ``throttle`` ab und legt sie danach auf
+    # genau diese Nummer zurueck. Eine falsche Nummer nimmt der Achse, die sie
+    # wirklich traegt, ihre Funktion weg (control-intervention.md §2.2), also
+    # wird die Gaswegnahme erst scharf, wenn die Nummer einmal gegen OutGauge
+    # verifiziert wurde. Die Bremse ist davon nicht betroffen.
+    'throttle_axis_verified': Setting(False, bool),
+    # Gesetzt, wenn eine Rueckgabe nachweislich nicht funktioniert hat. Dann
+    # wird die Gaswegnahme nie wieder versucht - ein zweiter Versuch wuerde
+    # nur eine weitere Achse zerschiessen. Nur ein Mensch loescht das wieder.
+    'throttle_axis_broken': Setting(False, bool),
+
+    # Wo LFS installiert ist. Gebraucht, um die eigene Controller-Konfiguration
+    # von LFS zu *lesen* (misc/lfs_config.py) - geschrieben wird dort nichts.
+    'lfs_directory': Setting(r"C:\LFS", str),
+
+    # ─── Gemessene Pedalachsen (misc/pedal_watch.py) ───────────────────
+    # Waehrend eines Bremseingriffs liest LFS das Bremspedal des Fahrers nicht
+    # mehr - wir haben die Achse. Um trotzdem zu wissen, ob der Fahrer staerker
+    # bremst als wir (und ihn niemals zu unterbieten), wird das Pedal direkt am
+    # Geraet gelesen. Welche Achse das ist, wird *gemessen*: OutGauge liefert
+    # die Pedalstellung, solange LFS sie noch liest, und genau eine Achse folgt
+    # ihr. ``-1`` heisst "noch nicht erkannt"; dann bremst der Eingriff
+    # vorsichtshalber voll, statt den Fahrer zu unterbieten.
+    'pedal_brake_device': Setting("", str),
+    'pedal_brake_device_index': Setting(0, int, minimum=0, maximum=31),
+    'pedal_brake_axis': Setting(-1, int, minimum=-1, maximum=63),
+    'pedal_brake_raw_zero': Setting(0.0, float, minimum=-2.0, maximum=2.0),
+    'pedal_brake_raw_full': Setting(0.0, float, minimum=-2.0, maximum=2.0),
+    'pedal_throttle_device': Setting("", str),
+    'pedal_throttle_device_index': Setting(0, int, minimum=0, maximum=31),
+    'pedal_throttle_axis': Setting(-1, int, minimum=-1, maximum=63),
+    'pedal_throttle_raw_zero': Setting(0.0, float, minimum=-2.0, maximum=2.0),
+    'pedal_throttle_raw_full': Setting(0.0, float, minimum=-2.0, maximum=2.0),
 
     # Vom Nutzer gewaehlter Eingabemodus. Wird *nicht* mehr aus IS_NPL
     # ueberschrieben - der erkannte Modus steht kameraunabhaengig in

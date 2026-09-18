@@ -63,17 +63,16 @@ import threading
 import time
 from typing import Optional
 
+from Controls.handover_marker import HandoverMarker
 from misc.helpers import resolve_path
 from misc.vjoy_device import VJoyDevice
 
 logger = logging.getLogger(__name__)
 
-# Written while LFS's brake points at our axis, removed the moment we hand
-# back. ``guardian.py`` reads it after we die: present means we were holding
-# the brake and it must be handed back, absent means we let go properly and it
-# must keep its hands off -- otherwise every clean shutdown would force the
-# brake onto whatever number our settings happen to hold.
-HANDOVER_MARKER = 'brake_axis_held.marker'
+# Our name in the shared handover marker. An intervention can hold more than
+# one thing (the throttle is unassigned at the same time), so each part claims
+# and releases under its own name -- see ``Controls/handover_marker.py``.
+MARKER_OWNER = 'brake'
 
 # How long before a failed spawn is tried again, and how often a running
 # guardian is checked for having died. Both are the same number because both
@@ -85,11 +84,14 @@ class AxisBrakeOutput:
     """Analog brake actuation through a vJoy axis, with handback to the driver."""
 
     def __init__(self, event_bus, settings, device: Optional[VJoyDevice] = None,
-                 marker_path: Optional[str] = None, spawn=None, clock=None):
+                 marker_path: Optional[str] = None, spawn=None, clock=None,
+                 marker: Optional[HandoverMarker] = None):
         self.event_bus = event_bus
         self.settings = settings
         self.device = device or VJoyDevice()
-        self.marker_path = marker_path or resolve_path(HANDOVER_MARKER)
+        # Shared with the throttle cut when there is one, so both halves of an
+        # intervention end up in the same file for the guardian to replay.
+        self.marker = marker or HandoverMarker(marker_path)
         self._spawn = spawn or _spawn_guardian
         self._clock = clock or time.monotonic
         # True while LFS's brake is pointing at our axis instead of the driver's.
@@ -169,7 +171,7 @@ class AxisBrakeOutput:
 
         A thread that dies here would leave ``_guardian_pending`` set forever
         and block every later attempt, which is the quiet-failure mode
-        ``CLAUDE.md`` §3 exists to prevent.
+        ``AGENTS.md`` §3 exists to prevent.
         """
         try:
             self._guardian = self._spawn(os.getpid())
@@ -190,7 +192,7 @@ class AxisBrakeOutput:
         if not self._holds_axis:
             # Value first, then the swap: the local write is instant, the
             # command is a TCP round trip away.
-            self._write_marker()
+            self.marker.claim(MARKER_OWNER, f"/axis {self.driver_axis} brake")
             self.event_bus.emit('send_command_to_lfs',
                                 f"/axis {self.lfs_axis} brake")
             self._holds_axis = True
@@ -214,35 +216,14 @@ class AxisBrakeOutput:
         # Then park, so the value frozen into the device between interventions
         # is "no brake" rather than whatever we were last commanding.
         self.device.set_raw(self._raw_for(0.0))
-        self._clear_marker()
+        self.marker.release(MARKER_OWNER)
         logger.info("Brake axis handed back to the driver (LFS axis %d).",
                     self.driver_axis)
 
-    # ─── Handover marker ──────────────────────────────────────────────
-    #
-    # One create and one delete per intervention, not per cycle: a few tenths
-    # of a millisecond at each of the two transitions. It has to be synchronous
-    # -- a marker written by a background thread might not exist yet at the
-    # moment we are killed, which is the only moment it matters.
-
-    def _write_marker(self):
-        try:
-            with open(self.marker_path, 'w', encoding='utf-8') as handle:
-                handle.write(str(self.driver_axis))
-        except OSError as exc:
-            # Not fatal: without the marker the guardian simply does nothing,
-            # which is the behaviour we had before it existed.
-            logger.warning("Could not write the handover marker: %s: %s",
-                           type(exc).__name__, exc)
-
-    def _clear_marker(self):
-        try:
-            os.remove(self.marker_path)
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.warning("Could not remove the handover marker: %s: %s",
-                           type(exc).__name__, exc)
+    @property
+    def marker_path(self) -> str:
+        """Where the handover marker lives. Kept for the tests and the log."""
+        return self.marker.path
 
     def shutdown(self):
         """Hand back and let the device go."""

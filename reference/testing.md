@@ -1,6 +1,19 @@
 # Testing
 
-**Status: harness in place.** `python -m pytest` from the project root runs the suite on
+**Status: offline test harness in place; standalone live scenario tooling is in
+`simulations-tests/` (record/replay/monitor). Real scenarios must be recorded and
+validated manually before use.** See `../simulations-tests/README.md` for commands,
+trace timing, port separation and the distinction between completed execution and
+a functional pass. Baseline scenarios are immutable during AI testing; adapt only
+monitor copies under `simulations-tests/_temp/`. The tools share only pyinsim and
+the lazy platform loader, not running application components. Offline harness
+regressions live in `tests/test_simulation_harness.py` and perform no input/network I/O.
+When cfg.txt UDP streams cannot be duplicated through InSim, the optional standalone
+`simulations-tests/udp_relay.py` forwards unchanged packets to both consumers; run
+the observer with `--cfg-streams`. See its README for the explicit one-time LFS
+configuration and restore procedure. Never bind a second listener to the add-on's
+30000/29998 ports and assume both processes will receive every packet.
+`python -m pytest` from the project root runs the suite on
 Linux, Windows or macOS with only `requirements-dev.txt` installed (`pytest`, `psutil`,
 `shapely`, `numpy`). No LFS, no display, no sound device, no socket.
 
@@ -155,6 +168,15 @@ marker then.
 
 ### Testing anything that injects a real key
 
+Windows test-suite caveats: the existing PDC test
+`test_the_beeper_actually_sounds_while_requested` expects the shim's recorded
+`winsound.Beep` calls, but native Windows winsound does not record them. This can
+fail despite a working sound path. The invalid-DLL probe
+`test_brake_axis.py::test_a_dll_that_will_not_load_is_reported_as_missing` can also
+stall on this Windows host while loading a deliberately corrupt DLL; isolate or
+explicitly deselect that test when diagnosing an otherwise stalled suite. Neither
+is exercised by the standalone simulation harness's offline tests.
+
 `test_actuation.py` reads the keystrokes back through `platform_shim.recorded_calls()`,
 which only works where the real `pyautogui` is missing — hence its module-level `skipif`.
 `test_emergency_brake.py` takes the other route and patches a recorder over
@@ -177,12 +199,13 @@ called `insim` — so `pyinsim.insim` is that **function**, not the submodule, a
 through the package itself (`pyinsim.IS_ISI`, `pyinsim.INSIM_VERSION`), as
 `test_brake_axis.py` does when it checks `guardian.py`'s hand-written packets.
 
-## Guiding constraint
+## Guiding constraint for the offline suite
 
-Tests must run **without LFS, without a GUI, and without a network** — otherwise they
-will never be run. That rules out end-to-end testing of the real thing, so the strategy
-is to push as much logic as possible behind pure functions and event boundaries, and to
-replay recorded packet data for everything else.
+The default `tests/` suite must run **without LFS, without a GUI, and without a
+network**. Push logic behind pure functions and event boundaries, and use recorded
+packet replay for offline regression coverage. Real-game end-to-end scenarios are
+a separate, explicitly launched test layer; they must not enter default pytest
+collection or make the offline suite depend on a running game.
 
 ## Layer 1 — pure functions (highest value, start here)
 
@@ -248,7 +271,7 @@ Byte-exact tests against `C:\LFS\docs\InSim.txt`:
   `VehicleManager` is covered by `test_vehicle_model.py`.
 - `OutGaugePack` / `OutSimPack` accept both documented packet sizes.
 
-## Layer 4 — replay harness (the big win)
+## Layer 4 — offline packet replay (planned)
 
 Add an opt-in recorder to `LFSConnector` that appends every inbound packet (with a
 timestamp) to a file. A replay driver then feeds a recorded session through the real
@@ -257,7 +280,7 @@ timestamp) to a file. A replay driver then feeds a recorded session through the 
 
 This gives regression tests over real driving situations — "in this recorded overtake,
 no false blind-spot warning is emitted" — which no synthetic fixture can express. It is
-also the only realistic way to test the AI traffic controller.
+also useful alongside synthetic tests of the AI traffic controller.
 
 Record at minimum: one city lap on SO with AI traffic, one parking manoeuvre, one
 motorway approach to a stopped car, one junction crossing.
@@ -285,7 +308,41 @@ is worth preferring wherever it fits:
   caches dropped each cycle is the pre-optimisation behaviour, and the assertion is on
   the ratio. Any absolute number stays as a loose ceiling with a comment saying why.
 
-## Not worth automating
+## Standalone live LFS scenarios (planned)
+
+The intended live runner is a separate program, independent of PACT's modules and
+EventBus. It replays recorded mouse/keyboard input while an independent telemetry
+observer records the game. Each scenario starts and ends at the main menu. Initial
+coverage: menu navigation, garage settings, standing still, driving then stopping,
+and encounters for collision, blind-spot and cross-traffic warnings.
+
+Reusable ABS benchmark code is present in the locally inspected remote-tracking
+branches `origin/ki-benchmark` and
+`origin/claude/lfs-abs-benchmark-setup-ft10oq`: `harness/input_recorder.py`,
+`harness/orchestrator.py` and `lfs_link.py`. It is not a ready-to-run PACT scenario
+suite in `refactoring`: the inspected traces/baselines contain only placeholders,
+and the harness drives its own ABS controller. Check the branch contents before
+reusing it; do not switch a working tree containing unrelated changes to obtain it.
+
+Before claiming autonomous live coverage, provide:
+
+- Recorded scenarios, timestamped semantic markers, explicit expected outcomes
+  and measurement windows on a shared time base.
+- State checks between replay phases, repeatable vehicle/track/setup conditions,
+  and verified main-menu start/end states instead of timing alone.
+- Independent telemetry delivery alongside PACT. Both the existing benchmark and
+  PACT bind OutGauge port 30000 and OutSim port 29998; resolve port ownership and
+  delivery before running them together.
+- A way to observe the actual PACT warning/output as well as the driving situation;
+  a dangerous encounter or contact alone does not prove a warning was shown.
+- Prompt cancellation during idle gaps, release of replay-owned inputs on every
+  exit path, foreground checks and explicit failure reporting for invalid runs.
+  The inspected ABS recorder sleeps until the next event before noticing an abort.
+
+Keep raw traces and machine-readable results so agents can inspect the evidence.
+Validate the runner and repeatability in LFS before calling any scenario ready.
+
+## Manual checks until covered by a validated live scenario
 
 - The Tkinter setup wizard, `MapBuilder.debug_plot`, `winsound`/`pygame` playback,
   vJoy — verify manually.

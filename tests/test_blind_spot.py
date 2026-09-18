@@ -208,6 +208,49 @@ def test_a_car_pointing_the_other_way_is_ignored(
     assert result == {'left_warning': False, 'right_warning': False}
 
 
+# ─── Movement filter ─────────────────────────────────────────────────────────
+
+def test_a_parked_car_in_the_blind_spot_does_not_warn(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Driving past parked cars was a permanent warning.
+
+    The geometry is identical to the same-speed case above; only the other
+    car's speed differs. Without the movement filter every car at the kerb sat
+    in the corridor for as long as it took to drive past it.
+    """
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.0, y=-5.0, heading=0.0, speed=0.0)],
+                 speed=50.0)
+    assert result == {'left_warning': False, 'right_warning': False}
+
+
+def test_a_car_falling_behind_does_not_warn(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """20 km/h slower is not a lane-change conflict; it disappears backwards."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.0, y=-5.0, heading=0.0, speed=30.0)],
+                 speed=50.0)
+    assert result == {'left_warning': False, 'right_warning': False}
+
+
+def test_a_car_two_kmh_slower_still_warns(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The tolerance band: matching speeds are never measured exactly equal."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.0, y=-5.0, heading=0.0, speed=48.0)],
+                 speed=50.0)
+    assert result['left_warning'] is True
+
+
+def test_creeping_traffic_below_the_movement_floor_does_not_warn(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Both cars nearly stopped: nobody is changing lanes at 3 km/h."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.0, y=-5.0, heading=0.0, speed=3.0)],
+                 speed=3.0)
+    assert result == {'left_warning': False, 'right_warning': False}
+
+
 # ─── Hold time ───────────────────────────────────────────────────────────────
 
 def test_the_warning_is_held_after_the_car_leaves(

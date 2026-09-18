@@ -96,12 +96,16 @@ class BlindSpotWarning(AssistanceSystem):
     Ausloesekriterium (reference/systems.md):
 
     1. **Geometrie** - der Umriss des anderen Autos schneidet den Korridor.
-    2. **Relevanz** - im eigentlichen toten Winkel (bis ``BLIND_SPOT_ZONE_M``
+    2. **Bewegung** - das andere Auto faehrt (``MIN_OTHER_SPEED_KMH``) und
+       faellt nicht zurueck (hoechstens ``MAX_TRAILING_SPEED_KMH`` langsamer
+       als wir). Ohne diesen Filter warnte jede parkende Autoreihe am
+       Strassenrand, an der wir vorbeifuhren.
+    3. **Relevanz** - im eigentlichen toten Winkel (bis ``BLIND_SPOT_ZONE_M``
        hinter der eigenen Fahrzeugmitte) immer, denn dorthin sieht kein
        Spiegel, unabhaengig von der Relativgeschwindigkeit. Weiter hinten nur,
        solange das Auto auflaeuft und uns in hoechstens ``APPROACH_TIME_S``
        erreicht (Spurwechsel-Assistent, ISO 17387 arbeitet mit ~3.5 s).
-    3. **Haltezeit** - eine gesetzte Warnung bleibt noch so lange stehen, wie
+    4. **Haltezeit** - eine gesetzte Warnung bleibt noch so lange stehen, wie
        das andere Auto braucht, um sich relativ zu uns um eine Fahrzeuglaenge
        zu verschieben. Solange ueberlappen die beiden Autos laengs noch, und
        die Warnung darf im 100-ms-Raster nicht flackern.
@@ -140,6 +144,20 @@ class BlindSpotWarning(AssistanceSystem):
     APPROACH_TIME_S = 3.5
     # Darunter ist die Differenz zweier km/h-Werte Rauschen, kein Auflaufen.
     MIN_CLOSING_MS = 0.5
+    # ─── Bewegungsfilter ──────────────────────────────────────────────
+    # Ein Toter-Winkel-Warner warnt vor einem *Spurwechselkonflikt*. Beides
+    # hier ist die Bedingung dafuer, dass es ueberhaupt einen geben kann:
+    #
+    # 1. Das andere Auto muss fahren. Eine parkende Reihe am Strassenrand
+    #    liegt sekundenlang im Korridor und hat die Warnung frueher dauerhaft
+    #    gesetzt - genau der Fall, den ISO 17387 als "stationary object"
+    #    ausdruecklich ausschliesst.
+    # 2. Es darf nicht zurueckfallen. Wer langsamer ist, ist beim Spurwechsel
+    #    kein Konflikt, sondern verschwindet nach hinten. Die 2 km/h Zugabe
+    #    decken das Rauschen der km/h-Differenz und den haeufigsten Fall ab:
+    #    ein Auto, das mit praktisch gleicher Geschwindigkeit mitfaehrt.
+    MIN_OTHER_SPEED_KMH = 5.0
+    MAX_TRAILING_SPEED_KMH = 2.0
 
     # ─── Haltezeit ────────────────────────────────────────────────────
     MEAN_VEHICLE_LENGTH_M = 4.5
@@ -186,6 +204,9 @@ class BlindSpotWarning(AssistanceSystem):
             if not _is_within_threshold(own.heading, data.heading):
                 continue
 
+            if not self._is_moving_relevantly(own.speed, data.speed):
+                continue
+
             other_speed_ms = data.speed * KMH_TO_MS
             if not self._is_relevant(distance, own_speed_ms, other_speed_ms):
                 continue
@@ -229,6 +250,19 @@ class BlindSpotWarning(AssistanceSystem):
         }
 
     # ─── Relevanz und Haltezeit ───────────────────────────────────────
+
+    def _is_moving_relevantly(self, own_speed_kmh: float,
+                              other_speed_kmh: float) -> bool:
+        """Kann dieses Auto ueberhaupt ein Spurwechselkonflikt sein?
+
+        Zwei Vergleiche, vor jeder Geometrie - siehe MIN_OTHER_SPEED_KMH und
+        MAX_TRAILING_SPEED_KMH. Absichtlich in km/h: beide Schwellen sind so
+        formuliert, wie der Fahrer sie beschreibt, und die Umrechnung nach m/s
+        wuerde nur eine Multiplikation pro Fahrzeug hinzufuegen.
+        """
+        if other_speed_kmh < self.MIN_OTHER_SPEED_KMH:
+            return False
+        return other_speed_kmh >= own_speed_kmh - self.MAX_TRAILING_SPEED_KMH
 
     def _is_relevant(self, distance_m: float, own_speed_ms: float,
                      other_speed_ms: float) -> bool:

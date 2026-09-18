@@ -335,15 +335,15 @@ def test_holds_axis_reports_the_swap_and_only_the_swap(axis_output):
 
 # ─── Controls/brake_axis.py -- the handover marker ───────────────────────────
 
-def test_engaging_writes_the_drivers_axis_number_into_the_marker(
+def test_engaging_writes_the_handback_command_into_the_marker(
         axis_output, marker_path):
-    """The marker carries the number that was in force when the swap happened
-    -- the only number that restores what we took away."""
+    """The marker carries the command that restores what we took away, with
+    the axis number that was in force at the moment of the swap."""
     axis_output.apply(0.5)
 
     assert os.path.exists(marker_path)
     with open(marker_path, encoding='utf-8') as handle:
-        assert handle.read().strip() == '12'
+        assert json.load(handle) == {'commands': ['/axis 12 brake']}
 
 
 def test_handing_back_removes_the_marker(axis_output, marker_path):
@@ -504,28 +504,57 @@ def test_a_missing_marker_means_the_brake_was_never_ours(tmp_path):
     assert guardian.read_marker(str(tmp_path / 'absent.marker')) is None
 
 
-@pytest.mark.parametrize('written, expected', [('12', 12),
-                                               ('0', 0),
-                                               ('31', 31),
-                                               (' 15 \n', 15)])
-def test_a_marker_holding_an_axis_number_yields_that_number(
-        tmp_path, written, expected):
+@pytest.mark.parametrize('written, expected', [
+    ('{"commands": ["/axis 12 brake"]}', ['/axis 12 brake']),
+    ('{"commands": ["/axis 12 brake", "/axis 9 throttle"]}',
+     ['/axis 12 brake', '/axis 9 throttle']),
+    ('{"commands": ["/key up throttle"]}', ['/key up throttle']),
+])
+def test_a_marker_yields_the_commands_it_names(tmp_path, written, expected):
     path = tmp_path / 'brake_axis_held.marker'
     path.write_text(written, encoding='utf-8')
 
     assert guardian.read_marker(str(path)) == expected
 
 
-@pytest.mark.parametrize('written', ['', '   ', 'twelve', '-1', '32', '3.5',
-                                     '12 13', '\x00'])
-def test_a_marker_we_cannot_read_still_means_the_brake_was_held(
-        tmp_path, written):
-    """``-1`` is "act, but fall back to settings": the file existing at all is
-    the evidence that we died holding the axis."""
+@pytest.mark.parametrize('written, expected', [('12', 12),
+                                               ('0', 0),
+                                               ('31', 31),
+                                               (' 15 \n', 15)])
+def test_a_pre_json_marker_still_hands_the_brake_back(
+        tmp_path, written, expected):
+    """Markers from the version that could only ever hold the brake."""
     path = tmp_path / 'brake_axis_held.marker'
     path.write_text(written, encoding='utf-8')
 
-    assert guardian.read_marker(str(path)) == -1
+    assert guardian.read_marker(str(path)) == [f'/axis {expected} brake']
+
+
+@pytest.mark.parametrize('written', ['', '   ', 'twelve', '-1', '32', '3.5',
+                                     '12 13', '\x00', '{"commands": "no"}',
+                                     '{"other": []}', '{'])
+def test_a_marker_we_cannot_read_still_means_something_was_held(
+        tmp_path, written):
+    """An empty list is "act, but fall back to settings": the file existing at
+    all is the evidence that we died holding the axis."""
+    path = tmp_path / 'brake_axis_held.marker'
+    path.write_text(written, encoding='utf-8')
+
+    assert guardian.read_marker(str(path)) == []
+
+
+@pytest.mark.parametrize('command', [
+    '/msg pwned', '/axis 12 steer', '/axis -1 brake', '/key -1 throttle',
+    '/axis 12 brake; /msg x', 'axis 12 brake', '/end',
+])
+def test_a_marker_command_outside_the_whitelist_is_dropped(tmp_path, command):
+    """The marker is a file on disk. A watchdog that typed whatever it found
+    there into the game would not be a safety device -- and an *unassign* is
+    never a restore, so those are refused too."""
+    path = tmp_path / 'brake_axis_held.marker'
+    path.write_text(json.dumps({'commands': [command]}), encoding='utf-8')
+
+    assert guardian.read_marker(str(path)) == []
 
 
 # ─── guardian.py -- the settings fallback ────────────────────────────────────
@@ -608,12 +637,23 @@ def test_handing_back_sends_the_handshake_and_then_the_axis_command(
                         lambda address, timeout=None: FakeSocket(sink))
     monkeypatch.setattr(guardian.time, 'sleep', lambda _seconds: None)
 
-    assert guardian.hand_back(12) is True
+    assert guardian.hand_back(['/axis 12 brake', '/axis 9 throttle']) is True
 
     sent = [payload for kind, payload in sink if kind == 'sent']
     assert sent == [guardian._isi_packet(),
-                    guardian._mst_packet('/axis 12 brake')]
+                    guardian._mst_packet('/axis 12 brake'),
+                    guardian._mst_packet('/axis 9 throttle')]
     assert sink[-1][0] == 'closed'
+
+
+def test_handing_nothing_back_opens_no_connection(monkeypatch):
+    """An empty command list means there was nothing to restore."""
+    def explode(address, timeout=None):
+        raise AssertionError("no connection should have been opened")
+
+    monkeypatch.setattr(guardian.socket, 'create_connection', explode)
+
+    assert guardian.hand_back([]) is False
 
 
 def test_an_unreachable_lfs_is_not_an_error(monkeypatch):
@@ -623,18 +663,18 @@ def test_an_unreachable_lfs_is_not_an_error(monkeypatch):
 
     monkeypatch.setattr(guardian.socket, 'create_connection', refuse)
 
-    assert guardian.hand_back(12) is False
+    assert guardian.hand_back(['/axis 12 brake']) is False
 
 
 # ─── guardian.py -- watch ────────────────────────────────────────────────────
 
 @pytest.fixture
 def handbacks(monkeypatch):
-    """Records the axis numbers ``watch`` would have handed back to."""
+    """Records the command lists ``watch`` would have sent."""
     calls = []
 
-    def fake_hand_back(axis):
-        calls.append(axis)
+    def fake_hand_back(commands):
+        calls.append(list(commands))
         return True
 
     monkeypatch.setattr(guardian, 'hand_back', fake_hand_back)
@@ -674,8 +714,9 @@ def test_a_marker_left_behind_hands_the_axis_it_names_back(
                                  sleep=_never_sleep)
 
     assert handed_back is True
-    assert handbacks == [9]                 # the marker wins over settings
-    assert not marker.exists()              # and the marker is cleaned up
+    # The marker wins over settings, and is cleaned up afterwards.
+    assert handbacks == [['/axis 9 brake']]
+    assert not marker.exists()
 
 
 def test_an_unusable_marker_falls_back_to_the_configured_axis(
@@ -687,7 +728,7 @@ def test_an_unusable_marker_falls_back_to_the_configured_axis(
 
     assert guardian.watch(4242, str(settings), str(marker),
                           sleep=_never_sleep) is True
-    assert handbacks == [7]
+    assert handbacks == [['/axis 7 brake']]
 
 
 def test_an_unusable_marker_and_no_settings_still_hands_something_back(
@@ -697,14 +738,14 @@ def test_an_unusable_marker_and_no_settings_still_hands_something_back(
 
     assert guardian.watch(4242, str(tmp_path / 'absent.json'), str(marker),
                           sleep=_never_sleep) is True
-    assert handbacks == [guardian.DEFAULT_BRAKE_AXIS]
+    assert handbacks == [[f'/axis {guardian.DEFAULT_BRAKE_AXIS} brake']]
 
 
 def test_a_marker_survives_a_handback_lfs_never_received(
         tmp_path, monkeypatch, dead_process):
     """If LFS could not be reached the brake is still ours as far as anyone
     knows, so the evidence must not be thrown away."""
-    monkeypatch.setattr(guardian, 'hand_back', lambda axis: False)
+    monkeypatch.setattr(guardian, 'hand_back', lambda commands: False)
     marker = tmp_path / 'brake_axis_held.marker'
     marker.write_text('9', encoding='utf-8')
 
@@ -727,7 +768,7 @@ def test_watching_polls_until_the_process_disappears(
                    poll_interval=2.0, sleep=slept.append)
 
     assert slept == [2.0, 2.0, 2.0]
-    assert handbacks == [9]
+    assert handbacks == [['/axis 9 brake']]
 
 
 def test_the_marker_is_only_read_after_the_process_is_gone(
@@ -748,7 +789,7 @@ def test_the_marker_is_only_read_after_the_process_is_gone(
     guardian.watch(4242, str(tmp_path / 'absent.json'), str(marker),
                    sleep=lambda _seconds: None)
 
-    assert handbacks == [9]
+    assert handbacks == [['/axis 9 brake']]
 
 
 def _never_sleep(_seconds):

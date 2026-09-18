@@ -5,7 +5,7 @@ once per rendered frame, so a key that goes down and up in 0.2 ms is simply
 never seen.  The press has to be *held* for a few frames.  Until now that hold
 came from ``pyautogui.PAUSE`` (0.1 s after every call), which meant the holding
 was done by ``time.sleep`` **on the shared 100 ms assistance thread**
-(``CLAUDE.md`` section 1): one auto-hold engagement cost 323 ms of a 100 ms
+(``AGENTS.md`` section 1): one auto-hold engagement cost 323 ms of a 100 ms
 budget, one gear change roughly 440 ms, and every other assistance system was
 late by that much (``reference/known-issues.md`` #43).
 

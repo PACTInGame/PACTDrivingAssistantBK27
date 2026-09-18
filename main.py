@@ -1,3 +1,4 @@
+import asyncore
 import logging
 import signal
 import sys
@@ -15,12 +16,18 @@ from lfs.message_sender import MessageSender
 from misc import helpers
 from misc.audio_player import AudioPlayer
 from misc.logging_setup import setup_logging
+from misc.pedal_watch import PedalWatch
 from ui.menu_system import MenuSystem
 from ui.ui_manager import UIManager
 from vehicles.car_profiles import CarProfiles
 from vehicles.vehicle_manager import VehicleManager
 
 logger = logging.getLogger(__name__)
+
+# Wartezeit je asyncore-Durchlauf. Derselbe Wert, mit dem ``pyinsim.run()``
+# bisher gepollt hat (``pyinsim.core._TIMEOUT``), damit das Aufbrechen der
+# Schleife am Zeitverhalten nichts aendert.
+MAIN_LOOP_TIMEOUT_S = 0.05
 
 # Wie oft die gelernten Fahrzeugprofile weggeschrieben werden (ms). Bewusst
 # traege: die Datei ist ein Cache, kein Protokoll.
@@ -59,9 +66,15 @@ class LFSAssistantApp:
         self.car_profiles = CarProfiles(self.event_bus)
         self.vehicle_manager = VehicleManager(self.event_bus)
 
+        # Eingabegeraete des Fahrers. Gehoert hierher und nicht in den
+        # Bremseingriff, weil SDL nur auf dem Mainthread liest - die
+        # Hauptschleife unten pumpt es (misc/pedal_watch.py).
+        self.pedals = PedalWatch(self.event_bus, self.settings)
+
         # Assistenzsysteme
         self.assistance_manager = AssistanceManager(self.event_bus, self.settings,
-                                                    car_profiles=self.car_profiles)
+                                                    car_profiles=self.car_profiles,
+                                                    pedals=self.pedals)
 
         # UI
         self.ui_manager = UIManager(self.event_bus, self.message_sender, self.settings,
@@ -143,7 +156,7 @@ class LFSAssistantApp:
 
         # Fahrzeugprofile wegschreiben. Eigenes, langsames Intervall: gelernt
         # wird auf dem Paket-Thread, und dort darf keine Datei geschrieben
-        # werden (CLAUDE.md §1). maybe_save() schreibt nur, wenn sich etwas
+        # werden (AGENTS.md §1). maybe_save() schreibt nur, wenn sich etwas
         # geaendert hat, hoechstens alle 30 s.
         profile_task = ScheduledTask(
             "car_profiles_save",
@@ -210,10 +223,29 @@ class LFSAssistantApp:
         raise KeyboardInterrupt(f"signal {signum}")
 
     def _run_main_loop(self):
-        """Hauptschleife der Anwendung"""
+        """Hauptschleife: asyncore, und einmal pro Runde die Pedale lesen.
+
+        Frueher stand hier ``pyinsim.run()``, also ``asyncore.loop()`` ohne
+        Rueckkehr. Aufgebrochen wurde es aus genau einem Grund: **SDL liest
+        Joystick-Achsen nur auf dem Mainthread** (misc/pedal_watch.py) - von
+        einem Worker-Thread aus meldet es kommentarlos auf jeder Achse 0.0.
+        Der Mainthread ist aber der hier, und er steckte bisher dauerhaft in
+        asyncore.
+
+        ``count=1`` fuehrt genau einen Poll-Durchlauf aus und kehrt zurueck;
+        das Timeout ist dasselbe wie vorher, die Schleife wartet also exakt so
+        lange in ``select`` wie zuvor und kostet nichts zusaetzlich. Pro Runde
+        kommt ``pump()`` dazu: ein ``SDL_PumpEvents`` und ein ``get_axis`` je
+        Achse, zusammen im zweistelligen Mikrosekundenbereich.
+
+        Abbruchbedingung ist unveraendert die leere asyncore-Map: ``closeall()``
+        aus dem Signal-Handler laesst ``isrunning()`` False werden, und
+        ``asyncore.loop`` reicht KeyboardInterrupt weiterhin durch.
+        """
         try:
-            # pyinsim run() ist blocking
-            pyinsim.run()
+            while pyinsim.isrunning():
+                asyncore.loop(timeout=MAIN_LOOP_TIMEOUT_S, count=1)
+                self.pedals.pump()
         except KeyboardInterrupt:
             raise
         except Exception as e:

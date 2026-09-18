@@ -284,7 +284,7 @@ class Gearbox(AssistanceSystem):
         Ohne Ratenbegrenzung ist das eine Logzeile *pro Zyklus*: der gemessene
         Leerlauf wandert um ein paar Umdrehungen, und jede Aenderung zaehlte als
         Ereignis. Live gesehen waren das zwanzig Zeilen in einer Sekunde -
-        genau das, was CLAUDE.md §1 verbietet.
+        genau das, was AGENTS.md §1 verbietet.
         """
         now = self.clock()
         if (self._learned_logged_at is not None

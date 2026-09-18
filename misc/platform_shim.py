@@ -145,7 +145,7 @@ def instant_input():
         keyDown          112.9 ms     keyDown  (PAUSE=0)   0.4 ms
         keyUp            108.5 ms     keyUp    (PAUSE=0)   0.2 ms
 
-    That is two whole assistance cycles (``CLAUDE.md`` §1) spent sleeping, on
+    That is two whole assistance cycles (``AGENTS.md`` §1) spent sleeping, on
     the shared 100 ms thread, and it is where "100 ms cycle overran its budget:
     203.0 ms" comes from.
 
@@ -173,6 +173,11 @@ def instant_input():
             keyboard.PAUSE = previous
 
 
+# Both pygame accessors below load the same package object out of one cache
+# entry, so they have to agree on what is imported with it.
+_PYGAME_SUBMODULES = ('mixer', 'joystick')
+
+
 def get_sound() -> Any:
     """``winsound`` -- the PDC beep. Windows-only, blocking; never call in ``process()``."""
     return _load('winsound')
@@ -185,7 +190,18 @@ def get_input_listener() -> Any:
 
 def get_audio() -> Any:
     """``pygame`` (with ``.mixer``) -- warning sound playback."""
-    return _load('pygame', ('mixer',))
+    return _load('pygame', _PYGAME_SUBMODULES)
+
+
+def get_joystick() -> Any:
+    """``pygame`` (with ``.joystick``) -- reading the driver's own pedals.
+
+    Same module as :func:`get_audio`, and deliberately the same ``_load`` call:
+    the cache is keyed on the package name, so whichever accessor ran first
+    would otherwise decide which submodules exist. Both are imported either way
+    -- ``pygame.joystick`` costs nothing once ``pygame`` itself is in.
+    """
+    return _load('pygame', _PYGAME_SUBMODULES)
 
 
 def get_tkinter() -> Any:

@@ -323,7 +323,7 @@ Things to know before editing:
 - OutGauge/OutSim packets are identified purely by **datagram length**
   (`_OUTGAUGE_SIZE = (92, 96)`, `_OUTSIM_SIZE = (64, 280)`). If `cfg.txt` OutSim Opts
   differ from `1ff`, the size changes and the packet is silently ignored.
-- `asyncore` is removed in Python 3.12 — see `CLAUDE.md` §2.
+- `asyncore` is removed in Python 3.12 — see `AGENTS.md` §2.
 
 ## 6. When pyinsim is not enough: the LFS docs
 

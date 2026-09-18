@@ -642,6 +642,162 @@ def test_a_wheel_driver_never_gets_the_key_path(
     assert 'vjoy_not_calibrated' in seen.last('notification')['notification']
 
 
+# ─── Arbitration: never less braking than the driver commands ────────────────
+
+class FakePedals:
+    """Stands in for ``PedalWatch``: the driver's pedal, read at the device."""
+
+    def __init__(self, brake=None):
+        self.brake = brake
+        self.started = False
+        self.samples = []
+
+    def driver_brake(self):
+        return self.brake
+
+    def driver_throttle(self):
+        return None
+
+    def unavailable_reason(self):
+        return None if self.brake is not None else 'not identified yet'
+
+    def confidence(self, _which):
+        return 0.0
+
+    def request_start(self):
+        self.started = True
+
+    def stop(self):
+        pass
+
+    def observe(self, own_vehicle, trustworthy=True):
+        self.samples.append(trustworthy)
+
+
+@pytest.fixture
+def wheel_aeb(bus, make_settings, physical, keyboard):
+    """An AEB whose output is the analog path, with a fake vJoy underneath."""
+    def _make(pedals, **overrides):
+        settings = make_settings(automatic_emergency_brake=2, language='en',
+                                 vjoy_brake_calibrated=True, vjoy_axis_1=15,
+                                 user_axis_brake=12, **overrides)
+        system = EmergencyBrake(bus, settings, physical_keys=physical,
+                                guard=FakeGuard(None), clock=FakeClock(),
+                                pedals=pedals)
+        system.axis_output.device = _AlwaysThereDevice()
+        system.axis_output.start_guardian = lambda: None
+        return system
+
+    return _make
+
+
+class _AlwaysThereDevice:
+    def __init__(self):
+        self.raw = None
+
+    def unavailable_reason(self):
+        return None
+
+    def acquire(self):
+        return True
+
+    def set_raw(self, value):
+        self.raw = value
+
+    def relinquish(self):
+        pass
+
+
+def wheel_at(make_own_vehicle, speed=80.0, **kwargs):
+    return make_own_vehicle(speed=speed, local_plid=1, plid=1, control_mode=2,
+                            **kwargs)
+
+
+def test_the_axis_path_never_commands_less_than_the_driver_is_braking(
+        bus, wheel_aeb, make_own_vehicle):
+    """The regression this exists for.
+
+    While the vJoy axis carries ``brake``, LFS has stopped reading the driver's
+    pedal, so a modulated 50 % really is 50 % even with their foot on the
+    floor. Anything that reduces braking is the exact inversion of what an
+    assistant may do (control-intervention.md section 1).
+    """
+    pedals = FakePedals(brake=1.0)
+    system = wheel_aeb(pedals)
+    demand(bus, 6.5)                       # would modulate to well under 1.0
+
+    result = system.process(wheel_at(make_own_vehicle), {})
+
+    assert result['active'] is True
+    assert result['brake'] == pytest.approx(1.0)
+
+
+def test_the_axis_path_still_modulates_above_the_drivers_pedal(
+        bus, wheel_aeb, make_own_vehicle):
+    """Arbitration is a floor, not a replacement: a driver barely on the pedal
+    must not stop the assistant from braking properly."""
+    pedals = FakePedals(brake=0.1)
+    system = wheel_aeb(pedals)
+    demand(bus, 6.5)
+
+    result = system.process(wheel_at(make_own_vehicle), {})
+
+    assert 0.1 < result['brake'] < 1.0
+
+
+def test_an_unreadable_pedal_makes_the_axis_path_brake_fully(
+        bus, wheel_aeb, make_own_vehicle):
+    """No joystick, no pygame, or the pedal not identified yet: we cannot tell
+    whether we would be braking less than the driver, and the only value that
+    is certainly not less is all of it."""
+    system = wheel_aeb(FakePedals(brake=None))
+    demand(bus, 6.5)
+
+    result = system.process(wheel_at(make_own_vehicle), {})
+
+    assert result['brake'] == pytest.approx(1.0)
+
+
+def test_the_key_path_does_not_arbitrate(bus, aeb_factory, braking_car):
+    """LFS merges our keystroke with the driver's own input, so the harder one
+    already wins -- and a key has no travel to arbitrate with anyway."""
+    system = aeb_factory()
+    demand(bus, 6.5)
+
+    result = system.process(braking_car, {})
+
+    assert result['brake'] < 1.0
+
+
+def test_pedal_samples_stop_while_we_hold_the_brake_axis(
+        bus, wheel_aeb, make_own_vehicle):
+    """OutGauge reports our own command back during an intervention; learning
+    from it would identify our vJoy axis as the driver's brake pedal."""
+    pedals = FakePedals(brake=0.0)
+    system = wheel_aeb(pedals)
+
+    demand(bus, 0.0)
+    system.process(wheel_at(make_own_vehicle), {})
+    demand(bus, 9.0)
+    system.process(wheel_at(make_own_vehicle), {})
+    system.process(wheel_at(make_own_vehicle), {})
+
+    assert pedals.samples == [True, True, False]
+
+
+def test_the_pedal_watch_is_started_with_the_axis_path(
+        bus, wheel_aeb, make_own_vehicle):
+    """It needs a normal braking manoeuvre to identify the pedal, so it has to
+    be running well before the first intervention."""
+    pedals = FakePedals(brake=0.0)
+    system = wheel_aeb(pedals)
+
+    demand(bus, 0.0)
+    system.process(wheel_at(make_own_vehicle), {})
+
+    assert pedals.started is True
+
+
 def test_an_uncalibrated_axis_output_refuses_before_it_touches_vjoy():
     """Polarity is measured, never assumed: raw 0 is full brake on one machine
     and no brake on another, so an unmeasured axis must not be driven."""
@@ -728,18 +884,126 @@ def test_a_demand_between_release_and_engage_keeps_the_brake_on(
         assert system.process(braking_car, {})['active'] is True
 
 
-def test_the_brake_is_given_back_below_walking_speed(
+def test_a_running_intervention_brakes_all_the_way_to_standstill(
         bus, aeb_factory, make_own_vehicle, keyboard):
-    """Auto-hold takes over; a digital full brake to standstill just locks up."""
-    system = aeb_factory()
+    """The regression: FCW goes blind below its own floor, so we must not
+    read its silence as "the hazard is gone".
+
+    Below ``MIN_SPEED_KMH`` FCW publishes a demand of 0 whatever is in front
+    of the car. An intervention that let go there handed back at walking speed
+    a metre short of the obstacle it had just braked for.
+    """
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
     demand(bus, 9.0)
     system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
     assert system._engaged is True
 
-    crawling = make_own_vehicle(speed=EmergencyBrake.STOP_SPEED_KMH - 0.5,
-                                local_plid=1, plid=1)
-    assert system.process(crawling, {})['active'] is False
+    # FCW stops publishing: from here the demand says nothing at all.
+    demand(bus, 0.0)
+    for speed in (9.0, 6.0, 3.0, 1.0):
+        crawling = make_own_vehicle(speed=speed, local_plid=1, plid=1)
+        assert system.process(crawling, {})['active'] is True, speed
+    assert keyboard.calls == [('keyDown', 'b')]
+
+
+def test_the_brake_is_held_briefly_after_standstill_then_given_back(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """AutoHold needs standstill and brake pressure in the same pass."""
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+    demand(bus, 0.0)
+
+    stopped = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+    assert system.process(stopped, {})['active'] is True
+
+    clock.advance(EmergencyBrake.STANDSTILL_HOLD_S + 0.1)
+    assert system.process(stopped, {})['active'] is False
     assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
+
+
+def test_the_driver_takes_the_car_back_with_the_throttle_below_the_floor(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """Brake and throttle used to fight each other for as long as both were on.
+
+    The committed stop deliberately ignores FCW, so nothing else in the loop
+    could end it early -- and a driver who saw the hazard clear at 8 km/h and
+    accelerated got a car with both pedals applied.
+    """
+    system = aeb_factory()
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+    demand(bus, 0.0)
+
+    crawling = make_own_vehicle(speed=8.0, local_plid=1, plid=1)
+    assert system.process(crawling, {})['active'] is True
+
+    accelerating = make_own_vehicle(speed=8.0, local_plid=1, plid=1,
+                                    throttle=0.6)
+    assert system.process(accelerating, {})['active'] is False
+    assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
+
+
+def test_throttle_does_not_abort_the_emergency_itself(
+        bus, aeb_factory, make_own_vehicle):
+    """Panic throttle at speed is what an AEB exists to override."""
+    system = aeb_factory()
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+
+    flooring_it = make_own_vehicle(speed=75.0, local_plid=1, plid=1,
+                                   throttle=1.0)
+    assert system.process(flooring_it, {})['active'] is True
+
+
+def test_a_resting_pedal_does_not_count_as_an_override(
+        bus, aeb_factory, make_own_vehicle):
+    """A calibrated pedal at rest reports a few per cent, not zero."""
+    system = aeb_factory()
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+    demand(bus, 0.0)
+
+    resting = make_own_vehicle(speed=8.0, local_plid=1, plid=1,
+                               throttle=EmergencyBrake.THROTTLE_OVERRIDE - 0.05)
+    assert system.process(resting, {})['active'] is True
+
+
+def test_the_committed_stop_keeps_braking_firmly(
+        bus, aeb_factory, make_own_vehicle):
+    """The demand FCW stops publishing must not become a 20 % pedal.
+
+    ``_brake_fraction`` fed on a demand of 0 fell straight to
+    ``MIN_BRAKE_FRACTION``, which is why the car still rolled into the one in
+    front over the last few metres.
+    """
+    system = aeb_factory()
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+
+    demand(bus, 0.0)
+    crawling = make_own_vehicle(speed=8.0, local_plid=1, plid=1,
+                                acceleration=-1.0)
+    result = system.process(crawling, {})
+
+    assert result['active'] is True
+    assert result['brake'] > 0.5
+
+
+def test_an_intervention_that_clears_well_above_the_floor_still_releases(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """Committing to a stop must not swallow the normal release."""
+    system = aeb_factory()
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+
+    demand(bus, 0.0)
+    rolling = make_own_vehicle(speed=60.0, local_plid=1, plid=1)
+    for _ in range(EmergencyBrake.RELEASE_DEBOUNCE_CYCLES):
+        system.process(rolling, {})
+    assert system.process(rolling, {})['active'] is False
 
 
 def test_a_parking_manoeuvre_is_below_the_floor_and_belongs_to_pdc(
@@ -807,6 +1071,17 @@ def test_shutdown_gives_the_brake_back(bus, aeb_factory, braking_car, keyboard):
     assert system._engaged is False
 
 
+def brake_commands(seen):
+    """Only the commands about the brake binding.
+
+    An intervention now also pushes the throttle binding and unassigns the
+    throttle for its duration, so the raw command stream carries four things
+    where it used to carry one.
+    """
+    return [command for command in seen.payloads('send_command_to_lfs')
+            if command.endswith(' brake')]
+
+
 def test_a_rebind_of_the_brake_key_pushes_the_new_binding_before_using_it(
         bus, aeb_factory, braking_car, keyboard, recorder):
     """A rebind must reach LFS before the new key is ever injected.
@@ -823,7 +1098,9 @@ def test_a_rebind_of_the_brake_key_pushes_the_new_binding_before_using_it(
 
     assert system.process(braking_car, {})['active'] is True
     # The fixture pushed the original binding; the rebind pushes the new one.
-    assert seen.payloads('send_command_to_lfs')[-1] == '/key K brake'
+    # Filtered to the brake: the same pass also pushes the throttle binding and
+    # cuts the throttle, and neither is what this test is about.
+    assert brake_commands(seen)[-1] == '/key K brake'
     assert keyboard.calls == [('keyDown', 'k')]
 
 
@@ -837,7 +1114,7 @@ def test_a_reconnect_pushes_the_binding_into_the_new_session_before_using_it(
 
     assert system.process(braking_car, {})['active'] is True
     # Pushed twice: once by the fixture, once again for the new session.
-    assert seen.payloads('send_command_to_lfs') == ['/key B brake', '/key B brake']
+    assert brake_commands(seen) == ['/key B brake', '/key B brake']
     assert keyboard.calls == [('keyDown', 'b')]
 
 
@@ -862,7 +1139,7 @@ def test_the_first_cycle_pushes_the_binding_so_the_system_can_arm(
     system.process(braking_car, {})
     result = system.process(braking_car, {})
 
-    assert seen.payloads('send_command_to_lfs') == ['/key B brake']
+    assert brake_commands(seen) == ['/key B brake']
     assert result['active'] is True
     assert keyboard.calls == [('keyDown', 'b')]
 

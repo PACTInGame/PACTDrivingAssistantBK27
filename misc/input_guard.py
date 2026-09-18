@@ -145,7 +145,7 @@ class InputGuard:
     """The gate every ``pyautogui`` keypress in this project goes through.
 
     One instance per injecting system; it subscribes to the bus itself, so the
-    systems stay wired through events only (``CLAUDE.md`` §3).
+    systems stay wired through events only (``AGENTS.md`` §3).
 
     ``foreground_check`` and ``clock`` are injectable so the whole table can be
     driven from a test without a keyboard, a window manager or a wall clock.

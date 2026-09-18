@@ -9,14 +9,21 @@ LFS. So a main process that is killed mid-intervention leaves the car with the
 brake nailed down and the driver's own pedal not assigned to brake at all. A
 dead process cannot send ``/axis``; a live one next to it can.
 
-    main app  --spawns-->  guardian  --waits on PID-->  sends /axis <n> brake
+    main app  --spawns-->  guardian  --waits on PID-->  replays /axis commands
 
 What it does, and deliberately nothing else:
 
 1. wait for the main process to exit, by PID;
-2. look for the handover marker the main app writes while it holds the brake;
-3. if it is there, open an InSim connection and send ``/axis <axis> brake``;
+2. look for the handover marker the main app writes while it holds anything;
+3. if it is there, open an InSim connection and send the commands it names;
 4. exit.
+
+An intervention can hold more than the brake: the throttle is unassigned for
+its duration too (``Controls/throttle_cut.py``), and a process killed in that
+state leaves a driver who can neither accelerate nor stop the car braking. So
+the marker carries a **list of commands to replay**, not an axis number, and
+this process does not need to know what any of them mean. Older markers held a
+bare axis number and are still understood.
 
 Three design notes worth keeping.
 
@@ -28,10 +35,16 @@ force the brake onto whatever axis number our settings happened to hold -- and
 if that number were wrong we would break a working configuration on every exit,
 which is the opposite of the job.
 
-**The axis number comes from the marker, with settings as the fallback.** It
-differs per user and the driver may recalibrate; the marker carries the number
-that was in force when the swap happened, which is the only number that
-restores what we took away.
+**The numbers come from the marker, with settings as the fallback.** They
+differ per user and the driver may recalibrate; the marker carries what was in
+force when the swap happened, which is the only thing that restores what we
+took away.
+
+**Only commands this file recognises are sent.** The marker is a file on disk,
+so it can be corrupt, truncated or edited; it is matched against a pattern that
+allows exactly ``/axis``, ``/key`` and ``/invert`` for the two functions an
+intervention ever takes, and anything else is dropped. A watchdog that would type whatever it
+found in a file into the game is not a safety device.
 
 **No IPC beyond that file.** A channel that has to survive the other end being
 killed is exactly the thing that will not work when it matters.
@@ -44,6 +57,7 @@ Started by the main app; can also be run by hand for testing::
 import json
 import logging
 import os
+import re
 import socket
 import struct
 import sys
@@ -58,6 +72,13 @@ logger = logging.getLogger('guardian')
 SETTINGS_FILE = 'settings.json'
 MARKER_FILE = 'brake_axis_held.marker'
 DEFAULT_BRAKE_AXIS = 12
+
+# What a marker is allowed to ask for. ``/axis -1 <fn>`` and ``/key -1 <fn>``
+# unassign, which is never a *restore*, so they are not in here: a marker that
+# asked for one would leave the driver with the function still gone.
+_ALLOWED_COMMAND = re.compile(
+    r'^/(axis|key) [A-Za-z0-9]{1,6} (brake|throttle)$'
+    r'|^/invert [01] (brake|throttle)$')
 
 INSIM_HOST = '127.0.0.1'
 INSIM_PORT = 29999
@@ -83,11 +104,16 @@ def _valid_axis(value):
 
 
 def read_marker(marker_path: str):
-    """The axis recorded in the handover marker.
+    """The commands recorded in the handover marker.
 
-    ``None`` -- no marker: the main app was not holding the brake, which is the
+    ``None``  -- no marker: the main app was not holding anything, which is the
     normal case after a clean exit, and nothing must be sent.
-    ``-1``   -- marker present but unusable: act anyway, using the settings value.
+    ``[]``    -- marker present but unusable: something *was* held, so act
+    anyway, with the brake handback rebuilt from the settings file.
+
+    Three shapes are accepted, in order of age: the JSON object written today,
+    a bare axis number from the version that only ever held the brake, and an
+    empty or corrupt file.
     """
     try:
         with open(marker_path, encoding='utf-8') as handle:
@@ -95,13 +121,32 @@ def read_marker(marker_path: str):
     except FileNotFoundError:
         return None
     except OSError as exc:
-        logger.warning("Handover marker unreadable (%s: %s) - assuming the "
-                       "brake was held.", type(exc).__name__, exc)
-        return -1
+        logger.warning("Handover marker unreadable (%s: %s) - assuming "
+                       "something was held.", type(exc).__name__, exc)
+        return []
     if not content:
-        return -1
+        return []
+
     axis = _valid_axis(content)
-    return -1 if axis is None else axis
+    if axis is not None:
+        # Pre-JSON marker: the brake, and only the brake.
+        return [f"/axis {axis} brake"]
+
+    try:
+        payload = json.loads(content)
+        commands = [str(command) for command in payload['commands']]
+    except Exception as exc:
+        logger.warning("Handover marker is not readable JSON (%s: %s) - "
+                       "falling back to the configured brake axis.",
+                       type(exc).__name__, exc)
+        return []
+
+    allowed = [command for command in commands
+               if _ALLOWED_COMMAND.match(command)]
+    for command in commands:
+        if command not in allowed:
+            logger.warning("Ignoring an unexpected marker command: %r", command)
+    return allowed
 
 
 def read_brake_axis(settings_path: str) -> int:
@@ -170,9 +215,15 @@ def _mst_packet(command: str) -> bytes:
                             command.encode('latin-1')[:63])
 
 
-def hand_back(axis: int) -> bool:
-    """Point LFS's brake at *axis*. Returns False if LFS could not be reached."""
-    command = f"/axis {axis} brake"
+def hand_back(commands) -> bool:
+    """Send every *command* to LFS. False if LFS could not be reached.
+
+    One connection for all of them: the handshake pause is the expensive part,
+    and the driver is sitting in a car that is braking by itself while this
+    runs.
+    """
+    if not commands:
+        return False
     try:
         with socket.create_connection((INSIM_HOST, INSIM_PORT),
                                       timeout=CONNECT_TIMEOUT_S) as sock:
@@ -180,19 +231,21 @@ def hand_back(axis: int) -> bool:
             # LFS needs the handshake processed before it will act on a
             # command; a short pause is cheaper than parsing the version reply.
             time.sleep(0.3)
-            sock.sendall(_mst_packet(command))
+            for command in commands:
+                sock.sendall(_mst_packet(command))
+                time.sleep(0.05)
             time.sleep(0.3)
     except OSError as exc:
         logger.info("LFS is not reachable (%s: %s) - nothing to hand back to.",
                     type(exc).__name__, exc)
         return False
-    logger.info("Handed the brake back: %s", command)
+    logger.info("Handed control back: %s", ', '.join(commands))
     return True
 
 
 def watch(pid: int, settings_path: str, marker_path: str,
           poll_interval: float = POLL_INTERVAL_S, sleep=time.sleep) -> bool:
-    """Wait for *pid* to disappear, then hand the brake back if it was held.
+    """Wait for *pid* to disappear, then replay the marker if there is one.
 
     Returns whether a handback was sent and reached LFS. Split from
     :func:`main` so the whole sequence is testable without spawning anything.
@@ -202,15 +255,17 @@ def watch(pid: int, settings_path: str, marker_path: str,
         sleep(poll_interval)
     logger.info("PID %d is gone.", pid)
 
-    marked = read_marker(marker_path)
-    if marked is None:
-        logger.info("No handover marker - the brake was not ours, so there is "
+    commands = read_marker(marker_path)
+    if commands is None:
+        logger.info("No handover marker - nothing was ours, so there is "
                     "nothing to restore.")
         return False
 
-    axis = marked if marked >= 0 else read_brake_axis(settings_path)
-    logger.warning("The main app died holding the brake axis. Restoring it.")
-    handed_back = hand_back(axis)
+    if not commands:
+        commands = [f"/axis {read_brake_axis(settings_path)} brake"]
+    logger.warning("The main app died mid-intervention. Restoring: %s",
+                   ', '.join(commands))
+    handed_back = hand_back(commands)
     if handed_back:
         try:
             os.remove(marker_path)

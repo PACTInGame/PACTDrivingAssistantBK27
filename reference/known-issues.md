@@ -11,6 +11,15 @@ discover. Do not log one-off bugs that were fixed in the same session.
 
 ## Robustness
 
+**IS_CON decoder is still pre-v10.** `pyinsim/insim.py:IS_CON` expects a 40-byte
+packet and 16-bit time, while the advertised InSim v10 sends 44 bytes with SpW
+and a 32-bit millisecond timestamp. `CarContact` also has incorrect signedness
+for pedal/angle/speed and acceleration bytes. The standalone observer uses its
+own corrected decoder in `simulations-tests/harness/protocol.py`; the add-on's
+shared decoder remains unfixed (it currently does not subscribe to CON).
+Other legacy decoder layouts such as IS_RIP should be checked before enabling
+new consumers. Source: https://www.lfs.net/programmer/insim.
+
 **#3 — Dead events.** `assistance_results`, `outsim_data` and `player_data_updated` are
 emitted every cycle (or every packet) with no subscribers. `outsim_data` in particular
 means the whole OutSim pipeline runs for nothing.

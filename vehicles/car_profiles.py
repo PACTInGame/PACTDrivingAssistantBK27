@@ -264,7 +264,7 @@ class CarProfile:
 
         Cached against a version counter, because the gearbox asks once per
         assistance cycle and sorting 200 samples for an answer that has not
-        changed is exactly the kind of per-cycle work `CLAUDE.md` §1 forbids.
+        changed is exactly the kind of per-cycle work `AGENTS.md` §1 forbids.
         New samples only arrive while the car stands still -- that is, never
         while the answer is being used to shift.
         """

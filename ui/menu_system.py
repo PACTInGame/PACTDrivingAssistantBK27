@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 # Schrittweite der HUD-Pfeile im Systemmenue.
 HUD_STEP = 2
 
+# ``automatic_emergency_brake``: 0 = aus, 1 = nur warnen, 2 = warnen und
+# bremsen. Spiegelt ``assistance.emergency_brake.AEB_MODE_BRAKE``; importiert
+# wird es nicht, damit die UI nicht am Assistenzpaket haengt.
+AEB_MODE_BRAKE = 2
+
 # Der schwebende Oeffner und der Schliessen-Button gehoeren keinem Menue,
 # sondern allen (reference/ui.md §2).
 BTN_OPEN_MENU = 20
@@ -20,6 +25,40 @@ BTN_CLOSE = 40
 
 # Eine Button-Zeile: (id, links, oben, breit, hoch, text, stil)
 Button = Tuple[int, int, int, int, int, str, int]
+
+# Warum der Notbremseingriff gerade nicht scharf ist, in der Sprache des
+# Fahrers. Die Schluessel sind die internen Gruende aus
+# ``Controls/brake_axis.py`` und ``Controls/brake_key.py``; alles, was hier
+# fehlt, faellt auf den allgemeinen Text zurueck - eine unbekannte Ursache
+# darf die Zeile nicht verschwinden lassen, sondern nur weniger genau machen.
+AEB_REASON_TEXTS = {
+    'vjoy_not_installed': "vJoy is not installed",
+    'vjoy_driver_disabled': "vJoy is not ready",
+    'vjoy_device_not_configured': "vJoy is not ready",
+    'vjoy_device_busy': "vJoy is not ready",
+    'vjoy_axis_not_enabled': "vJoy is not ready",
+    'vjoy_query_failed': "vJoy is not ready",
+    'vjoy_not_calibrated': "vJoy brake axis not calibrated",
+    'vjoy_and_driver_axis_identical': "vJoy brake axis not calibrated",
+    'no_physical_key_tracking': "Key tracking unavailable",
+    'pyautogui_missing': "Key tracking unavailable",
+    'key_not_bindable_in_lfs': "Brake key cannot be used",
+    'binding_not_pushed': "Brake key cannot be used",
+}
+
+# Why the throttle is not taken away during an intervention. Separate from the
+# table above on purpose: braking can be perfectly armed while the throttle cut
+# is not, and the two say very different things to the driver.
+THROTTLE_REASON_TEXTS = {
+    'throttle_axis_not_verified': "Measuring the throttle axis",
+    'throttle_pedal_not_confirmed': "Measuring the throttle axis",
+    'throttle_axis_unknown': "Throttle axis not found",
+    'throttle_axis_out_of_range': "Throttle axis not found",
+    'throttle_and_brake_axis_identical': "Throttle axis not found",
+    'throttle_restore_failed': "Throttle axis not found",
+    'throttle_key_not_bindable_in_lfs': "Throttle key cannot be used",
+    'throttle_binding_not_pushed': "Throttle key cannot be used",
+}
 
 
 class MenuSystem:
@@ -57,6 +96,12 @@ class MenuSystem:
         # Zuletzt aktiver PDC-Modus, damit der Ein/Aus-Schalter die Wahl
         # zwischen 'Visual' und 'Visual & Audio' nicht vergisst.
         self._last_pdc_mode = self.settings.get('park_distance_control_mode') or 1
+        # Warum der Bremseingriff nicht scharf ist, oder None wenn er es ist.
+        # Kommt aus ``EmergencyBrake``; ohne diese Zeile war "eingeschaltet"
+        # und "wirkt auch" im Menue nicht zu unterscheiden.
+        self._aeb_reason = None
+        # Und warum das Gas waehrend eines Eingriffs nicht weggenommen wird.
+        self._throttle_reason = None
 
         self._painters: Dict[str, Callable[[], None]] = {
             'main': self.open_main_menu,
@@ -75,6 +120,10 @@ class MenuSystem:
         self.ui_manager.event_bus.subscribe('new_keybinding', self._rebind_key)
         self.ui_manager.event_bus.subscribe('ai_traffic_state_changed', self._on_ai_traffic_state_changed)
         self.ui_manager.event_bus.subscribe('buttons_cleared', self._on_buttons_cleared)
+        self.ui_manager.event_bus.subscribe('emergency_brake_availability',
+                                            self._on_aeb_availability)
+        self.ui_manager.event_bus.subscribe('throttle_cut_availability',
+                                            self._on_throttle_availability)
 
     # ─── Sprache ──────────────────────────────────────────────────────
 
@@ -93,6 +142,29 @@ class MenuSystem:
         """Callback from AIDriver when traffic state changes."""
         self.ai_traffic_active = data.get('active', False)
         self.ai_traffic_confirm_pending = False
+
+    def _on_aeb_availability(self, data):
+        """Der Bremseingriff meldet, ob er scharf ist (oder warum nicht).
+
+        Nur bei Aenderung neu zeichnen, und nur wenn das Fahrmenue offen ist:
+        das Event kommt aus dem Assistenz-Thread, ein Repaint pro Zyklus waere
+        ein Button-Sturm.
+        """
+        reason = data.get('reason') if isinstance(data, dict) else None
+        if reason == self._aeb_reason:
+            return
+        self._aeb_reason = reason
+        if self.current_menu == 'driving':
+            self.open_driving_menu()
+
+    def _on_throttle_availability(self, data):
+        """Whether an intervention will also close the throttle."""
+        reason = data.get('reason') if isinstance(data, dict) else None
+        if reason == self._throttle_reason:
+            return
+        self._throttle_reason = reason
+        if self.current_menu in ('driving', 'keys'):
+            self._repaint_current_menu()
 
     def _on_buttons_cleared(self, data=None):
         """SHIFT+B: LFS hat unsere Buttons geworfen (reference/ui.md §1.5)
@@ -220,12 +292,26 @@ class MenuSystem:
         ctw_distance = self.settings.get('cross_traffic_warning_distance')
         ctw_distance_text = "^2" + self.translator.get("Early", lang) if ctw_distance == 0 else "^3" + self.translator.get("Medium", lang) if ctw_distance == 1 else "^1" + self.translator.get("Late", lang)
 
-        return [
+        # Der Bremseingriff steht neben der Distanz, weil er zur selben
+        # Warnung gehoert: dieselbe Erkennung, nur eine andere Konsequenz.
+        # Rot heisst hier nicht "aus", sondern "gewaehlt, aber nicht scharf" -
+        # genau der Zustand, den man vorher nur im Log sehen konnte.
+        aeb_on = self.settings.get('automatic_emergency_brake') == AEB_MODE_BRAKE
+        if not aeb_on:
+            aeb_text = "^3" + self.translator.get("Warn only", lang)
+        elif self._aeb_reason is None:
+            aeb_text = "^2" + self.translator.get("Warn & Brake", lang)
+        else:
+            aeb_text = "^1" + self.translator.get("Warn & Brake", lang)
+
+        buttons = [
             (21, 0, 70, 25, 5, self.translator.get("Driving Settings", lang),
              pyinsim.ISB_LIGHT),
             (22, 0, 75, 25, 5, fcw + self.translator.get("Collision Warning", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (23, 25, 75, 15, 5, distance_text,
+             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
+            (32, 40, 75, 25, 5, aeb_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (24, 0, 80, 25, 5, bsw + self.translator.get("Blind Spot Warn.", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
@@ -246,6 +332,23 @@ class MenuSystem:
             (BTN_CLOSE, 0, 110, 25, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
+
+        # Die Begruendung haengt *unter* dem Menue statt in der Zeile, damit
+        # sie keine der festen Zeilen verschiebt, wenn sie erscheint oder
+        # verschwindet.
+        if aeb_on and self._aeb_reason is not None:
+            detail = self.translator.get(
+                AEB_REASON_TEXTS.get(self._aeb_reason, "Braking unavailable"),
+                lang)
+            buttons.append((33, 0, 115, 65, 5, "^1" + detail, pyinsim.ISB_LIGHT))
+        elif aeb_on and self._throttle_reason is not None:
+            # Only when braking itself is fine: two red lines about the same
+            # feature would bury the one that matters.
+            detail = self.translator.get(
+                THROTTLE_REASON_TEXTS.get(self._throttle_reason,
+                                          "Throttle axis not checked"), lang)
+            buttons.append((33, 0, 115, 65, 5, "^3" + detail, pyinsim.ISB_LIGHT))
+        return buttons
 
     def open_driving_menu(self):
         """Öffnet das Fahrer-Menü"""
@@ -384,12 +487,22 @@ class MenuSystem:
     # ─── Keys and Axes Menu ───────────────────────────────────────────
 
     # Button-ID → Einstellung, in genau der Reihenfolge der gezeichneten Zeilen.
+    # Belegte Taste und ihre Anzeige liegen 10 IDs auseinander (22-28 -> 32-38).
+    # Vorher waren es 5, was mit sieben Eintraegen kollidiert waere: die
+    # Anzeige des ersten haette die Schaltflaeche des sechsten ueberdeckt.
+    KEY_DISPLAY_OFFSET = 10
+
     KEY_BINDINGS = (
         (22, 'user_handbrake_key', "Handbrake Key"),
         (23, 'user_shift_up_key', "Shift Up Key"),
         (24, 'user_shift_down_key', "Shift Down Key"),
         (25, 'user_clutch_key', "Clutch Key"),
         (26, 'user_ignition_key', "Ignition Key"),
+        # Diese beiden schreibt die App selbst nach LFS (``/key <taste>
+        # brake`` / ``throttle``), damit Notbremsung und Gaswegnahme sich auf
+        # eine Belegung verlassen koennen, die sie geschrieben haben.
+        (27, 'user_brake_key', "Brake Key"),
+        (28, 'user_throttle_key', "Throttle Key"),
     )
 
     def _buttons_keys(self) -> List[Button]:
@@ -402,11 +515,13 @@ class MenuSystem:
             top = 80 + index * 5
             buttons.append((button_id, 0, top, 20, 5, self.translator.get(label, lang),
                             pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
-            # Die Anzeige der belegten Taste liegt 5 IDs hoeher (27–31).
             key = self.settings.get(setting) or ''
-            buttons.append((button_id + 5, 20, top, 5, 5, f"{str(key).upper()}",
-                            pyinsim.ISB_LIGHT))
-        buttons.append((BTN_CLOSE, 0, 105, 25, 5, "^1" + self.translator.get("Close", lang),
+            buttons.append((button_id + self.KEY_DISPLAY_OFFSET, 20, top, 5, 5,
+                            f"{str(key).upper()}", pyinsim.ISB_LIGHT))
+
+        top = 80 + len(self.KEY_BINDINGS) * 5
+        buttons.append((BTN_CLOSE, 0, top, 25, 5,
+                        "^1" + self.translator.get("Close", lang),
                         pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
         return buttons
 
@@ -547,6 +662,9 @@ class MenuSystem:
                 29: lambda: self._toggle('high_beam_assist', driving),
                 30: self._calibrate_gearbox,
                 31: lambda: self._cycle('cross_traffic_warning_distance', (0, 1, 2), driving),
+                # Nur zwischen 1 und 2: "aus" ist der Schalter der
+                # Kollisionswarnung selbst (Button 22), nicht dieser hier.
+                32: lambda: self._cycle('automatic_emergency_brake', (1, 2), driving),
             },
             'parking': {
                 22: self._toggle_pdc,

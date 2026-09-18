@@ -13,7 +13,7 @@ Both are fixed here: one fresh object per attempt, and the asyncore loop is
 pumped in slices against a deadline instead of being entered open-endedly.
 ``asyncore`` is used directly for that -- ``pyinsim.run()`` has no bounded
 form, and giving it one would change the transport every other module relies
-on (``CLAUDE.md`` §2).
+on (``AGENTS.md`` §2).
 """
 
 import asyncore

@@ -16,6 +16,7 @@ env/
 # Runtime state — machine-specific, must not be committed
 settings.json
 .setup_done
+brake_axis_held.marker
 data/gearbox_calibrations.json
 # Gelernte Fahrzeugprofile - Messwerte des jeweiligen Rechners, kein Quelltext.
 data/car_profiles.json
