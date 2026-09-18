@@ -163,6 +163,46 @@ def read_recording(path: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     return meta, events
 
 
+def check_recording(events: Iterable[Dict[str, Any]]) -> List[str]:
+    """Reasons this recording is unsafe or unusable to replay. Empty list = fine.
+
+    The one that matters is a **key or button still held at the end**: replaying
+    it hands the car back to the driver with the throttle down. The recorder
+    itself cannot always prevent it -- the stop key can be pressed while another
+    key is held -- so the check lives here, on the file, and the replay's
+    pre-flight refuses to run until it is either re-recorded or ``--force``d.
+    """
+    problems: List[str] = []
+    held: Dict[Any, float] = {}
+    previous = 0.0
+    for event in sorted(events, key=lambda e: e["t"]):
+        t = event["t"]
+        if t < 0:
+            problems.append(f"event at t={t:.3f} has a negative timestamp")
+        previous = max(previous, t)
+        kind = event.get("kind")
+        if kind == KIND_KEY:
+            identity = ("key", event.get("vk") if event.get("vk") is not None
+                        else event.get("name"))
+            label = event.get("name") or vk_label(event.get("vk"))
+        elif kind == KIND_CLICK:
+            identity = ("click", event.get("button"))
+            label = f"{event.get('button')} button"
+        else:
+            continue
+        if event.get("action") == "down":
+            held.setdefault(identity, t)   # a repeated down is OS auto-repeat
+        elif held.pop(identity, None) is None:
+            problems.append(
+                f"{label} is released at t={t:.3f} without ever being pressed -- "
+                "the recording started with it already down")
+    for (_kind, _code), t in sorted(held.items(), key=lambda item: item[1]):
+        problems.append(
+            f"still held when the recording ends: pressed at t={t:.3f} and never "
+            "released -- replaying this leaves the input down")
+    return problems
+
+
 def markers(events: Iterable[Dict[str, Any]]) -> List[Tuple[float, str]]:
     """``(time, name)`` of every marker in the stream."""
     return [(e["t"], e.get("name", "")) for e in events if e.get("kind") == KIND_MARKER]

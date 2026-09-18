@@ -70,12 +70,31 @@ Useful flags:
 --no-wait-menu        start regardless of where LFS is
 --force               run even though pre-flight complained
 --tail 5              keep tracing 5 s after the replay
+--require OutGauge    exit 7 if that stream never arrived (repeatable)
+--strict-timing       abort if an event is dispatched >0.25 s past its deadline
 ```
+
+### A run that completed is not a run that passed
+
+`run.json` always says `"functional_verdict": "not_evaluated"`. Nothing in this
+harness can decide whether the *add-on* behaved — that is what the scenario's
+`timeline.md` and a reading of the trace are for. Two traps it does guard:
+
+- **Missing telemetry is not a zero reading.** A capture with no OutGauge looks
+  exactly like "the brake never moved". `--require OutGauge --require MCI` on any
+  driving scenario turns that into exit code 7.
+- **A warning-only feature is not proven by the trace.** MCI and OutGauge show
+  that the situation happened, not that the HUD or the beeper fired. That still
+  needs a human, or a diagnostic output the add-on does not have yet.
+
+Exit codes: `0` ok · `2` bad arguments · `3` pre-flight refused · `4` tracer did
+not start · `5` LFS not at the main menu · `6` replay aborted · `7` required
+telemetry missing.
 
 ### Safety
 
-Replaying injects global keyboard and mouse input. Three guards, all on by
-default:
+Replaying injects global keyboard and mouse input. Three guards run during the
+replay, all on by default:
 
 - **Abort key: `Pause`.** Stops the replay immediately, anywhere.
 - **Focus guard.** The replay refuses to start unless LFS is the foreground
@@ -85,8 +104,22 @@ default:
   on every exit path, including an abort or a crash. An aborted run never leaves
   the car accelerating.
 
-A recording is tied to the screen resolution it was made at, because menu clicks
-are absolute screen coordinates. Pre-flight says so before wasting a run.
+Pre-flight refuses the run, before injecting anything, when:
+
+- the **recording itself leaves a key or button down** — replaying it would hand
+  the car back with the throttle held;
+- the **screen size or the LFS window rect** differs from the recording: menu
+  clicks are absolute screen coordinates, so a moved or resized LFS misses every
+  one of them;
+- **you are holding a key** as the countdown ends — the replay would fight you
+  for the whole run, and release-on-exit will not let go of a key it never
+  pressed;
+- LFS is not running, not in the foreground, or pynput is unusable.
+
+`--force` runs anyway. The replay also records how late each event was actually
+dispatched (`lateness_max_s`, `lateness_over_budget` in `run.json`): a trace that
+disagrees with its timeline by less than that is a scheduling artefact, not a
+behaviour change.
 
 ## 4. Recording a new scenario
 
@@ -95,8 +128,12 @@ python simulation_tests/record_scenario.py 11_my_scenario --description "..."
 ```
 
 1. A countdown gives you time to alt-tab into LFS. **Start at the main menu.**
-2. Everything is recorded: the mouse position on a 50 ms grid, keys and clicks
-   with their real timestamps.
+2. Everything you do is recorded: the mouse position on a 50 ms grid, keys and
+   clicks with their real timestamps. Two things are filtered out — **input the
+   add-on injected itself** (its emergency-brake and light keypresses look
+   identical to yours in the hook; recording them would bake one run's reaction
+   into the next run's stimulus) and **key auto-repeat** (one press is recorded,
+   the replay holds the key).
 3. Press **Scroll Lock** whenever something noteworthy happens — that drops a
    named marker. If the scenario directory already has a `scenario.json` with a
    `markers` list, the markers are named from it, in order.
@@ -281,11 +318,14 @@ simulation_tests/
     insim_trace.py       the standalone tracer -- copy it into _temp/ to modify
     analyze_trace.py     summary, timeline, signal extraction, CSV
 
+    udp_relay.py         optional cfg.txt UDP fan-out -- see §11, rarely needed
+
     config.py            ports, rates, defaults
     paths.py             directory layout
     scenario.py          scenario.json
     trace_format.py      the trace record format and its writer
     packet_dump.py       packet -> dict, with SI conversions and flag names
+    insim_patch.py       corrected IS_CON decoder, tracer-process only
     input_model.py       the recorded input format and key naming
     recorder.py          input capture
     player.py            input replay
@@ -314,3 +354,47 @@ drives the real tracer against a fake LFS (`tests/fake_lfs.py`).
 | `LFS is not the foreground window` | alt-tab into LFS during the countdown, or raise `--countdown` |
 | clicks land in the wrong place | the recording was made at another resolution; re-record |
 | `no 'end' record` | the tracer was killed; the trace may be missing its tail |
+| `required telemetry missing` (exit 7) | a `--require`d stream never arrived — the capture is inconclusive, not a finding |
+| pre-flight: "still held when the recording ends" | the recording was stopped while a key was down; re-record it |
+| pre-flight: "the LFS window moved or resized" | put LFS back where it was, or re-record |
+
+## 11. If a driving trace has no OutGauge: `udp_relay.py`
+
+**Normally you never need this.** The tracer asks LFS for its own OutGauge/OutSim
+stream over its own InSim connection (`SMALL_SSG` / `SMALL_SSP`), which is a
+per-connection setting, so it does not compete with the add-on's cfg.txt streams
+on 30000/29998.
+
+If that turns out not to hold on the installed LFS version — a driving trace with
+no `OutGauge` records while the add-on's gauges are clearly live — `udp_relay.py`
+is the fallback. It needs a one-time cfg.txt port change (with LFS closed) and a
+relay process that forwards every datagram unchanged to *both* consumers:
+
+```
+python simulation_tests/udp_relay.py
+```
+
+The module docstring has the exact ports, the ordering (relay before LFS) and the
+restore procedure. **The relay has to stay running while that cfg.txt is in
+place**, including outside tests — otherwise the add-on gets no OutGauge and every
+assistance system silently does nothing.
+
+Never instead bind a second listener to 30000/29998 and hope both processes see
+every packet. One of them will miss datagrams, unpredictably.
+
+## 12. `insim_patch.py` — why the tracer decodes IS_CON itself
+
+`pyinsim` is the add-on's protocol library and is not modified from here.
+Its `IS_CON` expects the 40-byte layout and unpacks `CarContact` with the
+signedness inverted, so on an LFS that sends the 44-byte layout the decode raises
+*inside the asyncore loop* and the tracer loses its InSim connection mid-scenario.
+
+`insim_patch.apply()` installs a corrected `IS_CON` into the **tracer process's
+own** packet map — the tracer is a separate process, so this can never reach a
+running add-on. It picks the layout by `Size` (both are decoded, and the trace
+records which one arrived as `con_layout`) and reads the pedal nibbles, speed and
+angle bytes as unsigned and the two accelerations as signed.
+
+The add-on's own decoder is still uncorrected; it does not subscribe to CON today,
+so nothing is broken, but anything that starts consuming CON must port this first
+(`reference/known-issues.md`).

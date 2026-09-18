@@ -1,18 +1,13 @@
 # Testing
 
-**Status: offline test harness in place; standalone live scenario tooling is in
-`simulations-tests/` (record/replay/monitor). Real scenarios must be recorded and
-validated manually before use.** See `../simulations-tests/README.md` for commands,
-trace timing, port separation and the distinction between completed execution and
-a functional pass. Baseline scenarios are immutable during AI testing; adapt only
-monitor copies under `simulations-tests/_temp/`. The tools share only pyinsim and
-the lazy platform loader, not running application components. Offline harness
-regressions live in `tests/test_simulation_harness.py` and perform no input/network I/O.
-When cfg.txt UDP streams cannot be duplicated through InSim, the optional standalone
-`simulations-tests/udp_relay.py` forwards unchanged packets to both consumers; run
-the observer with `--cfg-streams`. See its README for the explicit one-time LFS
-configuration and restore procedure. Never bind a second listener to the add-on's
-30000/29998 ports and assume both processes will receive every packet.
+**Two layers. Offline (`tests/`) runs anywhere without LFS; the in-game layer is
+`simulation_tests/`, the single live harness — record a scenario once, replay it,
+read the trace.** Full usage: `../simulation_tests/README.md`. Scenarios are fixed
+references and are never edited to make a test pass; to measure something else,
+copy the tracer into `simulation_tests/_temp/`. The harness shares only `pyinsim`
+with the add-on and nothing else — no EventBus, no settings, no assistance system.
+Its own regressions live in `tests/test_simulation_tests.py` and open no sockets
+and press no keys.
 `python -m pytest` from the project root runs the suite on
 Linux, Windows or macOS with only `requirements-dev.txt` installed (`pytest`, `psutil`,
 `shapely`, `numpy`). No LFS, no display, no sound device, no socket.
@@ -308,14 +303,6 @@ is worth preferring wherever it fits:
   caches dropped each cycle is the pre-optimisation behaviour, and the assertion is on
   the ratio. Any absolute number stays as a loose ceiling with a comment saying why.
 
-## Live harness variants
-
-Two independently developed tools are currently retained: `simulations-tests/`
-(the record/replay tool described at the top of this document) and
-`simulation_tests/` (the separately developed harness described below). They use
-different commands and artifact formats; do not mix their recordings, monitors or
-port settings. Both still require real recordings and live validation.
-
 ## In-game tests: `simulation_tests/`
 
 Everything above runs without LFS. The other half — does this actually behave in the
@@ -343,10 +330,33 @@ What matters when working on the add-on:
 - To measure something the base tracer does not log, **copy `insim_trace.py` into
   `_temp/`** and run `run_scenario.py <scenario> --tracer _temp/<copy>.py`. The
   scenarios themselves are fixed references and are not edited.
+- **A run that completed is not a run that passed.** `run.json` carries
+  `functional_verdict: not_evaluated` and always will: nothing here can decide
+  whether the add-on behaved. Reading the trace against the scenario's
+  `timeline.md` is what decides that. **Missing telemetry is not a zero reading** —
+  `--require OutGauge --require MCI` makes an empty capture exit non-zero (7)
+  instead of looking like "the brake never moved".
+- **A warning-only feature is not proven by the trace.** MCI and OutGauge show that
+  the *situation* occurred; they do not show that the HUD or the beeper fired.
+  That still needs a human, or a diagnostic output the add-on does not have yet.
+- The replay records how late each event was dispatched (`lateness_max_s` in
+  `run.json`). A trace that disagrees with its timeline by less than that is a
+  scheduling artefact, not a behaviour change; `--strict-timing` aborts instead.
 
 Scenarios ship without their `input.jsonl`: a recording is screen-resolution specific
 and has to be made once on the machine that runs the tests. Each scenario's
 `timeline.md` carries the step-by-step recording guide.
+
+### If a driving trace has no OutGauge
+
+The tracer asks LFS for its **own** OutGauge/OutSim stream over its own InSim
+connection (`SMALL_SSG` / `SMALL_SSP`, UDP 30011), which is a per-connection
+setting, so it does not compete with the add-on's cfg.txt streams on 30000/29998.
+If that turns out not to hold on an installed LFS version, `simulation_tests/udp_relay.py`
+is the fallback: a one-time cfg.txt port change plus a relay that forwards every
+datagram unchanged to both consumers. Its module docstring has the exact procedure
+and the restore steps. **Never** bind a second listener to 30000/29998 and assume
+both processes receive every packet — one of them will silently miss datagrams.
 
 ## Manual checks until covered by a validated live scenario
 

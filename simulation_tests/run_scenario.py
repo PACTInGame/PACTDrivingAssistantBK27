@@ -101,12 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--on-focus-loss", choices=("abort", "pause", "ignore"),
                         default="abort")
     parser.add_argument("--no-focus-check", action="store_true")
+    parser.add_argument("--strict-timing", action="store_true",
+                        help=f"abort if an event is dispatched more than "
+                             f"{player_mod.Player.LATE_BUDGET_S:g} s past its deadline")
     parser.add_argument("--no-wait-menu", action="store_true",
                         help="do not wait for the LFS main menu before replaying")
     parser.add_argument("--force", action="store_true",
                         help="run even though pre-flight found problems")
     parser.add_argument("--tail", type=float, default=None,
                         help="override the scenario's post-replay trace tail, in seconds")
+    parser.add_argument("--require", action="append", default=[], metavar="EVENT",
+                        help="fail the run if this trace event never arrived, e.g. "
+                             "--require OutGauge --require MCI. Repeatable.")
     parser.add_argument("--no-summary", action="store_true",
                         help="do not print the trace summary at the end")
     return parser
@@ -168,6 +174,11 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
         "speed": args.speed,
         "input_events": len(events),
         "input_duration_s": round(input_model.duration(events), 3),
+        "required_events": list(args.require),
+        # A run that finished is not a run that passed. Nothing in this harness
+        # can decide whether the *add-on* behaved: that is the timeline's job and
+        # a human's or an agent's reading of the trace.
+        "functional_verdict": "not_evaluated",
     }
     exit_code = 0
     control = ControlClient(args.control_port)
@@ -202,6 +213,7 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
             on_focus_loss=args.on_focus_loss,
             abort_key=args.abort_key,
             control=control,
+            strict_timing=args.strict_timing,
         )
         problems = play.preflight()
         result["preflight"] = problems
@@ -228,6 +240,12 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
                            trace_path=trace_path, scenario_path=scenario_path)
         control.marker("scenario_end", aborted=replay_result["aborted"])
         result["replay"] = replay_result
+        if replay_result["lateness_over_budget"]:
+            # The input landed later in the game than the timeline says. Say so
+            # before anyone reads the trace as a behaviour change.
+            print(f"warning: {replay_result['lateness_over_budget']} event(s) dispatched "
+                  f"more than {replay_result['lateness_budget_s']:g} s late "
+                  f"(worst {replay_result['lateness_max_s']:.3f} s)", file=sys.stderr)
         if replay_result["aborted"]:
             print(f"replay aborted: {replay_result['abort_reason']}", file=sys.stderr)
             exit_code = 6
@@ -238,6 +256,14 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
         result["tail_s"] = tail
         result["state_after"] = control.state() or {}
         result["tracer_stats"] = control.request("stats") or {}
+        counts = (result["tracer_stats"].get("counts") or {})
+        missing = [name for name in args.require if not counts.get(name)]
+        if missing:
+            # Missing telemetry is not a zero reading. Say so with an exit code,
+            # or an agent reads "the brake never moved" out of an empty capture.
+            print(f"required telemetry missing: {', '.join(missing)}", file=sys.stderr)
+            result["missing_required"] = missing
+            exit_code = exit_code or 7
         return _finish(process, control, tracer_log, run_dir, result, exit_code,
                        trace_path=trace_path, scenario_path=scenario_path,
                        print_summary=not args.no_summary)

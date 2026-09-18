@@ -57,6 +57,11 @@ class Player:
     SPIN_THRESHOLD_S = 0.002
     #: Longest single sleep while waiting for the next event.
     SLEEP_CHUNK_S = 0.005
+    #: An event dispatched more than this far past its deadline is counted and,
+    #: with ``strict_timing``, aborts the run. 0.25 s is roughly the point where
+    #: an LFS menu click lands on the wrong page and the rest of the scenario is
+    #: meaningless anyway.
+    LATE_BUDGET_S = 0.25
 
     def __init__(self, meta: Dict[str, Any], events: List[Dict[str, Any]], *,
                  speed: float = 1.0,
@@ -66,6 +71,7 @@ class Player:
                  control: Any = None,
                  on_event: Optional[Callable[[Dict[str, Any]], None]] = None,
                  lfs_match: str = config.LFS_WINDOW_MATCH,
+                 strict_timing: bool = False,
                  clock: Callable[[], float] = time.perf_counter):
         if speed <= 0:
             raise ValueError("speed must be > 0")
@@ -78,7 +84,11 @@ class Player:
         self.control = control
         self.on_event = on_event
         self.lfs_match = lfs_match
+        self.strict_timing = strict_timing
         self._clock = clock
+        self._late_max = 0.0
+        self._late_total = 0.0
+        self._late_over_budget = 0
         self._abort = threading.Event()
         self._abort_reason = ""
         self._t0 = 0.0
@@ -92,6 +102,9 @@ class Player:
     def preflight(self) -> List[str]:
         """Reasons this replay is likely to misfire. Empty list = good to go."""
         problems: List[str] = []
+        # The recording itself first: a stream that leaves a key down is a
+        # danger regardless of which machine replays it.
+        problems.extend(input_model.check_recording(self.events))
         try:
             import_pynput()
         except ReplayUnavailable as exc:
@@ -104,10 +117,26 @@ class Player:
                 "menu clicks are absolute screen coordinates and will miss")
         if current is None:
             problems.append("not running on Windows: input replay cannot drive LFS here")
-        elif not win_focus.find_windows(self.lfs_match):
+            return problems
+        window = win_focus.lfs_window(self.lfs_match)
+        if window is None:
             problems.append(f"no window matching {self.lfs_match!r} -- is LFS running?")
-        elif self.require_focus and win_focus.is_foreground(self.lfs_match) is not True:
+            return problems
+        if self.require_focus and win_focus.is_foreground(self.lfs_match) is not True:
             problems.append("LFS is not the foreground window")
+        # The screen can be the same size while LFS sits somewhere else on it:
+        # a windowed LFS that moved invalidates every recorded click just as
+        # thoroughly as a resolution change does.
+        recorded_window = self.meta.get("lfs_window") or {}
+        recorded_rect = recorded_window.get("rect")
+        if recorded_rect and window.get("rect") and                 list(recorded_rect) != list(window["rect"]):
+            problems.append(
+                f"the LFS window moved or resized: recorded {tuple(recorded_rect)}, "
+                f"now {tuple(window['rect'])} -- clicks are absolute screen "
+                "coordinates and will miss")
+        if win_focus.any_key_physically_down():
+            problems.append("a key or mouse button is being held down -- release "
+                            "everything before the replay starts")
         return problems
 
     # -- playback -----------------------------------------------------------
@@ -123,6 +152,9 @@ class Player:
 
         applied = 0
         markers_sent = 0
+        self._late_max = 0.0
+        self._late_total = 0.0
+        self._late_over_budget = 0
         self._abort.clear()
         self._abort_reason = ""
         self._paused_total = 0.0
@@ -133,6 +165,7 @@ class Player:
                 self._t0 = self._clock()
                 for event in self.events:
                     self._wait_until(event["t"])
+                    self._record_lateness(event["t"])
                     self._apply(event, keyboard_controller, mouse_controller)
                     applied += 1
                     if event.get("kind") == input_model.KIND_MARKER:
@@ -160,6 +193,14 @@ class Player:
             "paused_s": round(self._paused_total, 3),
             "wall_duration_s": round(time.time() - started, 3),
             "speed": self.speed,
+            # How well the schedule actually held. A late event does not shift
+            # the rest (deadlines are absolute), but it does mean the input
+            # landed later in the game than the timeline says, so a trace that
+            # disagrees with its timeline by this much is not a finding.
+            "lateness_max_s": round(self._late_max, 4),
+            "lateness_mean_s": round(self._late_total / applied, 4) if applied else 0.0,
+            "lateness_over_budget": self._late_over_budget,
+            "lateness_budget_s": self.LATE_BUDGET_S,
         }
 
     def abort(self, reason: str = "aborted") -> None:
@@ -194,6 +235,17 @@ class Player:
                     pass
                 return
             time.sleep(min(self.SLEEP_CHUNK_S, remaining - self.SPIN_THRESHOLD_S))
+
+    def _record_lateness(self, event_time: float) -> None:
+        """How far past its deadline this event is actually being dispatched."""
+        late = max(0.0, self._clock() - self._deadline(event_time))
+        self._late_total += late
+        self._late_max = max(self._late_max, late)
+        if late > self.LATE_BUDGET_S:
+            self._late_over_budget += 1
+            if self.strict_timing:
+                self.abort(f"event at t={event_time:.3f} dispatched {late:.3f} s late")
+                raise ReplayAbort(self._abort_reason)
 
     def _check_abort(self) -> None:
         if self._abort.is_set():

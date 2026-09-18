@@ -83,6 +83,20 @@ def window_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
     return (rect.left, rect.top, rect.right, rect.bottom)
 
 
+def any_key_physically_down() -> Optional[bool]:
+    """Is the human holding a key or mouse button right now? None off Windows.
+
+    A replay that starts while the driver still has a key down fights them for
+    the whole run, and the release-everything cleanup will not release it (the
+    replay never pressed it). Worth refusing before injecting anything.
+    """
+    if not IS_WINDOWS:  # pragma: no cover
+        return None
+    # 0x01..0xFE covers mouse buttons and every virtual key; the high bit of
+    # GetAsyncKeyState is "currently down".
+    return any(_user32.GetAsyncKeyState(vk) & 0x8000 for vk in range(1, 255))
+
+
 def lfs_window(match: str) -> Optional[dict]:
     """First LFS window with its rect, or None if not found / not Windows."""
     for hwnd, title in find_windows(match):

@@ -29,13 +29,17 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from simulation_tests import config, packet_dump, paths  # noqa: E402
+from simulation_tests import config, insim_patch, packet_dump, paths  # noqa: E402
 from simulation_tests.control_channel import ControlServer  # noqa: E402
 from simulation_tests.trace_format import (SRC_INSIM, SRC_MARKER, SRC_OUTGAUGE,  # noqa: E402
                                            SRC_OUTSIM, SRC_TRACER, TraceWriter)
 
 paths.ensure_repo_on_path()
 import pyinsim  # noqa: E402
+
+# Correct pyinsim's decoder *in this process only* -- the tracer runs beside the
+# add-on, not inside it. Must happen before _known_packets() reads the map.
+insim_patch.apply(pyinsim)
 
 
 # ── packet registry ──────────────────────────────────────────────────────────

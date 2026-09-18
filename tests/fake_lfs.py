@@ -66,7 +66,21 @@ def _carcontact(plid: int) -> bytes:
     return _CARCONTACT.pack(plid, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 160, 320)
 
 
-def con(plid_a: int, plid_b: int, sp_close: int = 55) -> bytes:
+#: 44-byte IS_CON header: Size Type ReqI Zero | SpClose SpW | Time (32-bit ms).
+_CON_44 = struct.Struct("<4B2HI")
+
+
+def con(plid_a: int, plid_b: int, sp_close: int = 55, layout: int = 40) -> bytes:
+    """One car-to-car contact, in either the 40- or the 44-byte layout.
+
+    LFS has shipped both; ``simulation_tests/insim_patch.py`` decodes by ``Size``
+    rather than assuming a version, so both are worth sending from here.
+    """
+    if layout == 44:
+        return (_CON_44.pack(11, ISP_CON, 0, 0, sp_close, 0, 1234000)
+                + _carcontact(plid_a) + _carcontact(plid_b))
+    if layout != 40:
+        raise ValueError("IS_CON is either 40 or 44 bytes")
     size = (_CON.size + 32) // 4
     return (_CON.pack(size, ISP_CON, 0, 0, sp_close, 1234)
             + _carcontact(plid_a) + _carcontact(plid_b))

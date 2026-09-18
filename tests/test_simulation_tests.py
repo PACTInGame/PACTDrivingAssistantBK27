@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -22,8 +23,8 @@ import types
 
 import pytest
 
-from simulation_tests import (analyze_trace, input_model, packet_dump, paths,
-                              scenario as scenario_mod, timeline_draft)
+from simulation_tests import (analyze_trace, input_model, insim_patch, packet_dump,
+                              paths, scenario as scenario_mod, timeline_draft)
 from simulation_tests.control_channel import ControlClient, ControlServer
 from simulation_tests.trace_format import TraceWriter, load_trace, meta_of
 
@@ -580,3 +581,188 @@ def test_tracer_records_a_full_session_against_a_fake_lfs(tmp_path):
 
     speeds = analyze_trace.extract_signal(load_trace(trace_path), "OutGauge.speed_kmh")
     assert speeds and speeds[0][1] == pytest.approx(49.68, abs=0.01)
+
+
+# ── the corrected IS_CON decoder (simulation_tests/insim_patch.py) ───────────
+#
+# pyinsim's own IS_CON expects the 40-byte layout and unpacks CarContact with the
+# signedness inverted, so a contact on a current LFS raises struct.error inside
+# the asyncore loop -- which drops the tracer's InSim connection mid-scenario.
+# The tracer patches its own process; the add-on's copy is untouched.
+def _car_contact_bytes(plid=1, steer=5, thr_brk=0xF0, clu_han=0x0A, gear_sp=0x30,
+                       speed=200, direction=64, heading=250, accel_f=-9, accel_r=3,
+                       x=160, y=320):
+    return struct.pack("<3Bb6B2b2h", plid, 0, 0, steer, thr_brk, clu_han, gear_sp,
+                       speed, direction, heading, accel_f, accel_r, x, y)
+
+
+def _con_bytes(layout, sp_close=123):
+    if layout == 44:
+        header = struct.pack("<4B2HI", 11, 50, 0, 0, sp_close, 0, 1234000)
+    else:
+        header = struct.pack("<4B2H", 10, 50, 0, 0, sp_close, 1234)
+    return header + _car_contact_bytes() + _car_contact_bytes(plid=2, speed=30)
+
+
+@pytest.mark.parametrize("layout", [40, 44])
+def test_both_is_con_layouts_decode_and_say_which_one_arrived(layout):
+    packet = insim_patch.IS_CON().unpack(_con_bytes(layout))
+    assert packet.con_layout == layout
+    assert packet.A.PLID == 1 and packet.B.PLID == 2
+
+
+def test_car_contact_pedals_and_angles_are_unsigned_accelerations_signed():
+    packet = insim_patch.IS_CON().unpack(_con_bytes(44))
+    data = packet_dump.packet_to_dict("CON", packet)
+    a = data["A"]
+    # Speed 200 m/s and heading 250/256 would both come back negative if these
+    # bytes were read as signed, which is what pyinsim does.
+    assert a["Speed"] == 200 and a["speed_kmh"] == pytest.approx(720.0)
+    assert a["heading_deg"] == pytest.approx(351.56, abs=0.01)
+    # ...while AccelF must stay negative: forward is positive, so this is braking.
+    assert a["AccelF"] == -9 and a["accel_f_g"] == pytest.approx(-4.5)
+    assert a["brake"] == pytest.approx(1.0) and a["throttle"] == pytest.approx(0.0)
+
+
+def test_an_is_con_of_an_unknown_size_is_a_clear_error_not_a_struct_error():
+    with pytest.raises(ValueError, match="unexpected size"):
+        insim_patch.IS_CON().unpack(_con_bytes(40)[:36])
+
+
+def test_the_patch_replaces_is_con_and_leaves_every_other_packet_alone():
+    import pyinsim
+
+    original = dict(pyinsim.core._PACKET_MAP)
+    try:
+        insim_patch.apply(pyinsim)
+        assert pyinsim.core._PACKET_MAP[pyinsim.ISP_CON] is insim_patch.IS_CON
+        assert {k: v for k, v in pyinsim.core._PACKET_MAP.items() if k != pyinsim.ISP_CON} \
+            == {k: v for k, v in original.items() if k != pyinsim.ISP_CON}
+    finally:
+        pyinsim.core._PACKET_MAP.clear()
+        pyinsim.core._PACKET_MAP.update(original)
+
+
+# ── a recording that would be dangerous to replay ────────────────────────────
+def test_a_recording_that_leaves_a_key_down_is_reported():
+    events = [
+        {"t": 0.1, "kind": "key", "action": "down", "name": "w", "vk": 87},
+        {"t": 0.2, "kind": "key", "action": "up", "name": "w", "vk": 87},
+        {"t": 0.3, "kind": "key", "action": "down", "name": "s", "vk": 83},
+    ]
+    problems = input_model.check_recording(events)
+    assert len(problems) == 1 and "still held" in problems[0]
+
+
+def test_a_release_without_a_press_is_reported():
+    events = [{"t": 0.5, "kind": "click", "action": "up", "button": "left", "x": 1, "y": 2}]
+    problems = input_model.check_recording(events)
+    assert len(problems) == 1 and "without ever being pressed" in problems[0]
+
+
+def test_a_balanced_recording_has_no_problems():
+    events = [
+        {"t": 0.1, "kind": "key", "action": "down", "name": "w", "vk": 87},
+        {"t": 0.2, "kind": "key", "action": "down", "name": "w", "vk": 87},  # auto-repeat
+        {"t": 0.4, "kind": "key", "action": "up", "name": "w", "vk": 87},
+        {"t": 0.5, "kind": "click", "action": "down", "button": "left", "x": 1, "y": 2},
+        {"t": 0.6, "kind": "click", "action": "up", "button": "left", "x": 1, "y": 2},
+        {"t": 0.7, "kind": "move", "x": 3, "y": 4},
+    ]
+    assert input_model.check_recording(events) == []
+
+
+def test_preflight_refuses_a_recording_that_would_leave_the_throttle_down(fake_pynput):
+    player = _player([{"t": 0.1, "kind": "key", "action": "down", "name": "w", "vk": 87}])
+    assert any("still held" in problem for problem in player.preflight())
+
+
+# ── the recorder's own filters ───────────────────────────────────────────────
+def test_key_auto_repeat_is_collapsed_into_one_press():
+    from simulation_tests import recorder as recorder_mod
+
+    rec = recorder_mod.Recorder()
+    key = _FakeKeyCode(char="w", vk=87)
+    for _ in range(5):
+        rec._on_press(key)
+    rec._on_release(key)
+    rec._on_press(key)
+    assert [(e["action"], e["vk"]) for e in rec.events] == [
+        ("down", 87), ("up", 87), ("down", 87)]
+
+
+def test_the_marker_and_stop_keys_never_reach_the_stream():
+    from simulation_tests import recorder as recorder_mod
+
+    rec = recorder_mod.Recorder(marker_names=["entered_garage"])
+    rec._on_press(_FakeKeyMember("scroll_lock", 0x91))
+    rec._on_release(_FakeKeyMember("scroll_lock", 0x91))
+    rec._on_press(_FakeKeyMember("pause", 0x13))
+    assert [e["kind"] for e in rec.events] == ["marker"]
+    assert rec.events[0]["name"] == "entered_garage"
+
+
+# ── replay timing accounting ─────────────────────────────────────────────────
+def test_lateness_is_measured_so_a_shifted_trace_is_not_read_as_a_regression(fake_pynput):
+    ticks = iter([0.0, 0.5])
+    player = _player([], clock=lambda: next(ticks))
+    player._t0 = next(ticks)
+    player._record_lateness(0.0)
+    assert player._late_max == pytest.approx(0.5)
+    assert player._late_over_budget == 1
+
+
+def test_strict_timing_aborts_instead_of_clicking_into_the_wrong_menu_page(fake_pynput):
+    from simulation_tests import player as player_mod
+
+    ticks = iter([0.0, 1.0])
+    player = _player([], strict_timing=True, clock=lambda: next(ticks))
+    player._t0 = next(ticks)
+    with pytest.raises(player_mod.ReplayAbort):
+        player._record_lateness(0.0)
+    assert "late" in player._abort_reason
+
+
+# ── the optional UDP fan-out ─────────────────────────────────────────────────
+def test_the_relay_forwards_identical_bytes_to_both_consumers():
+    import threading
+
+    from simulation_tests import udp_relay
+
+    def _bind():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.settimeout(0.5)
+        return sock
+
+    lfs_side, addon_side, tracer_side = _bind(), _bind(), _bind()
+    source_port = lfs_side.getsockname()[1]
+    lfs_side.close()  # the relay binds this one itself
+
+    counts = {}
+    thread = threading.Thread(
+        target=lambda: counts.update(udp_relay.relay(
+            tracer_side.getsockname()[1], 3.0,
+            routes=((source_port, addon_side.getsockname()[1]),), quiet=True)),
+        daemon=True)
+    thread.start()
+    try:
+        payload = bytes(range(96))
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            sender.sendto(payload, ("127.0.0.1", source_port))
+            try:
+                assert addon_side.recv(4096) == payload
+                assert tracer_side.recv(4096) == payload
+                break
+            except socket.timeout:  # pragma: no cover - the relay is not up yet
+                continue
+        else:  # pragma: no cover
+            pytest.fail("the relay never forwarded a datagram")
+        sender.close()
+    finally:
+        thread.join(timeout=8)
+        addon_side.close()
+        tracer_side.close()
+    assert counts.get(source_port, 0) >= 1

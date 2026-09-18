@@ -215,7 +215,11 @@ def _derive_carcontact(contact: Dict[str, Any]) -> None:
     contact["clutch"] = (clu_han & 0x0F) / 15.0
     contact["handbrake"] = (clu_han >> 4) / 15.0
     contact["gear"] = gear_sp & 0x0F
-    contact["accel_f_g"] = contact.get("AccelF", 0) / 2.0   # 1 unit = 0.5 g
+    # Signed bytes (AccelF negative = braking); see simulation_tests/insim_patch.py.
+    # Scale per the older InSim.txt, 1 unit = 0.5 g. Newer documentation calls the
+    # field m/s^2 -- not re-measured against this install, so treat the magnitude
+    # as indicative and the sign as the hard fact.
+    contact["accel_f_g"] = contact.get("AccelF", 0) / 2.0
     contact["accel_r_g"] = contact.get("AccelR", 0) / 2.0
 
 
@@ -224,10 +228,10 @@ def _derive_con(data: Dict[str, Any]) -> None:
         contact = data.get(side)
         if isinstance(contact, dict):
             _derive_carcontact(contact)
-    # InSim.txt: SpClose is the closing speed, 10 = 1 m/s. Not re-measured
-    # against this install -- treat the magnitude as indicative, the *presence*
-    # of the packet as the hard fact.
-    data["closing_speed_ms"] = round(data.get("SpClose", 0) / 10.0, 2)
+    # SpClose: high 4 bits reserved, low 12 bits the closing speed at 10 = 1 m/s.
+    # Not re-measured against this install -- treat the magnitude as indicative,
+    # the *presence* of the packet as the hard fact.
+    data["closing_speed_ms"] = round((data.get("SpClose", 0) & 0x0FFF) / 10.0, 2)
     data["closing_speed_kmh"] = round(data["closing_speed_ms"] * MS_TO_KMH, 2)
 
 

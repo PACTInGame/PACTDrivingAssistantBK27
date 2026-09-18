@@ -16,6 +16,19 @@ the **marker key** (drops a named marker at the current time) and the
 **stop key** (ends the recording). Defaults are Scroll Lock and Pause, because
 LFS binds neither.
 
+Two things are filtered out of the stream, because replaying them would not
+reproduce what the human did:
+
+* **Injected input.** On Windows the low-level hook sees the add-on's own
+  ``pyautogui`` keypresses (emergency braking, light commands) exactly as if the
+  driver had pressed them. Recording those would bake one run's *reaction* into
+  the scenario's *stimulus*, and the next replay would press the brake whether
+  the add-on wanted to or not. ``LLKHF_INJECTED`` / ``LLMHF_INJECTED`` are
+  dropped. Returning ``False`` from the filter only hides the event from this
+  listener -- LFS and every other application still receive it.
+* **Key auto-repeat.** Holding a key makes Windows repeat the down event dozens
+  of times a second. One press is recorded; the replay holds the key.
+
 pynput is imported lazily so this module imports on Linux for the test suite --
 the same trick misc/platform_shim.py plays for the add-on.
 """
@@ -29,6 +42,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import config, input_model, win_focus
 from .pynput_access import import_pynput
+
+#: Low-level hook flags marking an event another program synthesised.
+_KEYBOARD_INJECTED = 0x10   # LLKHF_INJECTED
+_MOUSE_INJECTED = 0x01      # LLMHF_INJECTED
 
 
 class Recorder:
@@ -56,7 +73,9 @@ class Recorder:
         self._listeners: List[Any] = []
         self._sampler: Optional[threading.Thread] = None
         self._last_pos = None
+        self._down: set = set()
         self.marker_count = 0
+        self.injected_dropped = 0
 
     # -- lifecycle ----------------------------------------------------------
     def record(self, on_status: Optional[Callable[[float, int, int], None]] = None,
@@ -68,8 +87,13 @@ class Recorder:
         self._t0 = self._clock()
         self._stopped.clear()
 
-        key_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
-        mouse_listener = mouse.Listener(on_click=self._on_click, on_scroll=self._on_scroll)
+        self._down.clear()
+        self.injected_dropped = 0
+        key_listener = keyboard.Listener(on_press=self._on_press,
+                                         on_release=self._on_release,
+                                         **self._filter_kwargs(_KEYBOARD_INJECTED))
+        mouse_listener = mouse.Listener(on_click=self._on_click, on_scroll=self._on_scroll,
+                                        **self._filter_kwargs(_MOUSE_INJECTED))
         self._listeners = [key_listener, mouse_listener]
         for listener in self._listeners:
             listener.start()
@@ -114,6 +138,23 @@ class Recorder:
             return list(self._events)
 
     # -- capture ------------------------------------------------------------
+    def _filter_kwargs(self, injected_bit: int) -> Dict[str, Any]:
+        """``win32_event_filter`` kwargs -- Windows only; empty elsewhere.
+
+        pynput only accepts the argument on its Windows backend, and the test
+        suite's pynput double does not take it at all.
+        """
+        if not win_focus.IS_WINDOWS:
+            return {}
+
+        def _filter(_msg: Any, data: Any) -> bool:  # pragma: no cover - Windows only
+            if getattr(data, "flags", 0) & injected_bit:
+                self.injected_dropped += 1
+                return False  # hide from our callbacks only, do not suppress
+            return True
+
+        return {"win32_event_filter": _filter}
+
     def _append(self, event: Dict[str, Any]) -> None:
         with self._lock:
             self._events.append(event)
@@ -153,6 +194,10 @@ class Recorder:
         if input_model.key_matches(self.marker_key, name, vk):
             self._add_marker()
             return
+        identity = vk if vk is not None else name
+        if identity in self._down:
+            return  # OS auto-repeat: the key is already down in the stream
+        self._down.add(identity)
         self._append({"t": self._now(), "kind": input_model.KIND_KEY,
                       "action": "down", "name": name, "vk": vk})
 
@@ -162,6 +207,7 @@ class Recorder:
             return
         if input_model.key_matches(self.marker_key, name, vk):
             return
+        self._down.discard(vk if vk is not None else name)
         self._append({"t": self._now(), "kind": input_model.KIND_KEY,
                       "action": "up", "name": name, "vk": vk})
 
@@ -207,4 +253,6 @@ def build_meta(recorder: Recorder, events: List[Dict[str, Any]],
         "duration_s": round(input_model.duration(events), 3),
         "event_count": len(events),
         "marker_count": recorder.marker_count,
+        "injected_dropped": recorder.injected_dropped,
+        "problems": input_model.check_recording(events),
     }
