@@ -461,7 +461,8 @@ def test_an_mci_frame_also_publishes_the_own_vehicle(
         bus.emit('vehicle_data_received', packet)
 
     assert seen.count('own_vehicle_updated') == 1
-    assert seen.last('own_vehicle_updated') is manager.own_vehicle
+    assert seen.last('own_vehicle_updated') is not manager.own_vehicle
+    assert seen.last('own_vehicle_updated').data == manager.own_vehicle.data
 
 
 def test_a_race_restart_moves_the_local_plid_to_the_new_one(

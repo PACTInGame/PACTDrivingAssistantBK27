@@ -25,15 +25,17 @@ our own car      ``own_vehicle.is_local_driver`` -- OutGauge follows the
                  camera, and shifting on a spectated car's rpm is a hazard
                  (``conventions.md`` §5.2). A car LFS drives itself
                  (``data.is_ai``) is refused for the same reason.
+OutGauge alive   the stream has produced a packet within
+                 ``OUTGAUGE_STALE_AFTER_S``. Without it every gauge field and
+                 ``viewed_plid`` stand still, so no actuator can tell whose
+                 car it would be acting on (``known-issues.md`` #51).
 ===============  ==========================================================
 
-Deliberately **not** a condition: the input mode (``own_control_mode`` /
-``vehicle.data.control_mode``, mouse / keyboard / joystick). The keys we press
-are the keys the user bound *in LFS*, and LFS accepts them in every input mode
--- a wheel user still has a keyboard handbrake binding. Gating on the mode
-would switch auto-hold and the automatic gearbox off for those users, which is
-a feature removal, not a safety measure. What *is* checked is whether the car
-is under our control at all: a car LFS drives itself is refused.
+The input mode is not a global guard condition: shift keys work in both modes.
+Clutch and handbrake are different: wheel users may select an axis instead of
+a key. Each actuator must verify its own result; AutoHold waits for the
+handbrake dashboard light before reporting success. Disk configuration can be
+stale while LFS is running and cannot prove the current input path.
 
 Cost: the guard is asked **only at the moment an actuation would happen** --
 once per auto-hold engagement, once per gear change -- never per cycle. Keeping
@@ -69,9 +71,16 @@ REASON_NO_VEHICLE = 'no_own_vehicle'
 REASON_NOT_LOCAL_DRIVER = 'not_local_driver'
 REASON_AI_CONTROLLED = 'ai_controlled'
 REASON_LFS_NOT_FOCUSED = 'lfs_not_focused'
+REASON_NO_OUTGAUGE = 'no_outgauge'
 
 # A modifier reading older than this is treated as "unknown", not as "held".
 MODIFIER_STALE_AFTER_S = 1.0
+# ...but the *stream* going quiet for this long is a different statement, and a
+# much bigger one: no OutGauge means no pedals, no gauges and no ``viewed_plid``
+# -- so nothing can tell whose car we are looking at, and nothing may actuate.
+# Generous on purpose: LFS streams at 10-100 Hz, so three seconds is dozens of
+# missed packets, not a hiccup.
+OUTGAUGE_STALE_AFTER_S = 3.0
 
 # One log line per distinct reason per this many seconds. A refusal is not an
 # error -- it is the guard doing its job -- so it stays at debug level and must
@@ -162,6 +171,13 @@ class InputGuard:
         self.text_entry = False
         self._modifiers = 0
         self._modifiers_seen_at = None   # None = no OutGauge packet yet
+        # Was the socket opened at all? ``None`` until the connector says.
+        # Kept apart from the packet clock: a socket that never bound and a
+        # camera that stopped the stream are the same refusal but not the same
+        # advice, and the log has to be able to say which.
+        self._outgauge_bound = None
+        self._outgauge_bind_reason = None
+        self._outgauge_bound_at = None
 
         # When each reason was last logged, so a blocked situation that lasts
         # for minutes produces one line, not one per attempt.
@@ -169,6 +185,7 @@ class InputGuard:
 
         self.event_bus.subscribe('state_data', self._on_state_data)
         self.event_bus.subscribe('outgauge_data', self._on_outgauge_data)
+        self.event_bus.subscribe('outgauge_status', self._on_outgauge_status)
 
     # ─── Bus ──────────────────────────────────────────────────────────
 
@@ -187,7 +204,50 @@ class InputGuard:
             self._modifiers = 0
         self._modifiers_seen_at = self.clock()
 
+    def _on_outgauge_status(self, data):
+        """Der Socket wurde geoeffnet oder eben nicht (``lfs/connector.py``)."""
+        if not isinstance(data, dict):
+            return
+        self._outgauge_bound = bool(data.get('bound', False))
+        self._outgauge_bind_reason = data.get('reason')
+        self._outgauge_bound_at = self.clock()
+
     # ─── Query ────────────────────────────────────────────────────────
+
+    def outgauge_stale(self) -> bool:
+        """Is the OutGauge stream silent right now?
+
+        True means every gauge field, every pedal reading and ``viewed_plid``
+        are standing still. Three causes, all of them real
+        (``conventions.md`` §5.3 and ``known-issues.md`` #51): the socket never
+        bound because something else holds port 30000, ``OutGauge Mode`` is 0
+        in ``cfg.txt``, or the camera is not an internal view. In all three the
+        app cannot tell whose car it is looking at, so nothing may actuate --
+        and unlike :meth:`modifier_held` this one fails *closed*, because
+        acting blind is the hazard, not the safeguard.
+        """
+        if self._outgauge_bound is False:
+            return True
+        if self._outgauge_bound is None:
+            # Nobody has told us whether the socket is open -- a bare
+            # ``InputGuard`` in a test, or a caller that does not run the
+            # connector. The module's rule applies: refuse because the user
+            # really is elsewhere, never because we could not ask.
+            return False
+        since = self._modifiers_seen_at
+        if since is None:
+            # Bound, but not one packet yet. ``OutGauge Mode = 0`` in
+            # ``cfg.txt`` looks exactly like this and never recovers.
+            since = self._outgauge_bound_at
+            if since is None:
+                return False
+        return self.clock() - since > OUTGAUGE_STALE_AFTER_S
+
+    def outgauge_reason(self) -> Optional[str]:
+        """Why OutGauge is silent, in one word, or ``None`` if it is not."""
+        if not self.outgauge_stale():
+            return None
+        return self._outgauge_bind_reason or 'no_packets'
 
     def modifier_held(self) -> bool:
         """Is the user holding Shift or Ctrl, as far as OutGauge told us?"""
@@ -217,6 +277,12 @@ class InputGuard:
             return REASON_DIALOG
         if self.modifier_held():
             return REASON_MODIFIER_HELD
+        # Before ``is_local_driver``, and deliberately so. Without OutGauge
+        # that property is False for a driver who is sitting in their own car,
+        # and the refusal that came out said ``not_local_driver`` -- a true
+        # statement about a variable and a misleading one about the world.
+        if self.outgauge_stale():
+            return REASON_NO_OUTGAUGE
 
         if own_vehicle is None:
             return REASON_NO_VEHICLE

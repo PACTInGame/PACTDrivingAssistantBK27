@@ -482,6 +482,65 @@ def test_the_connector_drops_traffic_when_it_is_not_connected(bus, settings):
     connector._request_player_list({})
 
 
+# ─── OutGauge: the socket that must never be bound twice ─────────────────────
+
+def test_reopening_outgauge_closes_the_old_socket_first(bus, settings, monkeypatch):
+    """``StateHandler`` re-opens this on track entry (conventions.md §5.3).
+
+    Without the close, the second bind hits a port this very process is still
+    holding, Windows answers WinError 10048, and the log blames "another
+    application" for something we did to ourselves.
+    """
+    import lfs.connector as connector_module
+    from lfs.connector import LFSConnector
+
+    opened = []
+
+    class FakeOutGauge:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def fake_outgauge(host, port, callback, timeout):
+        socket = FakeOutGauge()
+        opened.append((host, port, socket))
+        return socket
+
+    monkeypatch.setattr(connector_module.pyinsim, 'outgauge', fake_outgauge)
+    connector = LFSConnector(bus, settings)
+
+    connector.start_outgauge()
+    connector.start_outgauge()
+
+    assert [(host, port) for host, port, _ in opened]         == [('127.0.0.1', 30000)] * 2
+    assert opened[0][2].closed is True
+    assert opened[1][2].closed is False
+
+
+def test_a_taken_outgauge_port_is_reported_instead_of_swallowed(
+        bus, settings, monkeypatch, recorder):
+    """known-issues #51: this is what silently disarmed every actuator."""
+    import lfs.connector as connector_module
+    from lfs.connector import LFSConnector
+
+    events = recorder('outgauge_status')
+
+    def refuse(host, port, callback, timeout):
+        raise OSError(10048, 'Only one usage of each socket address')
+
+    monkeypatch.setattr(connector_module.pyinsim, 'outgauge', refuse)
+    connector = LFSConnector(bus, settings)
+
+    connector.start_outgauge()
+
+    assert connector.outgauge is None
+    status = events.last('outgauge_status')
+    assert status['bound'] is False
+    assert status['reason'] == 'port_in_use'
+
+
 # ─── IS_RST: a new race, and a new set of PLIDs ──────────────────────────────
 
 def test_a_race_start_is_published_and_asks_for_the_player_list(bus, settings, recorder,

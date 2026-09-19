@@ -115,7 +115,7 @@ class LFSConnector:
                 self.insim.bind(packet_type, handler)
 
             self.start_outgauge()
-            self.start_outsim()
+            # OutSim erst starten, wenn ein System dessen Physikdaten braucht.
 
             self.is_connected = True
             self.event_bus.emit('lfs_connected')
@@ -131,11 +131,65 @@ class LFSConnector:
             self.is_connected = False
 
     def start_outgauge(self):
-        """Startet OutGauge-Verbindung"""
+        """Startet (oder erneuert) die OutGauge-Verbindung.
+
+        Ohne OutGauge laeuft die App weiter, aber **blind**: Pedale, Gang,
+        Kontrollleuchten und vor allem ``viewed_plid`` stehen still - und
+        ``is_local_driver`` bleibt damit False, also verweigert der InputGuard
+        jede Aktuierung. Genau so ist einmal ein ganzer Abend gefahren worden,
+        mit "Automatic emergency braking is armed." im Log und ohne einen
+        einzigen Eingriff (known-issues #51). Deshalb zwei Dinge hier:
+
+        1. **Erst schliessen, dann binden.** ``StateHandler`` ruft das beim
+           Betreten der Strecke erneut auf. Lag der alte Socket noch auf 30000,
+           war der zweite ``bind`` garantiert ein WinError 10048 - und die
+           Fehlermeldung zeigte auf das falsche Problem.
+        2. **Laut scheitern** (``AGENTS.md`` §5): eine Adresse, die schon
+           belegt ist, ist praktisch immer ein zweiter Empfaenger auf 30000 -
+           eine vergessene Instanz der App oder ein Relay aus
+           ``simulation_tests``. Das steht jetzt in der Meldung, statt dass der
+           Fahrer den Fehler bei sich sucht.
+
+        Der Zustand geht zusaetzlich als ``outgauge_status`` auf den Bus, damit
+        Menue und Bremseingriff ihn ohne Ruecksprache kennen.
+        """
+        self._close_outgauge()
         try:
-            self.outgauge = pyinsim.outgauge('127.0.0.1', 30000, self._outgauge_handler, 30.0)
+            self.outgauge = pyinsim.outgauge('127.0.0.1', 30000,
+                                             self._outgauge_handler, 30.0)
+        except OSError as e:
+            self.outgauge = None
+            logger.error(
+                "OutGauge could not be opened on 127.0.0.1:30000 (%s: %s). "
+                "Without it the assistance systems are blind and nothing will "
+                "brake or shift. The port is almost always held by a second "
+                "receiver - another copy of this app, or a simulation_tests "
+                "relay. Close it and restart.", type(e).__name__, e)
+            self.event_bus.emit('outgauge_status',
+                                {'bound': False, 'reason': 'port_in_use',
+                                 'error': f"{type(e).__name__}: {e}"})
+            return
         except Exception as e:
-            logger.error("Failed to connect OutGauge: %s: %s", type(e).__name__, e)
+            self.outgauge = None
+            logger.error("Failed to connect OutGauge: %s: %s",
+                         type(e).__name__, e)
+            self.event_bus.emit('outgauge_status',
+                                {'bound': False, 'reason': 'open_failed',
+                                 'error': f"{type(e).__name__}: {e}"})
+            return
+        self.event_bus.emit('outgauge_status', {'bound': True, 'reason': None})
+
+    def _close_outgauge(self):
+        """Gibt den alten OutGauge-Socket frei, falls einer offen ist."""
+        connection = self.outgauge
+        if connection is None:
+            return
+        self.outgauge = None
+        try:
+            connection.close()
+        except Exception as e:
+            logger.warning("Closing the old OutGauge socket failed: %s: %s",
+                           type(e).__name__, e)
 
     def start_outsim(self):
         """Startet OutSim-Verbindung"""

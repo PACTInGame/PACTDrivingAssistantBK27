@@ -11,38 +11,10 @@ discover. Do not log one-off bugs that were fixed in the same session.
 
 ## Robustness
 
-**IS_CON decoder is still pre-v10.** `pyinsim/insim.py:IS_CON` expects a 40-byte
-packet with a 16-bit time, while newer InSim sends 44 bytes with `SpW` and a
-32-bit millisecond timestamp — the 44-byte case raises `struct.error` *inside the
-asyncore loop*, which drops the connection. `CarContact` also has the signedness
-inverted: the pedal nibbles, speed and the two angle bytes are unsigned, the two
-accelerations signed. The test harness carries a corrected decoder in
-`simulation_tests/insim_patch.py`, which picks the layout by `Size` and is applied
-to the **tracer's own process only**. The add-on's shared decoder remains unfixed;
-it currently does not subscribe to CON, so nothing is broken today — but anything
-that starts consuming CON must port that decoder first. Other legacy layouts such
-as IS_RIP should be checked before enabling new consumers.
-Source: https://www.lfs.net/programmer/insim. `C:\LFS\docs\InSim.txt` is now only
-a link to that page, so the layout cannot be confirmed from disk.
-
-**#3 — Dead events.** `assistance_results`, `outsim_data` and `player_data_updated` are
-emitted every cycle (or every packet) with no subscribers. `outsim_data` in particular
-means the whole OutSim pipeline runs for nothing.
-
-**#4 — Two nearly identical command events.** `send_command_to_lfs` (payload: plain
-`str`, subscriber `MessageSender`) versus `send_lfs_command` (payload:
-`{'command': str}`, subscriber `UIManager`). Different shapes, different routes, same
-purpose. Should be unified into one event with one payload shape.
-
-**#8 — `Controls/wheel.py` and `assistance/controller_emulator.py` are dead.** Both
-are superseded by `assistance/emergency_brake.py` + `Controls/brake_key.py` and are no
-longer imported anywhere. `wheel.py` never worked: its `try` block raises `ImportError`
-unconditionally *after* the import, so `vj` and `setJoy` were never bound. Delete both
-once the vJoy axis path is rebuilt in their place.
-
-**#41 — Installing vJoy destroys the user's LFS controller configuration.** LFS treats
+**#41 — Reported controller reset when installing vJoy; verification pending.**
+The existing report says LFS treats
 a device it has not seen before as new hardware and discards every existing controller
-assignment. A wheel driver who installs vJoy for automatic braking has to rebuild their
+assignment. Under those reported conditions a wheel driver has to rebuild their
 whole control setup by hand, which is the actual reason users call the feature
 unfriendly. It happens once, at install, so a backup/restore of `cfg.txt` and
 `data\misc\*.csf`/`*.con` around it should be able to fix it. The format is no longer
@@ -51,17 +23,12 @@ restore is not obviously invalidated by the new device. Still unverified: whethe
 honours a restored file, and whether the numeric suffix in the filename shifts when a
 device is added. `control-intervention.md` §3.2, experiment in `lfs-config-files.md` §7.
 
-**#42 — `auto_hold` may be pressing a handbrake key a wheel driver does not have.**
-In `wheel_js` mode LFS lets the driver choose *per function* whether clutch and
-handbrake come from an axis or a key. `InputGuard`'s docstring still claims a wheel
-user always has a keyboard handbrake binding; for anyone who set handbrake to an axis,
-`AutoHold`'s injected key does nothing and reports success. Same class of silent
-failure as the one emergency braking just had. Which of the two the driver chose is
-readable off disk without touching LFS: the `handbrake` entry of the axis table in
-`data\misc\<Device>.csf` is `0xFFFF` exactly when the function is not on an axis
-(`lfs-config-files.md` §4).
-
 **#45 — Something emits a notification at cycle rate, and nobody knows what.**
+The reproducible AutoHold flood path is fixed: one attempt per stop/brake phase,
+notification only after dashboard confirmation, one timeout diagnostic. This does
+not identify the historical bursts conclusively; keep this observation open until
+a fresh log names the emitter or a live reproduction matches it.
+
 Two bursts were seen live (14:15:33 and 14:15:47) at roughly **ten dropped notifications
 per second**, i.e. one per assistance cycle. The queue holds 8 and shows each entry for
 3 s, so while that runs the driver reads a message up to 24 s old — which is what made
@@ -70,37 +37,6 @@ still unidentified: the old warning printed one anonymous line per drop. It now 
 dropped and the incoming text and is rate-limited to one line per 5 s, so the next
 occurrence identifies itself. Note that the queue is *structurally* at its limit — see
 §1.7 for why anything periodic must not use it at all.
-
-**#12 — `own_vehicle` is still mutated while workers read it.** The vehicle
-dict is safe now: `VehicleManager` publishes a fresh snapshot dict per MCI frame
-and swaps each `VehicleData` object instead of mutating it (`Vehicle.begin_frame`
-/ `commit_frame`), so `vehicles_updated` payloads never change under an iterating
-worker. `own_vehicle` is different: `own_vehicle_updated` hands out the live
-`OwnVehicle` object and OutGauge writes into it at ~30 Hz on the packet thread.
-A system that reads `own_vehicle.data.x` and `own_vehicle.data.speed` on
-separate lines can still straddle a packet. Bind `data = own_vehicle.data` once
-per `process()` call, or give `OwnVehicle` the same swap treatment.
-
-## Correctness
-
-**#35 — FCW's detection quad is self-intersecting, so it is skewed.** The corner order
-`[far+1°, near−20°, near+20°, far−1°]` makes edges `p1p2` and `p3p4` cross, and
-`point_in_rectangle` covers the union of triangles `(p1,p2,p3)` and `(p1,p3,p4)` —
-not the intended wedge. Measured at 50 m with the car pointing north, the covered
-sector is about −0.5°…+1.5° around the axis instead of ±1°: a car half a metre to the
-right at that range is missed. Only the ordering is wrong, the four points are right.
-Changing it changes which cars FCW detects, so it is a product decision, not a silent
-fix. `tests/test_collision_warning.py` pins the current behaviour by placing test
-vehicles on the axis. The same defect existed in the blind-spot corridors and was
-fixed there (WP8) — there the quad was pure geometry with no tuning attached to it,
-so reordering the corners was a fix rather than a product decision.
-
-**#34 — `point_in_rectangle` judges by cross-product sign only.** For a proper rectangle
-it is correct, but a **degenerate** one (zero width or all four corners equal) contains
-the entire line it lies on, or the whole plane. Every caller currently builds its
-rectangle from a non-zero vehicle or object size, so nothing is broken today — it is a
-trap for the next caller that computes a size from packet data.
-`tests/test_helpers.py` carries two `xfail` cases for it.
 
 ## LFS integration, screen context and car data
 
@@ -112,8 +48,14 @@ immediately forever. Every assistance system silently does nothing, with no diag
 (`own_vehicle.data.player_id` itself now comes from `IS_NPL` and survives this,
 but without OutGauge there is no speed, rpm or pedal data at all.) An LFS update or reinstall can reset `cfg.txt`, and the setup
 wizard never re-runs because of the `.setup_done` flag. Needs a startup validation of
-`cfg.txt` plus a "no OutGauge data after N seconds" warning — or, better, dropping the
-`cfg.txt` dependency entirely via `SMALL_SSG` (`lfs-setup.md` §5).
+`cfg.txt` — or, better, dropping the `cfg.txt` dependency entirely via `SMALL_SSG`
+(`lfs-setup.md` §5).
+
+**The "no OutGauge data" half of this is done** (#51): `InputGuard` refuses every
+actuation with `no_outgauge` after three silent seconds, and the emergency brake
+reports it as its availability reason instead of claiming to be armed. What is still
+missing is the *warning-only* half — FCW, blind spot and cross traffic keep working
+off MCI, so a driver whose `cfg.txt` is wrong still gets a HUD that looks healthy.
 
 **#27 — The HUD may still sit in the area LFS reserves for its own UI.**
 `clamp_hud_position()` (`ui/ui_manager.py`) now keeps the whole block — HUD, PDC
@@ -365,6 +307,154 @@ following speed comes from Gipps' safe-speed law with the lead car's speed in it
 instead of a straight line that ignored it. Both are in `ai-traffic.md` §3. The
 combination is untested in the game; `21_ai_traffic_started_from_another_car` is
 the scenario that will say whether it holds.
+
+**#51 — FIXED 2026-09-19. An OutGauge socket that never bound disarmed every
+actuator, silently, under a log line that said "armed".**
+
+Reported as *"the collision warning only warns, it never brakes"*, with
+`Automatic emergency braking is armed.` in the log and correct key bindings
+everywhere. The chain, from the session log of 2026-09-19 18:02:
+
+1. A leftover `simulation_tests/_temp/fcw35_addon.py` from an earlier run still
+   held UDP 30000. `pyinsim.outgauge` therefore raised `WinError 10048`.
+2. `start_outgauge()` logged one line and carried on. `connect()` then emitted
+   `lfs_connected` and the next line in the log was `Connected to LFS.`
+3. Without OutGauge, `own_vehicle.viewed_plid` is never filled — so
+   `is_local_driver` compares `0 == local_plid` and is **False for a driver
+   sitting in their own car**.
+4. `InputGuard` refused every injection with `not_local_driver`, at *debug*
+   level. `EmergencyBrake` returned `{'active': False, 'refused': ...}` and said
+   nothing. The warnings kept working, because they run on MCI alone.
+
+So this is #24 with the socket open: the same blindness, arriving by a route
+the startup validation of `cfg.txt` would not catch.
+
+Three changes, all in the "fail loudly" direction (`AGENTS.md` §5):
+
+* `start_outgauge()` **closes the old socket before binding**. `StateHandler`
+  re-opens it on track entry, so half of the 10048s in that log were
+  self-inflicted, and the message pointed at the wrong culprit.
+* A failed bind names the likely cause — a second receiver on 30000 — and
+  publishes `outgauge_status` (`events.md`).
+* `InputGuard` gained `REASON_NO_OUTGAUGE`, checked **before**
+  `is_local_driver` so the refusal describes the world rather than a variable,
+  and `EmergencyBrake` reports it as its availability reason instead of
+  arming. The menu says *"OutGauge port 30000 is taken"*.
+
+The guard fails *closed* here, unlike the Shift reading beside it: a stale
+modifier disables a feature, a stale stream means nothing knows whose car it
+is looking at. It does **not** guess when nobody has told it whether the socket
+is open — same rule as `lfs_has_focus`.
+
+Note the operational lesson as well: a `_temp` harness that owns 30000 outlives
+the run it was written for. `simulation_tests/README.md` §2 already says never
+to start a second receiver on 30000 alongside the add-on; what it did not say
+is that the add-on cannot tell you when one is there. Now it can.
+
+**One deliberate consequence, and it is the open half of this.** OutGauge also
+stops for an *external camera* (`conventions.md` §5.3), so a driver in chase
+view now loses the emergency brake, auto-hold and the automatic gearbox after
+three seconds — with a red menu line and a log warning, not silently. Before,
+they kept actuating on a `viewed_plid` frozen at whatever it last was, which is
+worse in the case that matters (spectating somebody else in an external view)
+and better in the common one (own car, chase cam). The proper fix is
+`IS_STA.ViewPLID`: it carries the viewed PLID over InSim, camera-independently,
+pyinsim already unpacks it, and nothing in this project reads it
+(`conventions.md` §5.2). Feeding `own_vehicle.viewed_plid` from it would make
+`is_local_driver` answerable without OutGauge and let the key path — which
+needs no gauges at all — keep working in chase view. Not done here: it is a
+separate change to `StateHandler`, the `state_data` payload and `OwnVehicle`,
+and this session was scoped to the silent-failure bug.
+
+**#52 — FIXED 2026-09-19. The car you were running into raised an acute blind
+spot warning, on whichever side the noise picked — sometimes both.**
+
+Reproducible by rear-ending the car in front, with that car the only other one
+on track, and seen in `simulation_tests` recordings where the add-on was not
+even running.
+
+`BlindSpotWarning`'s **level 1** geometry is a corridor from 90° to 180° — it
+cannot see anything in front. The **acute** stages (2 and 3) never had that
+bound; their only protection against longitudinal traffic was
+`_is_plain_following`, which requires the two headings to be parallel within
+2°. A collision breaks that in the first frame: both cars rotate, the pair
+becomes "interesting" again, `contact_window` finds an overlap (the outlines
+really are touching), and `_is_on_left` decides the side from a cross product
+that is essentially zero straight ahead. Measured on the rebuilt scene, a
+lateral offset of ±5 cm flips the side; the 0.5–2 s hold time then leaves both
+sides lit.
+
+`_is_longitudinal_traffic` now rejects a vehicle that is **both** ahead of our
+front bumper (longitudinal offset beyond half our own length) **and** in our
+lane (the same tolerance `_is_plain_following` uses). Both halves are needed:
+"ahead" alone would drop the car drawing level with us in the next lane, which
+is the case the acute stage exists for; "in our lane" alone is the condition
+that falls apart on impact.
+
+**#53 — FIXED 2026-09-19. The acute blind spot warning beeped at a standstill
+for anything that drove past.**
+
+Reported from a red light; replay `BL1_RB4`. The acute stages had no lower
+speed bound of their own. Standing still, our outline does not move over the
+prediction horizon, so every contact `contact_window` finds comes from the
+other car's motion alone — and neither warning nor braking is an answer to
+that when we are already stopped. `MIN_ACUTE_OWN_SPEED_KMH` (1.0 km/h) gates
+the whole acute branch. **Level 1 is deliberately unaffected**: that somebody
+is sitting in the mirror's blind spot is worth knowing precisely when the
+driver is about to pull out.
+
+The level-3 merge case survives, because a driver pulling into traffic is
+moving while they do it — `tests/test_blind_spot.py` holds both halves.
+
+**#54 — FIXED 2026-09-19. Warning sounds stacked on top of each other and
+clipped.**
+
+Reported as *"do - do - do - rauschen und knacken - do - do - do"* when several
+cars were in the acute blind spot stages at once. Four separate faults in
+`misc/audio_player.py` and its callers, all of them the same mistake — treating
+warning tones as a mixdown rather than as one voice:
+
+* `_update_collision_warning_display` emitted `play_audio` **three times in the
+  same line** to beep three times. pygame played three simultaneous copies of
+  one waveform: three times the amplitude, ~9.5 dB up, and into clipping.
+  There is now a `repeat` key, played back to back with `Channel.queue`.
+* Every call took whatever channel was free. A flapping acute level — several
+  cars, hold times expiring out of step — put a dozen copies of a 0.88 s sample
+  on top of each other within a second, until pygame ran out of channels and
+  began cutting running tones off. One **reserved channel** now carries every
+  warning and a new one replaces the old.
+* `UIManager._blind_spot_beep(force=True)` bypassed its own repeat interval on
+  every rising edge, and an edge is not rare when two hold times interleave.
+  The edge keeps what it needs (it sounds immediately instead of waiting for
+  the next UI pass) and loses what it should never have had.
+* `mixer.Sound(file)` re-read the WAV from disk on **every** beep — blocking
+  I/O inside a 50 ms cycle (`AGENTS.md` §1), which is itself a source of buffer
+  underruns. All files are loaded once at startup.
+
+The mixer is also initialised explicitly now: 48 kHz to match the files (no
+resampling) and a 1024-sample buffer instead of pygame's 512, which is ~12 ms
+and too tight next to a running LFS. A machine with no audio device logs one
+line and loses its warning tones instead of taking the app down at startup.
+
+**#55 — The add-on is completely inert during a replay, and nothing says so.**
+
+Not a regression and arguably not a bug — but it costs a whole verification
+route, so it is worth knowing before someone tries the same thing. A replay
+sets `ISS_REPLAY` and **not** `ISS_GAME` (measured, `ui.md` §1.1), so
+`on_track` is False and `AssistanceManager` skips every system. No warning, no
+PDC, no HUD. Anyone checking a fix by loading the replay of the incident gets
+silence and cannot tell it apart from the fix working.
+
+Blocking *actuation* there is correct and must stay. Whether warnings and the
+HUD should run is an open product decision; it would be a `replay` flag in
+`state_data`, with `InputGuard` refusing on it, and `AssistanceManager` gated
+on `on_track or replay`.
+
+Until then, the way to check behaviour against a replay is offline: capture
+`IS_MCI` with a second InSim client (a replay streams it normally at 10 Hz) and
+feed the frames through the systems in a script. Note that `IS_NPL` does **not**
+arrive in a replay, so `CName` is unavailable and `IS_STA.ViewPLID` is the only
+pointer to the player's own car.
 
 ## Deliberately disabled — leave alone unless asked
 

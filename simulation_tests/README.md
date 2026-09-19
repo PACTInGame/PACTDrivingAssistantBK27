@@ -41,6 +41,16 @@ that the tracer's own `SMALL_SSG` stream makes it independent of `cfg.txt`:
 
 Never start a second receiver on 30000 alongside the add-on without such a relay.
 
+**And stop the relay when the run is over.** A `_temp` harness is a normal process and
+outlives the scenario it was written for. One left running held 30000 for over an hour
+on 2026-09-19; every add-on start after it came up blind, and every actuator was
+silently refused (`reference/known-issues.md` #51). The add-on now says so instead of
+looking healthy, but the port is still only released by killing the process:
+
+```powershell
+Get-NetUDPEndpoint -LocalPort 30000 | ForEach-Object { Get-Process -Id $_.OwningProcess }
+```
+
 | | |
 |---|---|
 | OS | **Windows** — replaying input is global OS input; LFS is Windows-only |
@@ -99,7 +109,8 @@ Useful flags:
 
 `run.json` always says `"functional_verdict": "not_evaluated"`. Nothing in this
 harness can decide whether the *add-on* behaved — that is what the scenario's
-`timeline.md` and a reading of the trace are for. Two traps it does guard:
+`timeline.md` and a reading of the trace are for. The independent `chat_check`
+is enforced on every run, including `--no-summary` (see below). Further checks:
 
 - **Missing telemetry is not a zero reading.** A capture with no OutGauge looks
   exactly like "the brake never moved". `--require OutGauge --require MCI` on any
@@ -143,7 +154,45 @@ to confirm.
 
 Exit codes: `0` ok · `2` bad arguments · `3` pre-flight refused · `4` tracer did
 not start · `5` LFS not at the main menu · `6` replay aborted · `7` required
-telemetry missing · `8` the scenario is disabled.
+telemetry missing · `8` the scenario is disabled · `9` LFS chat diagnostics ·
+`10` chat review required or capture incomplete.
+
+### Mandatory chat review
+
+Every scenario records `MSO` (system and user chat, including hidden prefix and
+`/o` messages), `III` (`/i` messages delivered to this connection), and `ACR`
+(admin command reports delivered to this connection), even if its packet list
+omits them. The runner also adds these packets for custom tracer scripts; the
+base tracer enforces them for direct CLI runs. `ISF_MSO_COLS` preserves colours.
+InSim only exposes messages delivered to that connection; it is not a chat-history
+API and cannot recover messages from before the tracer connected.
+
+`trace.jsonl` retains packet fields, raw message bytes (`raw_text_hex`), decoded
+Unicode `text`, author/type and timestamps. `MSOData` selects the initial code
+page; inline code-page switches are decoded too. The summary and `run.json`
+include every chat message and a `chat_check`:
+
+- `failed`: a recognised DE/EN system diagnostic (e.g. **Ungültiger Parameter**)
+  or ACR rejection/unknown command. Exit 9 if no earlier failure already applies.
+- `needs_review`: an unrecognised system message. Exit 10; inspect its text and
+  timestamp. MSO has **no severity field**, so an unfamiliar/localised warning
+  must never pass just because a keyword filter did not recognise it.
+- `incomplete`: missing mandatory subscriptions, missing end record, dropped
+  trace records, or an InSim connection error. Exit 10. No chat packets is valid
+  only when the metadata and trace completeness establish capture was enabled.
+- `passed`: complete capture, no diagnostics or unresolved system messages.
+  This does not evaluate the assistance feature itself.
+
+`chat_review.py` recognises only narrow informational forms already observed
+in traces (checkpoint/layout/race-result announcements). User chat is retained
+without treating quoted error text as an LFS error. Unknown system messages
+must be reviewed before accepting a scenario; add a narrowly defined benign
+form only after confirming its meaning, never suppress diagnostics to pass.
+
+A scenario passes only when its feature expectations hold **and** no LFS
+warnings remain. Always review `chat_check` when analysing live runs. Existing
+traces can be reanalysed, including their old `{hex, text}` message fields;
+they cannot prove complete chat capture if their metadata lacks subscriptions.
 
 ### Safety
 
@@ -439,7 +488,8 @@ simulation_tests/
     scenario.py          scenario.json
     trace_format.py      the trace record format and its writer
     packet_dump.py       packet -> dict, with SI conversions and flag names
-    insim_patch.py       corrected IS_CON decoder, tracer-process only
+    insim_patch.py       compatibility imports for the shared IS_CON decoder
+    chat_review.py       chat decoding, diagnostics and conservative run checks
     input_model.py       the recorded input format and key naming
     recorder.py          input capture
     player.py            input replay
@@ -500,22 +550,13 @@ assistance system silently does nothing.
 Never instead bind a second listener to 30000/29998 and hope both processes see
 every packet. One of them will miss datagrams, unpredictably.
 
-## 12. `insim_patch.py` — why the tracer decodes IS_CON itself
+## 12. Contact decoder compatibility
 
-`pyinsim` is the add-on's protocol library and is not modified from here.
-Its `IS_CON` expects the 40-byte layout and unpacks `CarContact` with the
-signedness inverted, so on an LFS that sends the 44-byte layout the decode raises
-*inside the asyncore loop* and the tracer loses its InSim connection mid-scenario.
-
-`insim_patch.apply()` installs a corrected `IS_CON` into the **tracer process's
-own** packet map — the tracer is a separate process, so this can never reach a
-running add-on. It picks the layout by `Size` (both are decoded, and the trace
-records which one arrived as `con_layout`) and reads the pedal nibbles, speed and
-angle bytes as unsigned and the two accelerations as signed.
-
-The add-on's own decoder is still uncorrected; it does not subscribe to CON today,
-so nothing is broken, but anything that starts consuming CON must port this first
-(`reference/known-issues.md`).
+The tracer and add-on use the same `pyinsim.IS_CON` decoder. It accepts 40-byte
+legacy and 44-byte current layouts and records `con_layout` for interpretation.
+Pedal, speed and angle bytes are unsigned; accelerations are signed.
+`insim_patch.py` retains imports and a no-op `apply()` for existing tracer copies;
+it no longer installs or maintains a separate decoder. See `reference/insim.md`.
 
 ---
 

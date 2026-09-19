@@ -24,8 +24,9 @@ from lfs.lfs_state import StateHandler
 from misc import platform_shim
 from misc.input_guard import (REASON_AI_CONTROLLED, REASON_DIALOG,
                               REASON_LFS_NOT_FOCUSED, REASON_MODIFIER_HELD,
-                              REASON_NOT_LOCAL_DRIVER, REASON_OFF_TRACK,
-                              REASON_TEXT_ENTRY, InputGuard, looks_like_lfs)
+                              REASON_NO_OUTGAUGE, REASON_NOT_LOCAL_DRIVER,
+                              REASON_OFF_TRACK, REASON_TEXT_ENTRY, InputGuard,
+                              looks_like_lfs)
 from misc.key_tap import get_key_tapper
 from ui.ui_manager import BTN_SIREN as UI_BTN_SIREN
 from ui.ui_manager import UIManager
@@ -208,6 +209,58 @@ def test_guard_refuses_a_car_lfs_drives_itself(bus, make_own_vehicle):
     assert guard.may_inject(own) == REASON_AI_CONTROLLED
 
 
+def test_guard_refuses_when_outgauge_never_bound(bus, make_own_vehicle):
+    """Port 30000 taken by something else -- known-issues #51.
+
+    The refusal used to be ``not_local_driver``, which is what the variable
+    said and not what was wrong: the driver was sitting in their own car, and
+    ``viewed_plid`` was simply never filled because no packet ever arrived.
+    """
+    clock = FakeClock()
+    guard = InputGuard(bus, foreground_check=lambda: True, clock=clock)
+    bus.emit('state_data', track_state())
+    bus.emit('outgauge_status', {'bound': False, 'reason': 'port_in_use'})
+
+    assert guard.may_inject(make_own_vehicle(local_plid=1, plid=1))         == REASON_NO_OUTGAUGE
+    assert guard.outgauge_reason() == 'port_in_use'
+
+
+def test_guard_refuses_when_the_bound_stream_falls_silent(
+        bus, make_own_vehicle, make_outgauge_packet):
+    """The camera left the cockpit, or ``OutGauge Mode`` is 0 (conventions §5.3).
+
+    Note the difference to the modifier reading, which goes back to "unknown"
+    when it ages out: this one fails *closed*. A stale Shift flag disables a
+    feature; a stale stream means nothing knows whose car it is looking at.
+    """
+    clock = FakeClock()
+    guard = InputGuard(bus, foreground_check=lambda: True, clock=clock)
+    bus.emit('state_data', track_state())
+    bus.emit('outgauge_status', {'bound': True, 'reason': None})
+    bus.emit('outgauge_data', make_outgauge_packet())
+    assert guard.may_inject(make_own_vehicle(local_plid=1, plid=1)) is None
+
+    clock.advance(5.0)
+    assert guard.may_inject(make_own_vehicle(local_plid=1, plid=1))         == REASON_NO_OUTGAUGE
+    assert guard.outgauge_reason() == 'no_packets'
+
+    bus.emit('outgauge_data', make_outgauge_packet())
+    assert guard.may_inject(make_own_vehicle(local_plid=1, plid=1)) is None
+
+
+def test_guard_without_a_connector_does_not_invent_an_outgauge_fault(
+        bus, make_own_vehicle):
+    """Nobody said whether the socket is open, so the guard does not guess.
+
+    Same rule as :func:`lfs_has_focus`: refuse because the user really is
+    elsewhere, never because we could not ask.
+    """
+    guard = InputGuard(bus, foreground_check=lambda: True, clock=FakeClock())
+    bus.emit('state_data', track_state())
+    assert guard.outgauge_stale() is False
+    assert guard.may_inject(make_own_vehicle(local_plid=1, plid=1)) is None
+
+
 def test_guard_reads_the_real_state_data_payload(bus, fake_connector, make_sta_packet):
     """The keys the guard reads are the keys StateHandler really publishes."""
     guard = InputGuard(bus, foreground_check=lambda: True)
@@ -233,8 +286,11 @@ def test_auto_hold_presses_the_handbrake_key_when_everything_is_allowed(
 
     result = auto_hold.process(stopped_car, {})
 
-    assert result['auto_hold_active'] is True
+    assert result['auto_hold_active'] is False
     assert keys_pressed() == ['q']
+    assert seen.count('notification') == 0
+    stopped_car.handbrake_light = True
+    assert auto_hold.process(stopped_car, {})['auto_hold_active'] is True
     assert seen.count('notification') == 1
 
 

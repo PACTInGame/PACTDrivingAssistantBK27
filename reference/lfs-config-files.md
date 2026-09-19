@@ -136,9 +136,9 @@ before arming anything. That step is what makes reading the file safe to use at 
 What the file *does* answer outright, with no offset problem:
 
 - whether `brake` is assigned to an axis at all, and its `invert` flag;
-- whether `clutch` and `handbrake` are on an axis or not — which is exactly the question
-  behind `known-issues.md` #42, where `AutoHold` presses a handbrake key a wheel driver
-  may not have. `handbrake` = `0xFFFF` means no handbrake axis, so the key path applies.
+- whether `clutch` and `handbrake` were on an axis when saved. `handbrake` = `0xFFFF`
+  means no saved handbrake axis. AutoHold uses dashboard confirmation at runtime:
+  these files may be stale until LFS exits, so they cannot verify a live key binding.
 
 ## 5. The button/key table — measured for indices 0..20
 

@@ -273,6 +273,52 @@ class BlindSpotWarning(AssistanceSystem):
     # 2 Grad. Deutlich ueber der Aufloesung des Headings (1/182 Grad) und
     # deutlich unter dem Winkel, den ein beginnender Spurwechsel erzeugt.
     MIN_CONVERGENCE_SIN = 0.035
+    # ...und das Auto *vor* uns ist es genauso wenig.
+    #
+    # ``_is_plain_following`` sortiert das hintere Auto in der eigenen Spur
+    # aus, solange beide parallel stehen. Genau das hoert im Moment eines
+    # Auffahrunfalls auf zu gelten: beide Autos drehen sich, der Winkel
+    # zwischen ihnen reisst die 2-Grad-Schwelle, und das Auto, in das wir
+    # gerade hineinfahren, wird zur Akutwarnung des toten Winkels - auf einer
+    # Seite, die das Vorzeichen eines fast verschwindenden Kreuzprodukts
+    # entscheidet. Mal links, mal rechts, und wegen der Haltezeit oft beides
+    # gleichzeitig (known-issues #52).
+    #
+    # Der tote Winkel ist per Definition neben und hinter uns - der
+    # Stufe-1-Korridor deckt genau das ab (90 Grad bis 180 Grad). Die
+    # Akutstufen hatten diese Schranke nie. Sie bekommen sie in
+    # ``_is_longitudinal_traffic``, und zwar aus **zwei** Teilen, weil keiner
+    # allein reicht:
+    #
+    # * **vor uns** - der Mittelpunkt des anderen Autos liegt vor unserer
+    #   Frontstossstange (halbe eigene Laenge). Allein genommen kostet das den
+    #   Fall, um den es hier geht: wer uns ueberholt, schiebt seinen
+    #   Mittelpunkt an unserem vorbei, lange bevor der Konflikt vorbei ist.
+    # * **in unserer Spur** - derselbe Querversatz wie in
+    #   ``_is_plain_following``. Allein genommen ist das die Bedingung, die
+    #   beim Aufprall zerfaellt.
+    #
+    # Zusammen beschreiben sie genau den Vordermann: vor uns, in unserer
+    # Spur, egal wie verdreht die beiden im Moment des Aufpralls stehen. Der
+    # gehoert der Kollisionswarnung, die ihn mit der richtigen Physik
+    # behandelt. Ein Auto vor uns in der *Nachbarspur* bleibt ein Fall fuer
+    # die Akutstufe - dorthin koennen wir lenken.
+
+    # ─── Und im Stillstand gibt es keine Akutstufe ────────────────────
+    #
+    # Eine Toter-Winkel-Warnung sagt "fahr da jetzt nicht hin". Wer steht,
+    # faehrt nirgendwo hin: die Kontaktvorhersage schreibt unseren Umriss
+    # ueber den ganzen Horizont an dieselbe Stelle fort, jede vorhergesagte
+    # Beruehrung kommt also allein aus der Bewegung des anderen. Daraus wurde
+    # an der Ampel ein Piepen fuer jedes Auto, das vorbeikam
+    # (known-issues #53) - und weder Warnen noch Bremsen ist die richtige
+    # Antwort, wenn wir bereits stehen.
+    #
+    # 1 km/h = 0.28 m/s liegt klar unter allem, was Anfahren oder Rangieren
+    # erzeugt, und klar ueber der Aufloesung der MCI-Geschwindigkeit. Der
+    # Einfaedelfall der Stufe 3 bleibt erhalten: wer wirklich in den Verkehr
+    # hinausfaehrt, bewegt sich dabei.
+    MIN_ACUTE_OWN_SPEED_KMH = 1.0
 
     # ─── Haltezeit ────────────────────────────────────────────────────
     MEAN_VEHICLE_LENGTH_M = 4.5
@@ -317,6 +363,11 @@ class BlindSpotWarning(AssistanceSystem):
         acute_left = acute_right = False
         brake_left = brake_right = False
         deceleration = 0.0
+        # Einmal fuer den ganzen Durchlauf, nicht je Fahrzeug: siehe
+        # MIN_ACUTE_OWN_SPEED_KMH. Stufe 1 bleibt davon unberuehrt - dass
+        # jemand im toten Winkel *steht*, darf der Fahrer auch im Stand
+        # wissen; es blinkt und piept nur nicht.
+        acute_possible = own.speed >= self.MIN_ACUTE_OWN_SPEED_KMH
 
         for vehicle in vehicles.values():
             data = vehicle.data
@@ -340,10 +391,9 @@ class BlindSpotWarning(AssistanceSystem):
             # innerhalb von ACUTE_TTC_S nicht knallen, wenn wir weiter
             # auseinander sind als das.
             acute_level = 0
-            if distance <= self.ACUTE_TTC_S * (own_speed_ms + other_speed_ms) \
-                    + self.PAIR_EXTENT_M \
-                    and _is_within_threshold(own.heading, data.heading,
-                                             ACUTE_HEADING_THRESHOLD_UNITS):
+            if acute_possible and self._acute_prefilter(
+                    distance, own_speed_ms, other_speed_ms,
+                    own.heading, data.heading):
                 if own_body is None:
                     own_body = body_from(own, own_speed_ms)
                 other_body = body_from(data, other_speed_ms)
@@ -413,6 +463,30 @@ class BlindSpotWarning(AssistanceSystem):
             'deceleration': deceleration,
         }
 
+    # ─── Vorfilter der Akutstufen ─────────────────────────────────────
+
+    def _acute_prefilter(self, distance_m: float, own_speed_ms: float,
+                         other_speed_ms: float, own_heading: float,
+                         other_heading: float) -> bool:
+        """Lohnt sich fuer dieses Fahrzeug ueberhaupt eine Kontaktrechnung?
+
+        Zwei Vergleiche, vor jedem ``Body``:
+
+        * **Naeherung** - die Relativgeschwindigkeit ist nie groesser als die
+          Summe der beiden Betraege, also kann es innerhalb von ``ACUTE_TTC_S``
+          nicht knallen, wenn wir weiter auseinander sind als das (plus der
+          Laenge beider Autos, ``PAIR_EXTENT_M``).
+        * **Richtung** - Querverkehr (90 Grad) und Gegenverkehr (180 Grad)
+          haben eigene Systeme; hier geht es um jemanden, der ungefaehr in
+          unsere Richtung faehrt.
+        """
+        reach = self.ACUTE_TTC_S * (own_speed_ms + other_speed_ms) \
+            + self.PAIR_EXTENT_M
+        if distance_m > reach:
+            return False
+        return _is_within_threshold(own_heading, other_heading,
+                                    ACUTE_HEADING_THRESHOLD_UNITS)
+
     # ─── Ausgabe ──────────────────────────────────────────────────────
 
     def _level_for(self, braking: bool, acute: bool, present: bool,
@@ -475,6 +549,8 @@ class BlindSpotWarning(AssistanceSystem):
         zurueckgegeben, sobald Bremsen ueberhaupt helfen wuerde: die Schwelle
         gehoert ``EmergencyBrake``, hier wird nur gerechnet.
         """
+        if self._is_longitudinal_traffic(own_body, other_body):
+            return 0, 0.0
         if self._is_plain_following(own_body, other_body):
             return 0, 0.0
         if not self._contact_is_imminent(own_body, other_body):
@@ -557,6 +633,28 @@ class BlindSpotWarning(AssistanceSystem):
             # Umrisse wirklich beruehren. Siehe STEADY_TTC_S.
             return 0.0
         return self.STEADY_TTC_S
+
+    def _is_longitudinal_traffic(self, own_body: Body,
+                                 other_body: Body) -> bool:
+        """Faehrt das andere Auto schlicht vor uns in unserer Spur?
+
+        Der Vordermann, und zwar auch dann noch, wenn wir gerade in ihn
+        hineinfahren - siehe den Block bei ``MIN_CONVERGENCE_SIN``. Ohne diese
+        Frage wurde ausgerechnet der Auffahrunfall zur Akutwarnung des toten
+        Winkels, auf einer Seite, die das Rauschen entschied.
+
+        Bewusst *hier* statt im Vorfilter: ``_is_on_left``, die
+        Kontaktvorhersage und ``_is_plain_following`` brauchen ohnehin alle
+        denselben ``Body``.
+        """
+        to_other_x = other_body.x - own_body.x
+        to_other_y = other_body.y - own_body.y
+        longitudinal = own_body.dx * to_other_x + own_body.dy * to_other_y
+        if longitudinal <= own_body.length / 2.0:
+            return False
+        lateral = abs(own_body.dx * to_other_y - own_body.dy * to_other_x)
+        return lateral <= (own_body.width + other_body.width) / 2.0 \
+            + self.SAME_LANE_TOLERANCE_M
 
     def _is_plain_following(self, own_body: Body, other_body: Body) -> bool:
         """Faehrt das andere Auto schlicht in unserer Spur hinter uns her?

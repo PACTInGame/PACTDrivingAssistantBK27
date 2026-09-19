@@ -18,6 +18,16 @@ class LanguageManager:
 
         # Translation dictionary - organized by English key, then by language code
         self.translations = {
+            "Check handbrake binding": {
+                "en": "Auto Hold: check handbrake key / axis in LFS",
+                "de": "Auto Hold: Handbremstaste / Achse in LFS prüfen",
+                "it": "Auto Hold: controlla tasto / asse freno a mano in LFS",
+                "fr": "Auto Hold : vérifier touche / axe du frein à main dans LFS",
+                "tr": "Auto Hold: LFS el freni tuşunu / eksenini kontrol edin",
+                "no": "Auto Hold: sjekk håndbrekktast / akse i LFS",
+                "dk": "Auto Hold: tjek håndbremsetast / akse i LFS",
+                "se": "Auto Hold: kontrollera handbromsknapp / axel i LFS"
+            },
             # ─── Main Menu ────────────────────────────────────────────
             "Main Menu": {
                 "en": "Main Menu",
@@ -261,6 +271,26 @@ class LanguageManager:
                 "no": "Bremsing utilgjengelig",
                 "dk": "Bremsning utilgaengelig",
                 "se": "Bromsning otillgaenglig"
+            },
+            "OutGauge port 30000 is taken": {
+                "en": "OutGauge port 30000 is taken",
+                "de": "OutGauge-Port 30000 ist belegt",
+                "it": "Porta OutGauge 30000 occupata",
+                "fr": "Le port OutGauge 30000 est occupe",
+                "tr": "OutGauge portu 30000 dolu",
+                "no": "OutGauge-port 30000 er opptatt",
+                "dk": "OutGauge-port 30000 er optaget",
+                "se": "OutGauge-port 30000 ar upptagen"
+            },
+            "No OutGauge data - check camera and cfg.txt": {
+                "en": "No OutGauge data - check camera and cfg.txt",
+                "de": "Keine OutGauge-Daten - Kamera und cfg.txt pruefen",
+                "it": "Nessun dato OutGauge - controlla camera e cfg.txt",
+                "fr": "Pas de donnees OutGauge - verifiez camera et cfg.txt",
+                "tr": "OutGauge verisi yok - kamera ve cfg.txt kontrol",
+                "no": "Ingen OutGauge-data - sjekk kamera og cfg.txt",
+                "dk": "Ingen OutGauge-data - tjek kamera og cfg.txt",
+                "se": "Ingen OutGauge-data - kontrollera kamera och cfg.txt"
             },
             "vJoy is not installed": {
                 "en": "vJoy is not installed",

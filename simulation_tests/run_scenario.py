@@ -328,12 +328,23 @@ def _finish(process: subprocess.Popen, control: ControlClient, tracer_log: Any,
         try:
             summary = analyze_trace.summarise(trace_path)
             result["summary"] = summary
+            result['chat_check'] = summary.get('chat_check', {'status': 'incomplete'})
+            chat_status = result['chat_check']['status']
+            if chat_status != 'passed':
+                exit_code = exit_code or (9 if chat_status == 'failed' else 10)
+                print(f"LFS chat check: {chat_status} -- see run.json", file=sys.stderr)
             if print_summary:
                 print()
                 print(analyze_trace.format_summary(summary))
         except Exception as exc:
             result["summary_error"] = f"{type(exc).__name__}: {exc}"
+            result['chat_check'] = {'status': 'incomplete'}
+            exit_code = exit_code or 10
+    else:
+        result['chat_check'] = {'status': 'incomplete'}
+        exit_code = exit_code or 10
 
+    result['exit_code'] = exit_code
     with open(os.path.join(run_dir, "run.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(result, fh, indent=2, ensure_ascii=False)
         fh.write("\n")

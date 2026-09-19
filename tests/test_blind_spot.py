@@ -444,6 +444,109 @@ def test_crossing_traffic_is_not_a_blind_spot_case(
     assert result['right_level'] == 0
 
 
+# --- What the acute stages are not: the car in front, and standing still -----
+
+
+def test_the_car_we_are_running_into_is_not_a_blind_spot_case(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """known-issues #52, the way it was reported: drive into the car ahead.
+
+    ``_is_plain_following`` used to be the only thing keeping a lead car out
+    of the acute stages, and it stops holding the moment of impact - both cars
+    rotate, the heading difference passes two degrees, and the pair became
+    "interesting" again. Which side it was on was then decided by the sign of
+    a cross product that is essentially zero straight ahead.
+    """
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=0.3, y=5.0, heading=6.0, speed=40.0)],
+                 heading=0.0, speed=55.0)
+
+    assert result['left_level'] == 0
+    assert result['right_level'] == 0
+
+
+def test_a_lead_car_never_picks_a_side_however_it_is_offset(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The "sometimes left, sometimes right, sometimes both" of #51.
+
+    The same collision with the lead car a few centimetres to either side. A
+    criterion that decides on the sign of the lateral offset flips here; this
+    one does not, because "ahead" is not a blind spot on either side.
+    """
+    for lateral in (-0.4, -0.05, 0.05, 0.4):
+        bsw.clock.advance(10.0)          # let any hold time expire
+        result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                     [dict(x=lateral, y=4.6, heading=8.0, speed=35.0)],
+                     heading=0.0, speed=55.0)
+        assert result['left_level'] == 0, lateral
+        assert result['right_level'] == 0, lateral
+
+
+def test_a_car_drawing_level_with_us_is_still_an_acute_warning(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """...and the gate must not cost the case it exists beside.
+
+    Being overtaken, the other car's nose reaches past ours long before the
+    conflict is over. The bar is its *centre* against our front bumper, so a
+    car alongside still warns while we turn into it.
+    """
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.5, y=1.5, heading=0.0, speed=70.0)],
+                 heading=8.0, speed=60.0, ang_vel=yaw_units(15.0))
+
+    assert result['left_level'] >= 2
+
+
+def test_standing_still_is_never_an_acute_warning(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """known-issues #53: at a stop, everything that drove past beeped.
+
+    Our outline does not move over the prediction horizon, so every contact
+    the window finds comes from the other car alone - and braking a car that
+    already stands is not an answer to anything.
+    """
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.2, y=-6.0, heading=0.0, speed=35.0)],
+                 heading=0.0, speed=0.0)
+
+    assert result['left_level'] <= 1
+    assert result['deceleration'] == 0.0
+
+
+def test_the_same_car_warns_again_once_we_pull_away(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The merge out of a junction is exactly why the floor is 1 km/h, not 5.
+
+    Same scene twice: stopped at the give-way line, then rolling out of it at
+    8 km/h with the wheel going over. The first is somebody else's traffic
+    driving past; the second is us putting our car in front of it.
+    """
+    others = [dict(x=-3.2, y=-14.0, heading=0.0, speed=55.0)]
+    quiet = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                heading=15.0, speed=0.0, ang_vel=yaw_units(15.0))
+    assert quiet['left_level'] <= 1
+    assert quiet['deceleration'] == 0.0
+
+    bsw.clock.advance(10.0)
+    moving = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                 heading=15.0, speed=8.0, ang_vel=yaw_units(15.0))
+    assert moving['left_level'] >= 2
+
+
+def test_level_one_still_works_while_we_are_stopped(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Only the blinking and the beeping go away, not the information.
+
+    Somebody sitting in the mirror's blind spot is worth knowing about before
+    the driver pulls out, which is precisely the moment they are stopped.
+    """
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.2, y=-4.0, heading=0.0, speed=20.0)],
+                 heading=0.0, speed=0.0)
+
+    assert result['left_level'] == 1
+
+
 # --- Level 3: the braking demand --------------------------------------------
 
 

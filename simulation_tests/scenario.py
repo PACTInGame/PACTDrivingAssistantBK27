@@ -120,7 +120,8 @@ def tracer_argv(scenario: Dict[str, Any], out_path: str, control_port: int,
         "--outgauge-interval", str(int(tracer["outgauge_interval_ms"])),
         "--outsim-interval", str(int(tracer["outsim_interval_ms"])),
     ]
-    packets = tracer.get("packets")
+    from simulation_tests.chat_review import PACKETS
+    packets = list(dict.fromkeys([*(tracer.get("packets") or config.DEFAULT_PACKETS), *PACKETS]))
     if packets:
         argv += ["--packets", ",".join(packets)]
     return argv

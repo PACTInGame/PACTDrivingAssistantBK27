@@ -8,7 +8,8 @@ import pytest
 import pyinsim
 from assistance.park_distance_control import (
     AXM_TO_MCI, NO_HITBOX_OBJECTS, PDC_CLEAR, PDC_INACTIVE, PDC_MAX_SPEED_KMH,
-    ParkDistanceControl, axm_object_id, create_rectangle_for_object)
+    PDC_SILENCE_AFTER_S, PDC_STANDSTILL_KMH, ParkDistanceControl,
+    axm_object_id, create_rectangle_for_object)
 from misc.pdc_beep import PDCBeepController
 from misc import platform_shim
 
@@ -29,6 +30,130 @@ def axm_packet(action, objects):
 @pytest.fixture
 def pdc(bus, settings):
     return ParkDistanceControl(bus, settings)
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 500.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture
+def parked(bus, settings):
+    """A PDC on a fake clock, for the standstill silence."""
+    clock = FakeClock()
+    system = ParkDistanceControl(bus, settings, clock=clock)
+    system.clock = clock
+    return system
+
+
+def roll(system, own, speed_kmh, seconds, step=0.1):
+    """Drive at a constant speed for ``seconds`` of the fake clock."""
+    for _ in range(max(1, int(round(seconds / step)))):
+        own.data.speed = speed_kmh
+        system.process(own, {})
+        system.clock.advance(step)
+
+
+# ─── Acceptance: the beeper stops once the car is parked ─────────────────────
+
+def test_the_beeper_is_silenced_after_a_second_of_standstill(
+        parked, make_own_vehicle, recorder):
+    """Standing close behind someone used to beep for as long as you sat there.
+
+    A park distance control reports an *approach*. Once the car stands, the
+    manoeuvre is over and the gap is the one the driver chose.
+    """
+    events = recorder('pdc_beep_allowed')
+    own = make_own_vehicle(speed=2.0, local_plid=1, plid=1)
+
+    roll(parked, own, 2.0, 0.5)
+    assert events.count('pdc_beep_allowed') == 0        # moving: nothing to say
+
+    roll(parked, own, 0.0, PDC_SILENCE_AFTER_S + 0.2)
+
+    assert events.last('pdc_beep_allowed') == {'allowed': False}
+
+
+def test_it_comes_back_the_moment_the_car_moves_again(
+        parked, make_own_vehicle, recorder):
+    events = recorder('pdc_beep_allowed')
+    own = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+
+    roll(parked, own, 0.0, PDC_SILENCE_AFTER_S + 0.2)
+    roll(parked, own, 1.0, 0.2)
+
+    assert events.last('pdc_beep_allowed') == {'allowed': True}
+    assert events.count('pdc_beep_allowed') == 2       # off, on. Not per cycle.
+
+
+def test_a_short_stop_mid_manoeuvre_does_not_cut_the_tone(
+        parked, make_own_vehicle, recorder):
+    """Reversing into a space means stopping to change direction."""
+    events = recorder('pdc_beep_allowed')
+    own = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+
+    roll(parked, own, 1.5, 0.3)
+    roll(parked, own, 0.0, PDC_SILENCE_AFTER_S - 0.4)
+    roll(parked, own, 1.5, 0.3)
+
+    assert events.count('pdc_beep_allowed') == 0
+
+
+def test_creeping_below_the_standstill_threshold_still_counts_as_standing(
+        parked, make_own_vehicle, recorder):
+    """0.1 km/h is 2.8 cm/s - that is sensor noise, not a manoeuvre."""
+    events = recorder('pdc_beep_allowed')
+    own = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+
+    roll(parked, own, PDC_STANDSTILL_KMH / 2.0, PDC_SILENCE_AFTER_S + 0.2)
+
+    assert events.last('pdc_beep_allowed') == {'allowed': False}
+
+
+def test_the_display_is_untouched_by_the_silence(
+        parked, make_own_vehicle, recorder):
+    """Only the tone goes. That something is still there has not changed."""
+    events = recorder('pdc_changed')
+    own = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+
+    roll(parked, own, 0.0, PDC_SILENCE_AFTER_S + 0.5)
+
+    assert events.last('pdc_changed') == dict.fromkeys(range(6), PDC_CLEAR)
+
+
+def test_the_ui_stops_asking_the_beeper_but_keeps_drawing(
+        bus, message_sender, settings, fake_connector):
+    """The two halves of the silence, on the consuming side.
+
+    ``_show_pdc_display`` draws the sensor rings and then asks the beeper for
+    a tone. Only the second half may go quiet.
+    """
+    from ui.ui_manager import UIManager
+
+    settings.set('park_distance_control_mode', 2)      # visual + audio
+    ui = UIManager(bus, message_sender, settings)
+    requests = []
+    ui.pdc_beeper.beep = lambda: requests.append(True)
+    bus.emit('pdc_changed', {0: 0, 1: 0, 2: 3, 3: 0, 4: 0, 5: 0})
+
+    ui._show_pdc_display()
+    assert requests == [True]
+
+    bus.emit('pdc_beep_allowed', {'allowed': False})
+    # A different reading, or the MessageSender suppresses the repaint as
+    # unchanged and the assertion below would prove nothing.
+    bus.emit('pdc_changed', {0: 0, 1: 2, 2: 3, 3: 0, 4: 0, 5: 0})
+    fake_connector.buttons.clear()
+    ui._show_pdc_display()
+
+    assert requests == [True]                          # no second tone
+    assert fake_connector.buttons                      # but still drawn
 
 
 # ─── Acceptance: object ids that used to collide ─────────────────────────────
@@ -200,8 +325,15 @@ def test_the_beeper_thread_is_a_daemon(beeper):
     assert beeper._thread.daemon is True
 
 
+@pytest.mark.skipif(platform_shim.is_available('winsound'),
+                    reason="the real winsound beeps instead of recording")
 def test_the_beeper_actually_sounds_while_requested(beeper, bus):
-    """On Linux the shim records the call instead of making noise."""
+    """On Linux the shim records the call instead of making noise.
+
+    On Windows ``winsound`` is the real thing: it makes a noise and records
+    nothing, so there is nothing here to assert against. The skip says that
+    rather than letting the suite fail on the one platform the app runs on.
+    """
     platform_shim.reset_recorded_calls()
     bus.emit('pdc_changed', {0: 0, 1: 0, 2: 0, 3: 3, 4: 3, 5: 3})
     beeper.beep()

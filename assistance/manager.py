@@ -127,6 +127,8 @@ class AssistanceManager:
             return
 
         results = {}
+        # Einen veroeffentlichten Stand fuer den ganzen Durchlauf festhalten.
+        own_vehicle, vehicles = self.own_vehicle, self.vehicles
         if self.on_track:
             # Ein perf_counter-Paar pro System, ~100 ns - unter dem Rauschen
             # eines 100-ms-Budgets, und die einzige Moeglichkeit, einen
@@ -143,7 +145,7 @@ class AssistanceManager:
                 # Kosten im Gutfall: null.
                 system_started = time.perf_counter()
                 try:
-                    result = system.process(self.own_vehicle, self.vehicles)
+                    result = system.process(own_vehicle, vehicles)
                 except Exception as e:
                     self._handle_system_failure(name, e)
                 else:
@@ -153,7 +155,6 @@ class AssistanceManager:
                     self._durations[name] = time.perf_counter() - system_started
             self._report_slow_pass(time.perf_counter() - started)
 
-        self.event_bus.emit('assistance_results', results)
         # Check for periodic tooltip messages
         try:
             self.chat_commands.check_tooltip()

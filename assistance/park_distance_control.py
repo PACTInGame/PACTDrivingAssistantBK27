@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import time
 from typing import Dict, Any
 
 import pyinsim.func
@@ -281,16 +282,39 @@ PDC_MAX_SPEED_KMH = 10.0
 # Sensorkegel reicht 2.8 m ueber die Karosserie hinaus.
 PDC_VEHICLE_RANGE_M = 15.0
 
+# ─── Wann der Ton verstummt ───────────────────────────────────────────────
+#
+# Ein Parkpieper meldet eine *Annaeherung*. Wer steht, naehert sich nicht
+# mehr: das Manoever ist zu Ende, der Abstand ist der, den der Fahrer gewaehlt
+# hat, und ein Dauerton darueber ist nur noch laut. Jeder Serien-PDC macht das
+# genauso - er verstummt im Stillstand und kommt beim Anfahren zurueck.
+#
+# Die **Anzeige** bleibt. Sie ist die Information ("da ist noch etwas"), der
+# Ton ist die Dringlichkeit, und nur die hat sich erledigt.
+#
+# 0.1 km/h = 2.8 cm/s ist Stillstand und nicht Kriechen; MCI meldet bei
+# stehendem Auto glatte 0. Die Sekunde davor ist die Entprellung: an einer
+# Einparkbewegung mit Richtungswechsel soll der Ton nicht bei jedem Nulldurch-
+# gang abreissen.
+PDC_STANDSTILL_KMH = 0.1
+PDC_SILENCE_AFTER_S = 1.0
+
 
 class ParkDistanceControl(AssistanceSystem):
     """PDC"""
 
-    def __init__(self, event_bus: EventBus, settings: SettingsManager):
+    def __init__(self, event_bus: EventBus, settings: SettingsManager,
+                 clock=time.monotonic):
         super().__init__("park_distance_control", event_bus, settings)
         self.pdc_result = dict.fromkeys(range(6), PDC_INACTIVE)
         self.park_grid = SpatialHashGrid(cell_size=15.0 * 65536)
         self.event_bus.subscribe('layout_received', self._update_axm)
         self.track = "ax"
+        self.clock = clock
+        # Seit wann das Auto steht, und was davon zuletzt veroeffentlicht
+        # wurde. Siehe PDC_SILENCE_AFTER_S.
+        self._standstill_since = None
+        self._beep_allowed = True
 
     def load_rectangles_from_json(self, filename: str):
         """Lädt Rechtecke aus einer JSON-Datei"""
@@ -350,6 +374,7 @@ class ParkDistanceControl(AssistanceSystem):
         """Prüft auf Fahrzeuge im toten Winkel"""
         new_pdc_result = dict.fromkeys(range(6), PDC_INACTIVE)
         own = own_vehicle.data
+        self._update_beep_permission(own.speed)
         if own.speed < PDC_MAX_SPEED_KMH:
             new_pdc_result = dict.fromkeys(range(6), PDC_CLEAR)
             # Alle Fahrzeuge sind gerade aus dem Gitter geflogen, ein
@@ -392,3 +417,28 @@ class ParkDistanceControl(AssistanceSystem):
             self.pdc_result = new_pdc_result
 
         return self.pdc_result
+
+    def _update_beep_permission(self, speed_kmh: float):
+        """Darf der Parkpieper toenen? Siehe PDC_SILENCE_AFTER_S.
+
+        Eigenes Event statt eines Schluessels in ``pdc_changed``: dessen
+        Payload ist ein reines Sensor-Dict, das ``ui_manager`` und
+        ``pdc_beep`` ueber den Index lesen, und ein Fremdkoerper darin haette
+        beide Leser geaendert. ``pdc_beep_allowed`` kommt nur bei Wechsel -
+        zwei- bis dreimal pro Einparkvorgang, nicht pro Zyklus.
+
+        Kosten: ein Vergleich, und in der ueberwiegenden Zahl der Zyklen
+        nichts weiter.
+        """
+        if speed_kmh >= PDC_STANDSTILL_KMH:
+            self._standstill_since = None
+            allowed = True
+        else:
+            now = self.clock()
+            if self._standstill_since is None:
+                self._standstill_since = now
+            allowed = now - self._standstill_since < PDC_SILENCE_AFTER_S
+        if allowed == self._beep_allowed:
+            return
+        self._beep_allowed = allowed
+        self.event_bus.emit('pdc_beep_allowed', {'allowed': allowed})

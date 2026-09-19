@@ -454,8 +454,9 @@ def test_speed_must_be_positive(fake_pynput):
         _player([], speed=0)
 
 
-@pytest.mark.skipif(sys.platform.startswith("win"), reason="checks the non-Windows refusal")
-def test_preflight_refuses_to_replay_where_it_cannot_drive_lfs(fake_pynput):
+def test_preflight_refuses_to_replay_where_it_cannot_drive_lfs(fake_pynput, monkeypatch):
+    from simulation_tests import win_focus
+    monkeypatch.setattr(win_focus, 'screen_size', lambda: None)
     problems = _player([], require_focus=False).preflight()
     assert any("not running on Windows" in problem for problem in problems)
 
@@ -689,6 +690,10 @@ def test_tracer_records_a_full_session_against_a_fake_lfs(tmp_path):
             time.sleep(0.05)
         client.marker("contact_expected")
         lfs.send(fake_lfs.con(1, 2, 55))
+        # MSO is deliberately absent from --packets above. Every scenario must
+        # still record normal chat and LFS errors, including non-ASCII text.
+        lfs.send(fake_lfs.mso(b'User: invalid parameter?', user_type=1))
+        lfs.send(fake_lfs.mso(b'^1Ung\xfcltiger Parameter'))
         lfs.send(fake_lfs.sta(256 | 16384, b"BL1", cam=0, num_p=0))
         time.sleep(0.4)
 
@@ -714,6 +719,11 @@ def test_tracer_records_a_full_session_against_a_fake_lfs(tmp_path):
     assert summary["contacts"][0]["plid_a"] == 1
     assert summary["end"] is not None, "the trace must end with an 'end' record"
     assert summary["end"]["dropped"] == 0
+    assert summary['counts']['MSO'] == 2
+    assert summary['chat_check']['status'] == 'failed'
+    assert summary['chat_check']['capture_complete']
+    assert [m['text'] for m in summary['chat_check']['diagnostics']] == ['Ungültiger Parameter']
+    assert len(summary['chat_check']['messages']) == 2
 
     speeds = analyze_trace.extract_signal(load_trace(trace_path), "OutGauge.speed_kmh")
     assert speeds and speeds[0][1] == pytest.approx(49.68, abs=0.01)
@@ -721,10 +731,7 @@ def test_tracer_records_a_full_session_against_a_fake_lfs(tmp_path):
 
 # ── the corrected IS_CON decoder (simulation_tests/insim_patch.py) ───────────
 #
-# pyinsim's own IS_CON expects the 40-byte layout and unpacks CarContact with the
-# signedness inverted, so a contact on a current LFS raises struct.error inside
-# the asyncore loop -- which drops the tracer's InSim connection mid-scenario.
-# The tracer patches its own process; the add-on's copy is untouched.
+# The tracer compatibility imports use the shared pyinsim contact decoder.
 def _car_contact_bytes(plid=1, steer=5, thr_brk=0xF0, clu_han=0x0A, gear_sp=0x30,
                        speed=200, direction=64, heading=250, accel_f=-9, accel_r=3,
                        x=160, y=320):
@@ -752,7 +759,7 @@ def test_car_contact_pedals_and_angles_are_unsigned_accelerations_signed():
     data = packet_dump.packet_to_dict("CON", packet)
     a = data["A"]
     # Speed 200 m/s and heading 250/256 would both come back negative if these
-    # bytes were read as signed, which is what pyinsim does.
+    # bytes were read as signed, which was the legacy decoder bug.
     assert a["Speed"] == 200 and a["speed_kmh"] == pytest.approx(720.0)
     assert a["heading_deg"] == pytest.approx(351.56, abs=0.01)
     # ...while AccelF must stay negative: forward is positive, so this is braking.
@@ -779,13 +786,14 @@ def test_an_is_con_of_an_unknown_size_is_a_clear_error_not_a_struct_error():
         insim_patch.IS_CON().unpack(_con_bytes(40)[:36])
 
 
-def test_the_patch_replaces_is_con_and_leaves_every_other_packet_alone():
+def test_compatibility_entry_point_uses_shared_decoder_without_mutating_map():
     import pyinsim
 
     original = dict(pyinsim.core._PACKET_MAP)
     try:
         insim_patch.apply(pyinsim)
-        assert pyinsim.core._PACKET_MAP[pyinsim.ISP_CON] is insim_patch.IS_CON
+        assert insim_patch.IS_CON is pyinsim.IS_CON
+        assert pyinsim.core._PACKET_MAP == original
         assert {k: v for k, v in pyinsim.core._PACKET_MAP.items() if k != pyinsim.ISP_CON} \
             == {k: v for k, v in original.items() if k != pyinsim.ISP_CON}
     finally:

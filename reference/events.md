@@ -14,7 +14,8 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `game_state_changed` | `IS_STA` packet | `lfs.lfs_state.StateHandler` |
 | `vehicle_data_received` | `IS_MCI` packet | `VehicleManager` |
 | `outgauge_data` | `OutGaugePack` | `VehicleManager`, `UIManager`, `InputGuard` (one per key-injecting system) |
-| `outsim_data` | `OutSimPack` | *(none — see known-issues #3)* |
+| `outsim_data` | `OutSimPack` | *(reserved; OutSim is not started by the app)* |
+| `outgauge_status` | `{bound: bool, reason: str\|None, error: str}` — emitted on every `start_outgauge()`, including the re-open on track entry. `reason` is `port_in_use` or `open_failed` | `InputGuard` |
 | `player_joined` | `IS_NPL` packet | `VehicleManager` |
 | `player_flags_changed` | `IS_PFL` packet | `VehicleManager` |
 | `player_left` | `IS_PLL` packet | `VehicleManager`, `AIDriver` |
@@ -26,17 +27,23 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `interface_mode_changed` | `IS_CIM` packet | `lfs.lfs_state.StateHandler` |
 | `AI_Controller_initialized` | `AICarController` instance | `AIDriver` |
 
+OutSim stays opt-in until a physics consumer exists. System results remain the
+return value of `process_all_systems()`; individual feature events carry live
+outputs. Player metadata stays in `VehicleManager.players` and reaches vehicle
+snapshots through the existing NPL/PFL handling.
+
 ## Derived state
+
+Vehicle payloads are detached read-only snapshots (wrapper plus VehicleData),
+including OwnVehicle gauge fields and identity. Consumers must not mutate them.
 
 | Event | Payload | Emitter | Subscribers |
 |---|---|---|---|
 | `state_data` | see below | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `LightAssists`, `ChatCommandHandler`, `AIDriver`, `InputGuard` (one per key-injecting system) |
 | `vehicles_updated` | `Dict[plid, Vehicle]` (excludes own car) — a **fresh dict per MCI frame** | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
 | `own_vehicle_updated` | `OwnVehicle` | `VehicleManager` — on **every OutGauge packet and every MCI frame** | `AssistanceManager`, every `AssistanceSystem` via the base class |
-| `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem` (logs only since WP6), `ControllerEmulator`\* |
-| `player_data_updated` | `Dict[plid, {PName, CName, PNameBytes, CNameBytes, UCID, PType, Flags, IsAI, IsRemote, ControlMode}]` | `VehicleManager` | *(none — dead)* |
+| `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem` (logs only since WP6) |
 
-| `assistance_results` | `{system_key: result_dict}` | `AssistanceManager` | *(none — dead)* |
 
 `player_flags_changed` carries `IS_PFL`, the change notification for the same `Flags`
 bitfield `IS_NPL` opens with. `IS_NPL` only arrives on joining and on leaving the pits,
@@ -66,11 +73,10 @@ matters because LFS then hands out **new PLIDs and sends no `IS_PLL` for the old
 local-driver election, and `LFSConnector` answers it with a `TINY_NPL` so the fresh
 identities arrive without waiting for anything.
 
-`vehicles_updated` carries an **immutable snapshot**: the dict is freshly built for
-each MCI frame and every `Vehicle.data` object in it is replaced, never mutated, by
-the next frame. A consumer may iterate it on a worker thread while packets keep
-arriving. `own_vehicle_updated` does **not** give this guarantee — it hands out the
-live `OwnVehicle`, which OutGauge keeps writing to (`known-issues.md` #12).
+Both vehicle events carry detached telemetry snapshots, including the wrapper and
+its `data`. A consumer may keep a reading on a worker while later packets arrive.
+The legacy `current_route` annotation is not authoritative across snapshots;
+AIDriver owns persistent route assignments in its `assigned_routes` dictionary.
 
 **The snapshot shrinks as well as grows.** A car missing from a *complete* MCI frame
 is dropped, because LFS sends no `IS_PLL` when a race ends and a car nobody updates
@@ -109,12 +115,18 @@ grep before editing. Keys may be added, never removed or renamed.
 | `cross_traffic_warning_changed` | `{level: 0..2, side: 'left'\|'right'\|None}` | `CrossTrafficWarning` | `UIManager` |
 | `blind_spot_warning_changed` | `{left: bool, right: bool, left_level: 0..3, right_level: 0..3}` | `BlindSpotWarning` | `UIManager` |
 | `pdc_changed` | `Dict[0..5, int]` — sensor → `-1` inactive, `0` clear, `1..3` near…nearest | `ParkDistanceControl` | `UIManager`, `PDCBeepController` |
+| `pdc_beep_allowed` | `{allowed: bool}` — **on change only**, `False` after 1 s at a standstill | `ParkDistanceControl` | `UIManager` |
 | `needed_deceleration_update` | `{deceleration: float, source: str}` m/s² | `ForwardCollisionWarning`, `CrossTrafficWarning`, `BlindSpotWarning` | `EmergencyBrake` |
 | `emergency_brake_changed` | `{active: bool, source: str\|None}` — which warning asked for it | `EmergencyBrake` | `UIManager` |
 | `gearbox_availability` | `{reason: str\|None}` — `None` = shifting; `lfs_auto_gears`, `car_not_supported`, `not_calibrated` | `Gearbox` | `MenuSystem` |
 | `ai_traffic_state_changed` | `{active: bool}` | `AIDriver` | `MenuSystem` |
 
 PDC sensor index order: `0,1,2` = front left/middle/right, `3,4,5` = rear left/middle/right.
+
+`pdc_changed` is a **pure sensor dict** and is read positionally in places; the
+standstill silence is therefore its own event rather than an extra key in it. It
+mutes only the tone — the display stays, because that something is still there does
+not change by stopping (`known-issues.md` #53, `systems.md`).
 
 Warning-output events are emitted **only on change**, not every cycle. Keep that
 contract — the UI relies on it and the bus is synchronous.
@@ -165,7 +177,6 @@ implementation details:
 | `request_player_list` | `{}` | `AIDriver` | `LFSConnector` (sends `TINY_NPL`) |
 | `send_command_to_lfs` | **`str`** — e.g. `"/axload AI_Traffic"` | `AIDriver` | `MessageSender` |
 | `send_local_message_to_lfs` | **`str`** — chat line, may contain `^n` colours | `ChatCommandHandler` | `MessageSender` |
-| `send_lfs_command` | **`{command: str}`** | `ControllerEmulator`\* | `UIManager` |
 
 Light IDs: `0` sidelight, `1` low beam, `2` high beam, `3` fog front, `4` fog rear,
 `5` extra, `6` indicator left, `7` indicator right, `8` hazards. The constants live in
@@ -178,15 +189,15 @@ button always carries the right caption. `UIManager` renders and nothing else �
 longer subscribes to `button_clicked` at all. Light commands are
 emitted **only on change**: an unchanged high-beam decision produces no packet.
 
-`send_command_to_lfs` and `send_lfs_command` do almost the same thing with different
-payload shapes and different subscribers. This is a trap — see `known-issues.md` #4.
+`send_command_to_lfs` is the single command event, always carrying a plain string.
+Its producers include AI traffic and the brake/throttle outputs.
 
 ## UI and user interaction
 
 | Event | Payload | Emitters | Subscriber |
 |---|---|---|---|
 | `notification` | `{notification: str}` | ~27 call sites across most systems, plus `ThreadManager` / `AssistanceManager` when they disable a failing task or system | `UIManager` |
-| `play_audio` | `{audio_file: str}` — basename without `.wav`, resolved under `audio/` | `UIManager` | `AudioPlayer` |
+| `play_audio` | `{audio_file: str, repeat: int = 1}` — basename without `.wav`, resolved under `audio/`; `repeat` plays it **back to back**, never at the same time | `UIManager` | `AudioPlayer` |
 | `show_siren_ui` | `{ui: bool}` | `LightAssists` | `UIManager` |
 | `siren_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
 | `strobe_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
@@ -194,6 +205,11 @@ payload shapes and different subscribers. This is a trap — see `known-issues.m
 | `gearbox_calibrate` | `{}` | `MenuSystem` | `Gearbox` — **toggle**: starts the calibration, or cancels the one that is running |
 | `gearbox_calibration_state` | `{active: bool}` while idle, otherwise `{active: True, step: int, prompt: str, remaining: float, reading: str}` | `Gearbox` (every cycle while calibrating) | `UIManager` — draws the calibration panel, button IDs 16–17 |
 | `await_keybinding` | `{setting: str}` | `MenuSystem` | `Keybinder` |
+
+`play_audio` is **one voice**: `AudioPlayer` holds a single reserved mixer channel
+and a new tone replaces whatever is still sounding. Emitting the same file N times
+to hear it N times plays N simultaneous copies of one waveform and clips — use
+`repeat` (`known-issues.md` #54).
 | `new_keybinding` | `{button: str, setting: str}` | `Keybinder` | `MenuSystem` |
 
 Notifications are queued in `UIManager.notifications` and displayed one at a time for
@@ -213,6 +229,3 @@ time-critical publishes *state* instead and gets its own slot —
 `dist_debug` is gone. FCW emitted it per detected vehicle per cycle while its only
 subscriber (`UIManager._dist_debug`) was commented out; the handler is still there if
 the readout on button 101 is ever wanted back.
-
-\* `ControllerEmulator` is not instantiated — it is commented out in
-`AssistanceManager._init_systems`. Events only it consumes are currently inert.

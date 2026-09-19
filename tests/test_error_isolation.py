@@ -314,6 +314,33 @@ def test_a_broken_system_does_not_stop_the_others(manager, bus, settings, make_o
     assert results == {'bsw': {'ok': True}}
 
 
+def test_systems_use_one_snapshot_even_when_packets_arrive_during_pass(
+        manager, bus, make_own_vehicle):
+    from types import SimpleNamespace
+    before = make_own_vehicle(rpm=1000)
+    after = make_own_vehicle(rpm=6000)
+    cars = {}
+    seen = []
+
+    def first(own, vehicles):
+        seen.append((own, vehicles))
+        bus.emit('own_vehicle_updated', after)
+        bus.emit('vehicles_updated', {2: object()})
+
+    def second(own, vehicles):
+        seen.append((own, vehicles))
+
+    manager.systems = {
+        'first': SimpleNamespace(is_enabled=lambda: True, process=first),
+        'second': SimpleNamespace(is_enabled=lambda: True, process=second),
+    }
+    manager.own_vehicle, manager.vehicles = before, cars
+    manager.on_track = True
+    manager.process_all_systems()
+    assert all(own is before and vehicles is cars for own, vehicles in seen)
+    assert manager.own_vehicle is after
+
+
 def test_a_permanently_broken_system_disables_itself_and_notifies(
         manager, bus, settings, recorder, make_own_vehicle):
     events = recorder('notification')

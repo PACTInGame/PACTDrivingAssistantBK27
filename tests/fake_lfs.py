@@ -31,6 +31,13 @@ _CARCONTACT = struct.Struct("3Bb6b2B2h")
 _OUTGAUGE = struct.Struct("I3sxH2B7f2I3f15sx15sx")
 
 
+def mso(message: bytes, user_type=0, code_page=0) -> bytes:
+    body = message + b'\0'
+    body += bytes((-len(body)) % 4)
+    return struct.pack('<8B', (8 + len(body)) // 4, ISP_MSO, 0, code_page,
+                       0, 0, user_type, 0) + body
+
+
 def sta(flags: int, track: bytes = b"BL1", cam: int = 3, num_p: int = 1,
         view_plid: int = 0) -> bytes:
     return _STA.pack(_STA.size // 4, ISP_STA, 0, 0, 1.0, flags, cam, view_plid,
@@ -73,7 +80,7 @@ _CON_44 = struct.Struct("<4B2HI")
 def con(plid_a: int, plid_b: int, sp_close: int = 55, layout: int = 40) -> bytes:
     """One car-to-car contact, in either the 40- or the 44-byte layout.
 
-    LFS has shipped both; ``simulation_tests/insim_patch.py`` decodes by ``Size``
+    LFS has shipped both; ``pyinsim.IS_CON`` decodes by ``Size``
     rather than assuming a version, so both are worth sending from here.
     """
     if layout == 44:

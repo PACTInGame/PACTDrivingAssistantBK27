@@ -44,6 +44,13 @@ AEB_REASON_TEXTS = {
     'pyautogui_missing': "Key tracking unavailable",
     'key_not_bindable_in_lfs': "Brake key cannot be used",
     'binding_not_pushed': "Brake key cannot be used",
+    # No OutGauge means no ``viewed_plid``, so nothing can tell whose car the
+    # camera is on and no actuator may run (known-issues #51). The three
+    # causes need three different actions from the driver, so they get three
+    # different lines rather than one shrug.
+    'no_outgauge:port_in_use': "OutGauge port 30000 is taken",
+    'no_outgauge:open_failed': "OutGauge port 30000 is taken",
+    'no_outgauge:no_packets': "No OutGauge data - check camera and cfg.txt",
 }
 
 # Why the throttle is not taken away during an intervention. Separate from the

@@ -119,10 +119,6 @@ def test_winding_direction_does_not_matter():
     assert point_in_rectangle(5.0, 1.0, clockwise) is False
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "point_in_rectangle uses only cross-product signs, so a degenerate "
-    "(zero-area) rectangle swallows the whole line it lies on. No work package "
-    "owns misc/helpers.py; reported by WP1."))
 def test_degenerate_rectangle_does_not_extend_past_its_own_ends():
     flat = [(0.0, 0.0), (10.0, 0.0), (10.0, 0.0), (0.0, 0.0)]
 
@@ -131,11 +127,36 @@ def test_degenerate_rectangle_does_not_extend_past_its_own_ends():
     assert point_in_rectangle(11.0, 0.0, flat) is False   # past it
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "a rectangle collapsed to a single point currently contains every point. "
-    "No work package owns misc/helpers.py; reported by WP1."))
 def test_rectangle_collapsed_to_a_point_contains_only_that_point():
     collapsed = [(0.0, 0.0)] * 4
 
     assert point_in_rectangle(0.0, 0.0, collapsed) is True
     assert point_in_rectangle(1.0, 1.0, collapsed) is False
+
+
+@pytest.mark.parametrize('end', [(0, 10), (10, 10), (-10, 10)])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_degenerate_segments_are_bounded_in_any_direction(end, reverse):
+    x, y = end
+    rect = [(0, 0), end, end, (0, 0)]
+    if reverse:
+        rect.reverse()
+    assert point_in_rectangle(x / 2, y / 2, rect)
+    assert point_in_rectangle(x, y, rect)
+    assert not point_in_rectangle(2 * x, 2 * y, rect)
+    assert not point_in_rectangle(-x, -y, rect)
+    assert not point_in_rectangle(x / 2 + 1, y / 2, rect)
+
+
+def test_one_collapsed_triangle_does_not_extend_the_other_triangle():
+    rect = [(0, 0), (0, 0), (4, 0), (0, 4)]
+    assert point_in_rectangle(1, 1, rect)
+    assert point_in_rectangle(2, 0, rect)
+    assert not point_in_rectangle(5, 0, rect)
+    assert not point_in_rectangle(-1, 0, rect)
+
+
+def test_thin_rectangle_retains_its_nonzero_area():
+    rect = [(0, 0), (10, 0), (10, 1e-12), (0, 1e-12)]
+    assert point_in_rectangle(5, 0.5e-12, rect)
+    assert not point_in_rectangle(5, 2e-12, rect)

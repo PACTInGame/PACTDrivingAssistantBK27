@@ -102,7 +102,7 @@ def test_mci_and_npl_packets_drive_the_vehicle_manager(
         bus, recorder, make_compcar, make_mci_packet, make_npl_packet,
         make_outgauge_packet):
     """The fake packets must carry the field names the handlers actually read."""
-    seen = recorder('vehicles_updated', 'player_data_updated')
+    seen = recorder('vehicles_updated')
     manager = VehicleManager(bus)
 
     bus.emit('player_joined', make_npl_packet(plid=1, pname=b'Me', cname=b'XFG'))

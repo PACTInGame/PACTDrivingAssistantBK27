@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict
 
 from assistance.base_system import AssistanceSystem
@@ -19,6 +20,7 @@ class AutoHold(AssistanceSystem):
     STANDSTILL_SPEED_KMH = 0.05
     # Bremse muss wirklich getreten sein, nicht nur beruehrt.
     MIN_BRAKE = 0.05
+    CONFIRM_TIMEOUT_S = 1.0
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("auto_hold", event_bus, settings)
@@ -37,35 +39,70 @@ class AutoHold(AssistanceSystem):
         # 100 ms - mit time.sleep im 100-ms-Thread, also 220 ms Blockade pro
         # Ausloesung (known-issues.md #43).
         self.tapper = get_key_tapper()
+        self._attempted = False
+        self._pending_since = None
+        self._context = None
+        self.event_bus.subscribe('state_data', self._on_state)
+
+    def _reset_attempt(self):
+        self._attempted = False
+        self._pending_since = None
+
+    def is_enabled(self):
+        enabled = super().is_enabled()
+        if not enabled:
+            self._reset_attempt()
+        return enabled
+
+    def _on_state(self, data):
+        if not data.get('on_track', False):
+            self._reset_attempt()
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Auto-Hold-Logik
 
-        Kosten pro Zyklus: zwei Vergleiche. Der InputGuard wird nur in dem
-        Zyklus befragt, in dem tatsaechlich gedrueckt wuerde.
+        Kosten pro Zyklus: konstante Vergleiche, waehrend einer ausstehenden
+        Bestaetigung eine monotonic-Abfrage. Kein I/O, keine Konfigurationsscans.
         """
         if not self.is_enabled():
+            self._reset_attempt()
             return {'auto_hold_active': False}
-        auto_hold = False
-        if (own_vehicle.data.speed < self.STANDSTILL_SPEED_KMH
-                and own_vehicle.brake > self.MIN_BRAKE):
-            auto_hold = True
-            if not own_vehicle.handbrake_light:
-                if self.guard.may_inject(own_vehicle) is not None:
-                    return {'auto_hold_active': auto_hold}
-                # Taste live lesen: eine im Menue neu belegte Handbremse wirkt
-                # sofort und nicht erst nach einem Neustart.
-                user_handbrake_key = self.settings.get('user_handbrake_key')
-                if not self.tapper.tap(user_handbrake_key):
-                    # Kein Tastendruck zustande gekommen (unbekannte Taste,
-                    # kein pyautogui) - dann auch keine Meldung, die eine
-                    # angezogene Handbremse behauptet.
-                    return {'auto_hold_active': auto_hold}
-                self.event_bus.emit("notification", {'notification': self.translator.get('Auto Hold', self.settings.get('language'))})
+        key = self.settings.get('user_handbrake_key')
+        context = (own_vehicle.data.player_id, own_vehicle.data.control_mode, key)
+        if context != self._context:
+            self._reset_attempt()
+            self._context = context
+        if (own_vehicle.data.speed >= self.STANDSTILL_SPEED_KMH
+                or own_vehicle.brake <= self.MIN_BRAKE
+                or not own_vehicle.is_local_driver):
+            self._reset_attempt()
+            return {'auto_hold_active': False}
 
-        return {
-            'auto_hold_active': auto_hold
-        }
+        # Ein eingereihter Tastendruck bestaetigt keine Handbremse. Gerade
+        # bei einer Handbremsachse kann LFS den Tastendruck ignorieren.
+        if own_vehicle.handbrake_light:
+            if self._pending_since is not None:
+                self.event_bus.emit('notification', {'notification':
+                    self.translator.get('Auto Hold', self.settings.get('language'))})
+            self._pending_since = None
+            self._attempted = True
+            return {'auto_hold_active': True}
+
+        if self._pending_since is not None:
+            if time.monotonic() - self._pending_since >= self.CONFIRM_TIMEOUT_S:
+                self._pending_since = None
+                self.event_bus.emit('notification', {'notification':
+                    '^1' + self.translator.get('Check handbrake binding',
+                                               self.settings.get('language'))})
+            return {'auto_hold_active': False}
+        if self._attempted or self.guard.may_inject(own_vehicle) is not None:
+            return {'auto_hold_active': False}
+        # Hoechstens ein Versuch je Stillstands-/Bremsphase: wiederholte
+        # Toggles koennten eine inzwischen angezogene Handbremse loesen.
+        self._attempted = True
+        if self.tapper.tap(key):
+            self._pending_since = time.monotonic()
+        return {'auto_hold_active': False}
 
     def shutdown(self):
         """Keine Taste darf gedrueckt bleiben, wenn der Prozess endet

@@ -29,18 +29,13 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from simulation_tests import config, insim_patch, packet_dump, paths  # noqa: E402
+from simulation_tests import chat_review, config, packet_dump, paths  # noqa: E402
 from simulation_tests.control_channel import ControlServer  # noqa: E402
 from simulation_tests.trace_format import (SRC_INSIM, SRC_MARKER, SRC_OUTGAUGE,  # noqa: E402
                                            SRC_OUTSIM, SRC_TRACER, TraceWriter)
 
 paths.ensure_repo_on_path()
 import pyinsim  # noqa: E402
-
-# Correct pyinsim's decoder *in this process only* -- the tracer runs beside the
-# add-on, not inside it. Must happen before _known_packets() reads the map.
-insim_patch.apply(pyinsim)
-
 
 # ── packet registry ──────────────────────────────────────────────────────────
 def _known_packets() -> Dict[str, int]:
@@ -76,7 +71,7 @@ PACKET_FLAGS = {
 
 def resolve_flags(packet_names: List[str]) -> int:
     """InSim handshake flags needed to receive ``packet_names``."""
-    flags = pyinsim.ISF_LOCAL
+    flags = pyinsim.ISF_LOCAL | pyinsim.ISF_MSO_COLS
     for name in packet_names:
         for part in PACKET_FLAGS.get(name, "").split("|"):
             if part:
@@ -90,7 +85,7 @@ class InSimTracer:
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.packets: List[str] = args.packets
+        self.packets: List[str] = list(dict.fromkeys([*args.packets, *chat_review.PACKETS]))
         self.writer = TraceWriter(args.out)
         self.insim = None
         self.control: Optional[ControlServer] = None

@@ -163,13 +163,16 @@ class ForwardCollisionWarning(AssistanceSystem):
         angle_of_car = (own.heading + 16384) / 182.05
         near = self.WEDGE_NEAR_RADIUS_M * self.METRE
         far = self.WEDGE_LENGTH_M * self.METRE
+        # Umlaufende Reihenfolge: erst dieselbe Seite fern/nah, dann die
+        # Gegenseite nah/fern. Gekreuzte Kanten verschieben den Dreieckstest
+        # einseitig und lassen Fahrzeuge im vorgesehenen Bereich aus.
         return [
             calc_polygon_points(own.x, own.y, far,
                                 angle_of_car + self.WEDGE_FAR_HALF_ANGLE_DEG),
             calc_polygon_points(own.x, own.y, near,
-                                angle_of_car - self.WEDGE_HALF_ANGLE_DEG),
-            calc_polygon_points(own.x, own.y, near,
                                 angle_of_car + self.WEDGE_HALF_ANGLE_DEG),
+            calc_polygon_points(own.x, own.y, near,
+                                angle_of_car - self.WEDGE_HALF_ANGLE_DEG),
             calc_polygon_points(own.x, own.y, far,
                                 angle_of_car - self.WEDGE_FAR_HALF_ANGLE_DEG),
         ]

@@ -17,6 +17,7 @@ log something new, add an entry — nothing else in the harness needs to change.
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from simulation_tests import chat_review
 
 # ── unit conversions (reference/conventions.md §1-§3) ─────────────────────────
 MCI_POS_TO_M = 1.0 / 65536.0        # CompCar X/Y/Z: 1/65536 m
@@ -280,6 +281,11 @@ DERIVERS: Dict[str, Callable[[Dict[str, Any]], None]] = {
 def packet_to_dict(name: str, packet: Any) -> Dict[str, Any]:
     """Decode ``packet`` and add the derived SI fields registered for ``name``."""
     data = decode_object(packet)
+    if name in chat_review.PACKETS:
+        raw = getattr(packet, 'Msg', getattr(packet, 'Text', b''))
+        data['text'] = chat_review.message_text(raw, getattr(packet, 'MSOData', 0))
+        if isinstance(raw, (bytes, bytearray)):
+            data['raw_text_hex'] = bytes(raw).hex()
     for field, table in FLAG_FIELDS.get(name, {}).items():
         if field in data:
             data[f"{field.lower()}_flags"] = decode_flags(data[field], table)

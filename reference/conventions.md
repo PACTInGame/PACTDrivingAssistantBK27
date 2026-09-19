@@ -386,3 +386,10 @@ balance, aero. Assistance logic must be defensible in those terms.
 - User-facing strings go through `LanguageManager.get(key, lang)`; never hardcode
   German or English into the UI.
 - LFS colour codes (`^0`–`^7`) prefix strings, not separate arguments. See `ui.md`.
+
+## Geometry boundary membership
+
+`misc.helpers.point_in_rectangle` includes boundaries. A zero-area rectangle
+contains only its finite segment, or its single point if all corners coincide.
+Collinearity alone is insufficient: the degenerate triangle path also checks
+coordinate bounds. No area epsilon is used, so thin nonzero shapes stay valid.

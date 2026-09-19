@@ -169,15 +169,11 @@ in the future.
 `misc/input_guard.py`; `InputGuard(bus, foreground_check=…)` is how the Win32
 foreground check is driven from both sides without a window manager.
 
-### Tests that are expected to fail
+### Regression failures
 
-A few tests are marked `xfail(strict=False)` because they describe a defect that is real
-but belongs to someone else. When it is fixed the test turns green on its own; remove the
-marker then.
-
-| Test | Waiting for |
-|---|---|
-| `test_helpers.py` degenerate-rectangle cases | `point_in_rectangle` judges by cross-product sign only, so a zero-area rectangle swallows its whole line |
+Known functional defects must be fixed rather than hidden with `xfail` markers.
+The geometry regressions run as ordinary passing tests, including zero-area
+rectangles (finite segments and single points).
 
 ### Testing anything that injects a real key
 
@@ -432,3 +428,18 @@ both processes receive every packet — one of them will silently miss datagrams
 - Anything requiring LFS to actually render, beyond what `simulation_tests/` covers.
   Manual checklist: fresh install → wizard → join track → each menu → each assistance
   system → leave track → rejoin (checks button cleanup and state reset).
+
+### Mandatory LFS chat check
+
+Every simulation scenario captures MSO/III/ACR independently of its configured
+packet subset. `run.json.chat_check` and the summary list all messages, timestamps,
+recognised diagnostics and unresolved system messages. Reject a feature test
+with LFS warnings: runner exit 9 means a recognised diagnostic; exit 10 means
+manual chat review or complete capture is still missing. Earlier failure exit
+codes take precedence. `--no-summary` does not disable this check. MSO supplies
+no severity field, so unfamiliar system text requires review, not automatic
+acceptance; user chat is logged separately from system diagnostics. Details and
+recognition policy: `simulation_tests/README.md` §3.
+
+The replay preflight test simulates the unavailable Windows screen API instead
+of skipping on Windows; it tests the refusal path without accessing the desktop.

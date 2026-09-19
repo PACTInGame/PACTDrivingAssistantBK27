@@ -782,6 +782,7 @@ class IS_MSO(object):
     def unpack(self, data):
         self.Size, self.Type, self.ReqI, self.Zero, self.UCID, self.PLID, self.UserType, self.TextStart = self.pack_s.unpack(
             data[:8])
+        self.MSOData = self.Zero  # current protocol: low nibble is the code page
         self.Size = self.Size * 4
         self.Msg = struct.unpack('%dsx' % int(self.Size - 9), data[8:])[0]
         self.Msg = _eat_null_chars(self.Msg)
@@ -1570,7 +1571,7 @@ class CarContact(object):
     """Info about one car in a contact - two of these in the IS_CON
 
     """
-    pack_s = struct.Struct('3Bb6b2B2h')
+    pack_s = struct.Struct('<3Bb6B2b2h')
 
     def __init__(self, data):
         self.PLID, self.Info, self.Sp2, self.Steer, self.ThrBrk, self.CluHan, self.GearSp, self.Speed, self.Direction, self.Heading, self.AccelF, self.AccelR, self.X, self.Y = self.pack_s.unpack(
@@ -1581,12 +1582,28 @@ class IS_CON(object):
     """CONtact - between two cars (A and B are sorted by PLID)
 
     """
-    pack_s = struct.Struct('4B2H')
+    pack_s = struct.Struct('<4B2HI')
+    legacy_pack_s = struct.Struct('<4B2H')
 
     def unpack(self, data):
-        self.Size, self.Type, self.ReqI, self.Zero, self.SpClose, self.Time = self.pack_s.unpack(data[:8])
-        self.A = CarContact(data[8:24])
-        self.B = CarContact(data[24:])
+        # Size is in four-byte units. Keep legacy captures readable without
+        # truncating the current protocol's 32-bit millisecond timestamp.
+        size = data[0] * 4 if data else 0
+        if size not in (40, 44) or len(data) != size:
+            raise ValueError('IS_CON: unexpected size %d (got %d bytes)' %
+                             (size, len(data)))
+        if size == 44:
+            (self.Size, self.Type, self.ReqI, self.Zero, self.SpClose,
+             self.SpW, self.Time) = self.pack_s.unpack(data[:12])
+            body = 12
+        else:
+            (self.Size, self.Type, self.ReqI, self.Zero, self.SpClose,
+             self.Time) = self.legacy_pack_s.unpack(data[:8])
+            self.SpW = 0
+            body = 8
+        self.con_layout = size
+        self.A = CarContact(data[body:body + 16])
+        self.B = CarContact(data[body + 16:body + 32])
         return self
 
 

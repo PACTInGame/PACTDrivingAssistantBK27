@@ -22,7 +22,6 @@ constructor's `name` argument **must match a key the settings know** —
 | `gearbox` | `Gearbox` | `automatic_gearbox` |
 | `ai_traffic` | `AIDriver` | `ai_traffic` |
 | — | `ChatCommandHandler` | event-driven, no `process()` |
-| *(commented out)* | `ControllerEmulator` | `controller_emulator` |
 
 ---
 
@@ -32,6 +31,10 @@ Detects cars in a forward wedge and computes the deceleration required to avoid 
 
 - **Detection:** builds a rotated quad ~85 m long, ±20° wide near the car and ±1° at
   its far end, from the car's heading (`calc_polygon_points` + `point_in_rectangle`).
+  Corners must follow the perimeter: far-left, near-left, near-right, far-right.
+  Crossing the near corners makes the triangle-union test asymmetric and misses
+  targets on the right. At 50 m the intended half-width is about 1.29 m; the
+  endpoint angles are not a constant angular aperture along the whole quad.
   Two cheap gates run first, both on values `VehicleManager` already computed per
   frame, so nothing pays for a polygon test it cannot pass: `distance_to_player` beyond
   the wedge length, and `angle_to_player` outside ±21°.
@@ -88,7 +91,7 @@ laterally 1…4.5 m off the axis, i.e. the adjacent lane. Each is tested against
 - **Corner order matters.** Both corridor quads were `[near-outer, far-inner,
   far-outer, near-inner]`, which crosses two edges: shapely got an invalid polygon
   covering a 64 m² bow-tie instead of the intended 190 m² corridor. Same defect class
-  as `known-issues.md` #35 in FCW.
+  as the corrected FCW corner order described above.
 - The other car's outline used `abs((heading − 16384) / 182.05)`. Above 16384 that is
   a 180° rotation, which this centrally symmetric box does not notice; below it, it is
   a **mirror** — a car pointing north-west got an outline pointing north-east.
@@ -160,9 +163,26 @@ laterally 1…4.5 m off the axis, i.e. the adjacent lane. Each is tested against
   and 20° the prediction has us crossing the next lane and leaving it again before the
   other car arrives, so the *sharper* manoeuvre produced *no* warning. The lane-entry
   criterion asks the question a driver would.
-- **Two exclusions, both cheap and both load-bearing:**
+- **Four exclusions, all cheap and all load-bearing:**
   - `_is_plain_following` — same lane *and* parallel is a tailgater, not a lane-change
     conflict, and the side would be decided by noise. Either car turning ends it.
+  - `_is_longitudinal_traffic` — ahead of our front bumper *and* in our lane is the
+    car in front, and that stays true while we are running into it. This is the one
+    the rule above does not cover: the moment of impact rotates both cars past the
+    2° parallel test, so the lead car became "interesting" again, `contact_window`
+    correctly found the outlines touching, and the side came out of a cross product
+    that is essentially zero straight ahead — ±5 cm of lateral offset flips it, and
+    the hold time then lit **both** sides (`known-issues.md` #52). Both halves are
+    needed: "ahead" alone drops the car drawing level with us in the next lane,
+    which is the case the acute stage exists for.
+  - `MIN_ACUTE_OWN_SPEED_KMH` (1 km/h) — a blind spot warning says *do not go there
+    now*, and a car that stands is not going anywhere. Below the floor our outline
+    does not move over the horizon, so every predicted contact comes from the other
+    car alone, and neither warning nor braking answers that. Standing at a light
+    used to beep for everything that drove past (`known-issues.md` #53). **Level 1
+    is deliberately unaffected** — that somebody sits in the mirror's blind spot is
+    worth knowing exactly when the driver is about to pull out — and the level-3
+    merge survives, because pulling into traffic means moving while you do it.
   - a contact window that starts at `-inf` — "overlapping since forever" is degenerate
     data, and a warning with no beginning could never end.
 - **Braking is refused once we are already in their corridor** (`free_distance == 0`).
@@ -276,6 +296,18 @@ Six virtual ultrasonic sensors (3 front, 3 rear) against layout objects *and* ca
   `beep()` every UI cycle while `park_distance_control_mode == 2`; that call only
   *permits* sound for `REQUEST_TIMEOUT_S`, the pattern timing happens in the thread.
   Before, every single beep was a fresh thread running a blocking `winsound.Beep`.
+- **The tone stops after 1 s at a standstill** (`PDC_STANDSTILL_KMH` 0.1,
+  `PDC_SILENCE_AFTER_S` 1.0) and comes back the moment the car moves. A parking aid
+  reports an *approach*; once the car stands, the manoeuvre is over and the gap is
+  the one the driver chose, so a continuous tone is only loud. Standing close behind
+  somebody used to beep for as long as you sat there.
+  - The **display stays** — that something is still there has not changed by
+    stopping. Only the tone is dropped.
+  - The second of debounce is for the direction changes in a parking manoeuvre: the
+    tone must not break off at every zero crossing.
+  - It travels as its own event, `pdc_beep_allowed`, not as an extra key in
+    `pdc_changed` — that payload is a pure sensor dict and is read positionally
+    (`events.md`).
 - `get_vehicle_size` is also imported by FCW for car-length maths — keep it here.
 
 ## Auto Hold — `auto_hold.py`
@@ -287,10 +319,13 @@ Applies the handbrake when the car is stopped with the brake pressed.
   the settings at press time, and only after `InputGuard.may_inject()` agrees —
   on track, no dialog/text entry, no Shift or Ctrl held, LFS in the foreground and
   OutGauge really describing our car (`ui.md` §1.4). Never press a key here without it.
-- It re-presses on every cycle in which the car is stopped, braked and the handbrake
-  dash light is still off. That is the recovery path when the keypress did not take
-  (wrong binding) and the reason a wrong `user_handbrake_key` is *quiet* rather than
-  loud.
+- One key attempt per stopped/braking phase. Success and `auto_hold_active` require
+  the handbrake dashboard light, not merely a queued key. After 1 s without that
+  confirmation, one diagnostic asks the driver to check the handbrake key/axis.
+- Releasing the brake, moving, leaving track, changing car/mode/key, or disabling
+  resets the attempt. No repeated toggles while waiting or after a manual release.
+- Wheel users with a handbrake axis are not converted to keys. This feature only
+  supports an effective key binding; disk files may be stale until LFS exits.
 
 ## Adaptive Lights / Cop Mode — `adaptive_lights.py`
 
@@ -506,6 +541,3 @@ warning systems; everything that takes control away from the driver lives here, 
   mid-intervention (`is_enabled()` deliberately stays True while a press is
   outstanding), `state_data` reporting off-track, and `AssistanceManager.shutdown()`
   from `main.shutdown()`.
-
-`controller_emulator.py` and `Controls/wheel.py` are the superseded predecessors and are
-no longer wired up (`known-issues.md` #8).

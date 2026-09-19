@@ -31,6 +31,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from simulation_tests.trace_format import STREAM_EVENTS, load_trace  # noqa: E402
+from simulation_tests import chat_review  # noqa: E402
 
 #: An OutGauge gap longer than this multiple of the requested interval is a stall.
 STALL_FACTOR = 4.0
@@ -194,7 +195,12 @@ def summarise(path: str) -> Dict[str, Any]:
         for r in records if r.get("ev") == "OBH"
     ]
 
+    chat = chat_review.review(records, meta, end)
     warnings: List[str] = []
+    if chat['status'] != 'passed':
+        warnings.append(f"LFS chat check: {chat['status']} "
+                        f"({len(chat['diagnostics'])} diagnostics, "
+                        f"{len(chat['unreviewed_system_messages'])} messages need review)")
     if end is None:
         warnings.append("no 'end' record: the tracer was killed, the trace may be truncated")
     elif end.get("dropped"):
@@ -229,6 +235,7 @@ def summarise(path: str) -> Dict[str, Any]:
              "track": p["track"], "cam": p["cam"]} for p in phases],
         "players": list(players.values()),
         "contacts": contacts,
+        "chat_check": chat,
         "object_hits": object_hits,
         "outgauge_gaps": og_gaps,
         "mci_gaps": mci_gaps,
@@ -280,6 +287,11 @@ def format_summary(summary: Dict[str, Any]) -> str:
                          f"{contact['plid_b']}  closing {contact['closing_speed_kmh']} km/h")
     if summary.get("object_hits"):
         lines.append(f"object hits: {len(summary['object_hits'])}")
+    chat = summary.get('chat_check', {})
+    lines.append(f"chat check: {chat.get('status', 'incomplete')}")
+    for message in chat.get('messages', []):
+        lines.append(f"  {message['t']:8.2f} {message['event']} "
+                     f"type={message['user_type']} {message['text']!r}")
     for warning in summary.get("warnings", []):
         lines.append(f"WARNING   : {warning}")
     return "\n".join(lines)

@@ -142,13 +142,18 @@ class FakeKeyboard:
 class FakeGuard:
     """``InputGuard.may_inject``: ``None`` when allowed, else the reason."""
 
-    def __init__(self, refusal=None):
+    def __init__(self, refusal=None, outgauge=None):
         self.refusal = refusal
+        # ``InputGuard.outgauge_reason``: ``None`` while the stream is alive.
+        self.outgauge = outgauge
         self.asked = 0
 
     def may_inject(self, own_vehicle):
         self.asked += 1
         return self.refusal
+
+    def outgauge_reason(self):
+        return self.outgauge
 
 
 def key_event(vk: int, flags: int = 0x00) -> FakePacket:
@@ -579,10 +584,11 @@ def aeb_factory(bus, make_settings, physical, keyboard):
     The binding is pushed by hand because ``process()`` cannot get there on its
     own -- see ``test_the_first_cycle_pushes_the_binding_so_the_system_can_arm``.
     """
-    def _make(mode: int = 2, refusal=None, clock=None, push=True, **overrides):
+    def _make(mode: int = 2, refusal=None, clock=None, push=True,
+              outgauge=None, **overrides):
         settings = make_settings(automatic_emergency_brake=mode,
                                  user_brake_key='b', language='en', **overrides)
-        guard = FakeGuard(refusal)
+        guard = FakeGuard(refusal, outgauge)
         system = EmergencyBrake(bus, settings, physical_keys=physical,
                                 guard=guard, clock=clock or FakeClock())
         if push:
@@ -609,6 +615,42 @@ def demand(bus, deceleration: float, source: str = 'forward_collision'):
     """
     bus.emit(DECELERATION_EVENT,
              {'deceleration': deceleration, 'source': source})
+
+
+def test_a_silent_outgauge_stream_refuses_to_arm(
+        bus, aeb_factory, braking_car, keyboard, recorder):
+    """The whole of known-issues #51, in one pass.
+
+    Port 30000 was held by a leftover process, so OutGauge never bound.
+    Everything else looked healthy -- the binding was pushed, the hooks were
+    up, the log said "Automatic emergency braking is armed." -- and not one
+    intervention happened all evening, because ``is_local_driver`` needs
+    ``viewed_plid`` and ``viewed_plid`` comes from OutGauge.
+    """
+    events = recorder('emergency_brake_availability')
+    system = aeb_factory(outgauge='port_in_use')
+    demand(bus, 9.0)
+
+    result = system.process(braking_car, {})
+
+    assert result['active'] is False
+    assert result['refused'] == 'no_outgauge'
+    assert keyboard.calls == []
+    assert events.last('emergency_brake_availability')['reason']         == 'no_outgauge:port_in_use'
+
+
+def test_the_stream_coming_back_arms_the_system(
+        bus, aeb_factory, braking_car, keyboard):
+    """And it has to recover by itself, without a restart."""
+    system = aeb_factory(outgauge='no_packets')
+    demand(bus, 9.0)
+    system.process(braking_car, {})
+
+    system.guard.outgauge = None
+    demand(bus, 9.0)
+    result = system.process(braking_car, {})
+
+    assert result['active'] is True
 
 
 def test_mode_zero_does_not_arm_at_all(bus, aeb_factory, braking_car, keyboard):

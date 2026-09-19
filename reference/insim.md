@@ -13,9 +13,9 @@
 
 **~99 % of this project runs on InSim.** OutGauge supplies the few high-rate own-car
 signals (speed, rpm, gear, pedals, dash lights) that MCI does not carry or does not
-carry fast enough. OutSim is connected (`LFSConnector.start_outsim`) and emits
-`outsim_data`, but **nothing subscribes to it yet** — it is the intended source if a
-system ever needs G-forces, per-wheel loads or slip.
+carry fast enough. OutSim is **not started by the app** because no system consumes
+it. `LFSConnector.start_outsim` and `outsim_data` remain opt-in infrastructure for
+a future physics consumer; the standalone tracer manages its own connection.
 
 ### OutGauge specifics — read before relying on it
 
@@ -413,3 +413,32 @@ mode. Switching control mode did not turn `AUTOGEARS`/`HELP_B` on by itself; tho
 belong to SHIFT+G. The conclusion drawn there still holds — a `mouse_kb` driver very
 often has LFS's brake help on, so anything measuring achieved deceleration has to
 expect it — but it is the driver's choice, not an automatic consequence of the mode.
+
+## Contact decoding
+
+`pyinsim.IS_CON` supports 40-byte legacy and 44-byte current packets, selected
+by the size byte (four-byte units), with exact payload-length validation.
+The current header has `SpW` and a 32-bit timestamp; legacy timestamps retain
+legacy raw units. `con_layout` records the layout for trace interpretation.
+`CarContact` uses unsigned pedal/speed/angle bytes and signed steer/acceleration
+bytes. Definitions: https://www.lfs.net/programmer/insim.
+The tracer's `insim_patch` is a compatibility import, not a separate decoder.
+Before enabling other legacy packet consumers (e.g. IS_RIP), check their layouts
+against the current protocol as well.
+
+## Chat and command diagnostics
+
+`IS_MSO` carries visible system/user messages and hidden prefix or `/o` messages.
+`UserType` identifies the message kind, **not warning severity**. The byte formerly
+called `Zero` is now `MSOData`; its low nibble selects the initial LID code page.
+The shared decoder exposes both names for compatibility. `ISF_MSO_COLS` preserves
+colour escapes; text can also contain inline code-page switches. `IS_III` reports
+`/i` messages and `IS_ACR.Result` reports processed (1), rejected (2), or unknown (3)
+admin commands where LFS delivers them to the connection. They do not replay old
+chat or guarantee access to private messages on other InSim connections.
+Protocol: https://www.lfs.net/programmer/insim.
+
+The simulation tracer always captures all three and reviews them after a run;
+see `testing.md`. Existing traces already contained "Ungültiger Parameter" under
+MSO, but the old summary did not surface or reject it. Inspecting only vehicle
+telemetry therefore cannot establish a clean simulation run.

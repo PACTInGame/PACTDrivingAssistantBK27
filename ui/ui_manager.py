@@ -107,6 +107,10 @@ BSW_TEXTS = {1: "^3!", 2: "^1!!", 3: "^1!!!"}
 # ist 1.0 s die kuerzeste Wiederholung ohne Ueberlappung.
 BSW_ACUTE_AUDIO = 'warning_3'
 BSW_ACUTE_BEEP_INTERVAL_S = 1.0
+# Wie oft der Gong der Kollisions- und der Querverkehrswarnung anschlaegt.
+# ``AudioPlayer`` spielt sie nacheinander; drei *gleichzeitige* Kopien waren
+# das Knacken aus known-issues #54.
+FCW_BEEPS = 3
 
 # Notifications: eine Zeile fuer 3 s. Ohne Obergrenze staut eine Serie
 # (z.B. die Getriebekalibrierung) minutenlang.
@@ -183,6 +187,8 @@ class UIManager:
         self.screen = None
         self.buttons_allowed = False
         self.pdc_data = None
+        # Ob der Parkpieper toenen darf - siehe ``_update_pdc_beep``.
+        self.pdc_beep_allowed = True
         self.notifications = deque(maxlen=MAX_QUEUED_NOTIFICATIONS)
         self.notification_time = 0.0
         # Ueberlauf-Buchhaltung: eine volle Warteschlange bedeutet, dass der
@@ -219,8 +225,8 @@ class UIManager:
         self.event_bus.subscribe('outgauge_data', self._get_hud_data)
         self.event_bus.subscribe('state_data', self._state_change)
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
+        self.event_bus.subscribe("pdc_beep_allowed", self._update_pdc_beep)
         self.event_bus.subscribe("notification", self._update_notifications)
-        self.event_bus.subscribe("send_lfs_command", self._handle_lfs_command)
         self.event_bus.subscribe("show_siren_ui", self._show_siren_ui)
         # Sirene/Strobe gehoeren LightAssists; hier wird nur gezeichnet, was
         # es meldet (WP9, known-issues #17). Der frueher hier haengende
@@ -302,10 +308,6 @@ class UIManager:
         distance = data['distance']
         self.message_sender.create_button(BTN_DEBUG_DIST, hud_x, hud_y - 15, 20, 5,
                                           f"Distance: {distance:.2f} m", pyinsim.ISB_DARK)
-
-    def _handle_lfs_command(self, data):
-        command = data['command']
-        self.message_sender.send_command(command)
 
     # ─── Getriebekalibrierung ─────────────────────────────────────────
 
@@ -409,6 +411,15 @@ class UIManager:
         if not isinstance(data, dict) or data.get(0, -1) == -1:
             self.remove_pdc_display()
 
+    def _update_pdc_beep(self, data):
+        """Der Parkpieper verstummt im Stillstand (park_distance_control.py).
+
+        Nur der Ton - die Anzeige bleibt stehen, denn dass da noch etwas ist,
+        aendert sich durch das Anhalten nicht.
+        """
+        if isinstance(data, dict):
+            self.pdc_beep_allowed = bool(data.get('allowed', True))
+
     def remove_pdc_display(self):
         self.message_sender.remove_range(*PDC_RANGE)
 
@@ -467,7 +478,7 @@ class UIManager:
                                                           1, 2, "^1o", pyinsim.ISB_DARK)
                     else:
                         self.message_sender.remove_button(57 + x)
-        if mode == 2:
+        if mode == 2 and self.pdc_beep_allowed:
             self.pdc_beeper.beep()
 
     # ─── Bildschirmwechsel ────────────────────────────────────────────
@@ -505,6 +516,7 @@ class UIManager:
         self.strobe_active = False
         self.siren_ui_visible = False
         self.pdc_data = None
+        self.pdc_beep_allowed = True
         self.collision_warning_level = 0
         self.cross_traffic_warning_level = 0
         self.cross_traffic_warning_side = None
@@ -655,9 +667,11 @@ class UIManager:
         """Aktualisiert Kollisionswarn-Anzeige"""
         warning_level = _as_int(data.get('level', 0)) if isinstance(data, dict) else 0
         if warning_level >= 2 > self.collision_warning_level:
-            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
-            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
-            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+            # ``repeat``, not three events: three events landed on three
+            # channels at the same instant, which is the same waveform three
+            # times over and straight into clipping (known-issues #54).
+            self.event_bus.emit('play_audio',
+                                {'audio_file': 'fcw', 'repeat': FCW_BEEPS})
 
         self.collision_warning_level = warning_level
 
@@ -669,9 +683,8 @@ class UIManager:
         warning_side = data.get('side')
 
         if warning_level >= 2 > self.cross_traffic_warning_level:
-            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
-            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
-            self.event_bus.emit('play_audio', {'audio_file': 'fcw'})
+            self.event_bus.emit('play_audio',
+                                {'audio_file': 'fcw', 'repeat': FCW_BEEPS})
 
         self.cross_traffic_warning_level = warning_level
         self.cross_traffic_warning_side = warning_side
@@ -730,13 +743,27 @@ class UIManager:
         # Akutstufe kommen, nicht erst beim naechsten Wiederholungstakt.
         if max(self.blind_spot_left_level,
                self.blind_spot_right_level) >= 2 > previous:
-            self._blind_spot_beep(force=True)
+            self._blind_spot_beep()
         self._draw_blind_spot(self._blink_on)
 
-    def _blind_spot_beep(self, force: bool = False):
-        """Wiederholter Warnton, solange die Akutstufe steht."""
+    def _blind_spot_beep(self):
+        """Wiederholter Warnton, solange die Akutstufe steht.
+
+        **Ein** Taktgeber fuer beide Ausloeser, und keiner darf ihn umgehen.
+        Die Flanke hatte frueher ein ``force``, damit der Ton nicht bis zum
+        naechsten UI-Durchlauf wartet - nur ist eine Flanke nichts Seltenes:
+        stehen mehrere Fahrzeuge in den Akutstufen, laufen die Haltezeiten
+        beider Seiten versetzt ab, die Stufe faellt auf 0 und kommt sofort
+        zurueck, und jede dieser Flanken schlug den Ton erneut an. Im
+        50-ms-UI-Takt lagen so bis zu siebzehn Kopien eines 0.88-s-Samples
+        uebereinander - das Rauschen und Knacken aus known-issues #54.
+
+        Die Flanke behaelt, was sie wirklich braucht: sie loest *sofort* aus
+        statt erst im naechsten Durchlauf. Sie loest nur nicht mehr
+        *zusaetzlich* aus.
+        """
         now = time.perf_counter()
-        if not force and now - self._blind_spot_beeped_at < BSW_ACUTE_BEEP_INTERVAL_S:
+        if now - self._blind_spot_beeped_at < BSW_ACUTE_BEEP_INTERVAL_S:
             return
         self._blind_spot_beeped_at = now
         self.event_bus.emit('play_audio', {'audio_file': BSW_ACUTE_AUDIO})

@@ -161,9 +161,9 @@ class VehicleManager:
     def _apply_frame(self, cars, complete: bool = True):
         """Uebertraegt einen vollstaendigen MCI-Frame und veroeffentlicht ihn
 
-        Kosten pro Zyklus: eine flache Kopie der ``VehicleData`` je Fahrzeug
-        (``begin_frame``) plus ein frisches Snapshot-Dict - zusammen unter
-        30 µs bei 40 Autos, bei einem Budget von 100 ms.
+        Kosten pro Frame: eine flache Arbeitskopie je Fahrzeug (begin_frame),
+        zwei flache Kopien je veroeffentlichtem Fahrzeug (snapshot) und ein
+        frisches Dict. O(n), keine Routen-Tiefenkopien oder Worker-Sperren.
         """
         own = self.own_vehicle
         own_plid = self._own_plid()
@@ -248,12 +248,14 @@ class VehicleManager:
         # kennt der AssistanceManager gar kein eigenes Fahrzeug, solange nie
         # ein OutGauge-Paket kam - und ueberspringt dann jeden Durchlauf,
         # samt KI-Verkehr, der von OutGauge gar nichts braucht.
-        self.event_bus.emit('own_vehicle_updated', own)
+        self.event_bus.emit('own_vehicle_updated', own.snapshot())
 
         # Frisches Dict: die Assistenzsysteme iterieren im Worker-Thread,
         # waehrend der Paket-Thread hier weiter einfuegt und loescht
         # (known-issues #12).
-        self.event_bus.emit('vehicles_updated', dict(self.vehicles))
+        self.event_bus.emit('vehicles_updated',
+                            {plid: vehicle.snapshot()
+                             for plid, vehicle in self.vehicles.items()})
 
     def _drop_vanished(self, seen: set, complete: bool, now: float):
         """Wirft Fahrzeuge weg, die LFS nicht mehr meldet.
@@ -333,7 +335,6 @@ class VehicleManager:
         }
         self.players[player_id] = player_info
         self._consider_local_driver(player_id, ucid, ptype)
-        self.event_bus.emit('player_data_updated', dict(self.players))
 
     def _consider_local_driver(self, player_id: int, ucid: int, ptype: int):
         """Merkt sich die PLID des lokalen Fahrers, kameraunabhaengig
@@ -383,7 +384,6 @@ class VehicleManager:
             return
         player_info["Flags"] = flags
         player_info["ControlMode"] = self._get_control_mode(flags)
-        self.event_bus.emit('player_data_updated', dict(self.players))
 
     def _own_plid_is_void(self) -> bool:
         """Ist die gemerkte eigene PLID nicht mehr gueltig?
@@ -434,14 +434,12 @@ class VehicleManager:
             self.own_vehicle.clear_local_driver()
             self._local_driver_score = 0
 
-        self.event_bus.emit('player_data_updated', dict(self.players))
-
     # ─── OutGauge ─────────────────────────────────────────────────────
 
     def _handle_outgauge_data(self, outgauge_packet):
         """Verarbeitet OutGauge-Daten für eigenes Fahrzeug"""
         self.own_vehicle.update_outgauge_data(outgauge_packet)
-        self.event_bus.emit('own_vehicle_updated', self.own_vehicle)
+        self.event_bus.emit('own_vehicle_updated', self.own_vehicle.snapshot())
 
     # ─── Abfragen ─────────────────────────────────────────────────────
 

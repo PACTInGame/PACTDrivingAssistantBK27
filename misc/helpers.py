@@ -94,6 +94,7 @@ def point_in_rectangle(point_x, point_y, rect_corners):
     """
     Check if a point is inside a rectangle using the cross product method.
     This works for any rectangle orientation (rotated rectangles).
+    Boundaries are included; zero-area shapes contain only their segment/point.
 
     Args:
         point_x, point_y: Coordinates of the point to check
@@ -113,15 +114,18 @@ def point_in_rectangle(point_x, point_y, rect_corners):
         cp2 = cross_product(b, c, p)
         cp3 = cross_product(c, a, p)
 
+        # Collinear edges do not bound an area. All-zero cross products only
+        # establish collinearity, not membership of the finite segment.
+        # Also handles three identical vertices. Constant work, only on this
+        # degenerate path; no tolerance that would erase thin valid shapes.
+        if cp1 == 0 and cp2 == 0 and cp3 == 0:
+            return (min(a[0], b[0], c[0]) <= p[0] <= max(a[0], b[0], c[0])
+                    and min(a[1], b[1], c[1]) <= p[1] <= max(a[1], b[1], c[1]))
+
         return (cp1 >= 0 and cp2 >= 0 and cp3 >= 0) or (cp1 <= 0 and cp2 <= 0 and cp3 <= 0)
 
     # Split rectangle into two triangles and check if point is in either
     p = (point_x, point_y)
-    x1, y1 = rect_corners[0]
-    x2, y2 = rect_corners[1]
-    x3, y3 = rect_corners[2]
-    x4, y4 = rect_corners[3]
-
     # Triangle 1: corners 0, 1, 2
     # Triangle 2: corners 0, 2, 3
     return (point_in_triangle(p, rect_corners[0], rect_corners[1], rect_corners[2]) or

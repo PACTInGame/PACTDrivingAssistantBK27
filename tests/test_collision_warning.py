@@ -154,6 +154,26 @@ def test_a_braking_lead_car_is_treated_as_a_wall_at_its_stopping_point(
 
 # ─── Detection geometry ──────────────────────────────────────────────────────
 
+@pytest.mark.parametrize('heading', [0, 45, 90, 180, 270, 359])
+@pytest.mark.parametrize('ahead', [5.0, 50.0, 80.0])
+@pytest.mark.parametrize('side', [-1.0, 1.0])
+def test_wedge_detects_both_sides_without_extending_into_adjacent_lane(
+        fcw, make_own_vehicle, make_vehicle, relate_to_own, heading, ahead, side):
+    own = make_own_vehicle(x=123.0, y=-456.0, speed=150.0,
+                           heading=heading, direction=heading)
+    bearing = math.radians(heading)
+    # Independent local-to-world transform: forward is north at heading 0.
+    # The trapezoid half-width grows from 1.026 m near to 1.483 m far.
+    # +/-1 m must be inside throughout; +/-2 m must remain outside.
+    for lateral, expected in [(side, 3), (2.0 * side, 0)]:
+        lead = make_vehicle(
+            plid=2, speed=0.0,
+            x=123.0 - ahead * math.sin(bearing) + lateral * math.cos(bearing),
+            y=-456.0 + ahead * math.cos(bearing) + lateral * math.sin(bearing))
+        relate_to_own(own, lead)
+        assert fcw.process(own, {2: lead})['level'] == expected
+
+
 def test_a_car_three_metres_to_the_side_is_not_ahead(
         fcw, make_own_vehicle, make_vehicle, relate_to_own):
     own = make_own_vehicle(speed=50.0)

@@ -10,7 +10,7 @@ SettingsManager()              # loads settings.json, falls back to hardcoded de
 ThreadManager(event_bus)
 wait for LFS.exe process       # exponential backoff, sys.exit after ~60 s
 LfsConnectionTest().run_test() # fresh InSim conn per attempt, 5 s timeout, then closes all
-LFSConnector(bus, settings)    # the real connection: InSim + OutGauge + OutSim
+LFSConnector(bus, settings)    # the real connection: InSim + OutGauge; OutSim opt-in
 MessageSender(connector)
 CarProfiles(bus)               # learns per-car rpm/gear from OutGauge; before its readers
 VehicleManager(bus)
@@ -98,17 +98,16 @@ more than 5× its interval (once, until it runs again).
 systems read the same state on worker threads. `EventBus` only locks its subscriber
 dict, not the payloads.
 
-- **Foreign vehicles are safe.** `vehicles_updated` carries a snapshot: a fresh dict per
-  MCI frame, and each `VehicleData` object is *replaced* at the end of the frame rather
-  than written to (`Vehicle.begin_frame` / `commit_frame`). Iterating it while packets
-  keep arriving cannot raise and cannot see a half-updated car. `VehicleManager.vehicles`
-  itself is the live dict and must not be handed out. The snapshot also **shrinks**: a
-  car absent from a complete MCI frame is dropped, because LFS sends no `IS_PLL` at the
-  end of a race and a car nobody updates keeps its last distance for ever
-  (`known-issues.md` #49).
-- **`own_vehicle` is not.** `own_vehicle_updated` passes the live `OwnVehicle`, and
-  OutGauge writes into it at ~30 Hz. Bind `data = own_vehicle.data` once per `process()`
-  call instead of re-reading it line by line (`known-issues.md` #12).
+- **Vehicle events publish detached read-only snapshots.** Both the Vehicle wrapper
+  and its VehicleData are copied before publication. OwnVehicle's scalar gauge
+  fields and local/viewed identity are copied together on the packet thread.
+  Later MCI, OutGauge, NPL or PLL handling cannot alter a published reading.
+  A fresh dict alone is insufficient: it would still contain live Vehicle wrappers.
+- AssistanceManager binds the published own/foreign snapshots once per pass.
+  These streams have different packet times; this prevents mutation during a pass,
+  but does not imply simultaneous telemetry. Consumers must not mutate snapshots.
+- Cost: two shallow object copies per published vehicle (O(n), at most about 40
+  per MCI frame); two for each OutGauge update. No route deep copies or worker I/O.
 
 When you add state that both sides touch, assume it can change mid-iteration.
 
@@ -166,7 +165,7 @@ core/
   connection_test.py       Throwaway InSim connection used to probe that LFS is reachable (per-attempt, with timeout)
 
 lfs/
-  connector.py             Owns InSim/OutGauge/OutSim; binds packets → emits events; sends buttons, lights, commands
+  connector.py             Owns InSim/OutGauge and opt-in OutSim; binds packets → emits events; sends buttons, lights, commands
   lfs_state.py             StateHandler: IS_STA + IS_CIM → the `state_data` event (on_track, dialog, text_entry, track, cam, screen context, buttons_allowed)
   message_sender.py        Button registry (sends only on change) + chat/command wrapper over the connector
   text_encoding.py         LFS code-page encoding of button and chat text (^L/^T/…), truncation
@@ -190,7 +189,6 @@ assistance/
   gearbox.py               Automatic gearbox with per-car calibration (injects keypresses)
   AI_Driver.py             AI traffic controller: drives LFS AI cars along recorded routes
   chat_commands.py         `$`-prefixed in-game chat commands + periodic tooltips (event-driven, no process())
-  controller_emulator.py   Emulated brake input via vJoy — disabled in manager.py
 
 ui/
   ui_manager.py            HUD, warnings, PDC display, notifications, siren buttons; owns the button ID map
@@ -206,7 +204,7 @@ misc/
   physical_keys.py         PhysicalKeyState: is the *hardware* holding this key, and what does LFS believe? (control-intervention.md §3.1)
   language.py              LanguageManager: 8-language translation table
   key_binder.py            pynput listener to capture a key/mouse button for rebinding
-  audio_player.py          pygame.mixer playback of audio/*.wav with repeat suppression
+  audio_player.py          pygame.mixer playback of audio/*.wav - ONE reserved channel
   pdc_beep.py              winsound beep patterns for PDC
   spacial_hash_grid.py     SpatialHashGrid: broad-phase + polygon overlap for PDC
   vjoy.py                  Raw vJoy ctypes binding
@@ -214,7 +212,6 @@ misc/
 
 tests/                     pytest suite + shared fixtures — see reference/testing.md
 pyinsim/                   Forked & extended pyinsim 2.1.0 — see reference/insim.md
-Controls/wheel.py          vJoy brake actuation (currently unreachable, see known-issues)
 
 AI_Control.py              AICarController: high-level wrapper over IS_AIC (AI car control)
 MapBuilder.py              Offline tool: turns a captured LFS layout into track_data/*.json (roads, junctions, markers)

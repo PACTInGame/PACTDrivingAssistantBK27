@@ -152,6 +152,17 @@ class Vehicle:
 
     # ─── Frame-Handling ───────────────────────────────────────────────
 
+    def snapshot(self):
+        """Abgetrennte Lesekopie fuer Worker; keine Paketmutation wirkt nach.
+
+        Zwei flache Kopien pro Veroeffentlichung, keine Routen-Tiefenkopie.
+        Leser duerfen den Snapshot nicht selbst veraendern.
+        """
+        result = copy.copy(self)
+        result.data = copy.copy(self.data)
+        result._staged = None
+        return result
+
     @property
     def _target(self) -> VehicleData:
         """Wohin die update_*-Methoden schreiben."""

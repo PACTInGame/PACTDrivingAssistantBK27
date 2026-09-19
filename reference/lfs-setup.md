@@ -70,18 +70,44 @@ no OutGauge packets
   → process_all_systems() returns immediately, every cycle, forever
 ```
 
-Additionally `own_vehicle.data.player_id` is set **only** from the OutGauge packet, so
-without it the app cannot even tell which car on track is the player's. InSim connects
-normally, the connection test passes, buttons still draw — and every single assistance
-system silently does nothing. Nothing in the code detects or reports this.
+(`own_vehicle` itself survives — it is published from every MCI frame too — but the
+OutGauge half of it stands still, and that half includes `viewed_plid`.)
 
 Treat "InSim connected but no assistance" as "check OutGauge first".
 
-`StateHandler.start_game_insim()` re-calls `connector.start_outgauge()` on track entry
-if more than 30 s have passed since the menu was opened — an existing workaround for
-the OutGauge socket dying, not a fix for it never being configured.
+### 2.1 The third way to lose OutGauge: something else already has port 30000
 
-**OutSim off** — currently harmless, since nothing subscribes to `outsim_data`.
+`cfg.txt` can be perfect and the socket still not open, because **only one process may
+bind UDP 30000**. What binds it in practice is another copy of this app that did not
+shut down, or a `simulation_tests` relay left over from a run
+(`simulation_tests/README.md` §2). LFS is not involved and reports nothing.
+
+Measured on 2026-09-19: a leftover `_temp/fcw35_addon.py` from an earlier scenario had
+held the port for over an hour. Every start after it logged `WinError 10048` and ran on
+**blind** — see `known-issues.md` #51 for the full chain, which ends in every actuator
+being refused while the log says the emergency brake is armed.
+
+What the app does about it now:
+
+* `start_outgauge()` closes the previous socket before binding a new one. Half the
+  10048s in that log were self-inflicted, because `StateHandler` re-opens OutGauge on
+  track entry and the old socket was still on the port.
+* A failed bind logs one explicit line naming the likely cause, publishes
+  `outgauge_status`, and the driving menu shows **"OutGauge port 30000 is taken"** in
+  red under the emergency-brake entry.
+* `InputGuard` refuses every actuation with `no_outgauge` (`ui.md` §1.4).
+
+To find the culprit on Windows:
+
+```powershell
+Get-NetUDPEndpoint -LocalPort 30000 | ForEach-Object { Get-Process -Id $_.OwningProcess }
+```
+
+`StateHandler.start_game_insim()` re-calls `connector.start_outgauge()` on track entry
+if more than 30 s have passed since the menu was opened — a workaround for the OutGauge
+socket dying, not a fix for it never being configured.
+
+**OutSim off** — currently harmless; the app does not start its unused OutSim receiver.
 
 ## 3. The setup wizard runs once, and only once
 

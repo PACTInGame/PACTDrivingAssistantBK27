@@ -104,6 +104,10 @@ AXIS_BLOCKING_REFUSALS = frozenset((
     input_guard.REASON_NO_VEHICLE,
     input_guard.REASON_NOT_LOCAL_DRIVER,
     input_guard.REASON_AI_CONTROLLED,
+    # Not a keystroke question either: without OutGauge nothing knows whose
+    # car the camera is on, and the axis path additionally reads the driver's
+    # own pedal through it. Blind on both counts.
+    input_guard.REASON_NO_OUTGAUGE,
 ))
 
 
@@ -417,6 +421,19 @@ class EmergencyBrake(AssistanceSystem):
         if not self._armed():
             self._disengage()
             return {'active': False}
+
+        # Before the output, because it outranks it: an output that is ready
+        # to press a key it cannot aim is not armed, it is a promise. Without
+        # OutGauge ``is_local_driver`` is False for a driver sitting in their
+        # own car, so every single intervention was refused -- silently, at
+        # debug level, under a log line that said "armed" (known-issues #51).
+        # Now the menu and the log say what is actually wrong.
+        outgauge = self.guard.outgauge_reason()
+        if outgauge is not None:
+            self._publish_availability(
+                f"{input_guard.REASON_NO_OUTGAUGE}:{outgauge}")
+            self._disengage()
+            return {'active': False, 'refused': input_guard.REASON_NO_OUTGAUGE}
 
         # Binding first: ``_output_for`` refuses an output whose binding was
         # never pushed, so asking it first would refuse forever -- the push

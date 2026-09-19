@@ -379,9 +379,15 @@ limits decide how it may be used:
   the right number and confirm it" — it does not replace the confirmation.
 
 The same file answers, with no offset problem, whether `brake`, `clutch` and `handbrake`
-are on an axis at all — which is the question behind #42.
+are on an axis in the last saved configuration. AutoHold checks the live handbrake
+light before reporting success, because disk state may lag behind a running session.
 
 #### Open problem: installing vJoy wipes the driver's LFS controller setup
+
+Verification status: the reset is an existing report, not reproduced by the
+robustness review. Its scope (which LFS version/device combinations, which
+assignments) and the backup/restore remedy remain unverified. The following is
+the reported failure and proposed experiment, not a guaranteed installation outcome.
 
 This, not the driver install itself, is the real reason users call vJoy unfriendly.
 When a device LFS has not seen before appears, LFS treats it as "the user plugged in
@@ -439,4 +445,9 @@ by extending the brake mechanism.
 - [ ] The driver is told, visibly, that an intervention is active
 - [ ] Behaviour defined for spectating / wrong PLID (`conventions.md` §5.2) — never
       actuate based on a car that is not the one being driven
+- [ ] **Behaviour defined for OutGauge being silent at all.** Not the same question:
+      without the stream there is no `viewed_plid`, so the row above cannot even be
+      answered, and `is_local_driver` reads False for a driver in their own car. The
+      guard refuses with `no_outgauge` and the emergency brake reports it as its
+      availability reason rather than arming (`known-issues.md` #51)
 - [ ] Deceleration request is physically defensible (`conventions.md` §7)

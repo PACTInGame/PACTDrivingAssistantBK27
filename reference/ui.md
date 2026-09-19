@@ -20,9 +20,39 @@ both, and the project currently does it only crudely.**
 | Text entry (chat) | `ISS_TEXT_ENTRY` (32768) | LFS hides them | **and keyboard injection must stop — see §1.4** |
 | SHIFT+U free view | `ISS_SHIFTU` (8) | drawn | `IS_CIM.SubMode` = `FVM_PLAIN` (no buttons), `FVM_BUTTONS`, `FVM_EDIT` |
 | Options / host options / car select / track select | `IS_CIM` `Mode` 1 / 2 / 4 / 5 | normal buttons hidden | only `INST_ALWAYS_ON` buttons survive here |
+| **Watching a replay** | `ISS_REPLAY` (2), **and `ISS_GAME` is *not* set** | drawn (`ISS_VISIBLE` is set) | but `on_track` is False, so the app does nothing — see below |
 
 Per `InSim.txt`, LFS displays normal buttons in exactly four screens: **main entry
 screen, race setup screen, in game, and SHIFT+U mode.**
+
+**A replay is its own state, and the app is inert in it.** Measured live on
+2026-09-19, loading a saved single-player replay:
+
+```
+main menu        0x4d80   SHOW_2D FRONT_END MPSPEEDUP WINDOWED VISIBLE
+replay running   0x4c82   REPLAY  SHOW_2D   MPSPEEDUP WINDOWED VISIBLE   ViewPLID 24
+```
+
+`ISS_GAME` (bit 0) is **absent** throughout. `StateHandler` computes
+`on_track = ISS_GAME and not ISS_FRONT_END`, so a replay is "off track", and that
+decides three things at once:
+
+- `AssistanceManager.process_all_systems()` skips every system, so no warning, no
+  PDC and no emergency brake is ever evaluated;
+- `UIManager` draws no HUD;
+- `InputGuard` refuses every injection with `off_track`.
+
+The last one is right and must stay — injecting a brake key into a replay actuates
+nothing and only confuses. The first two are a product decision that has not been
+made: warnings and the HUD would be useful for reviewing an incident. `ISS_REPLAY`
+is currently read nowhere in the project.
+
+Two things that *do* work in a replay, and make it usable for offline analysis:
+**MCI streams normally** (10 Hz, every car, measured over 552 frames) and
+**OutGauge streams too** when `OutGauge Mode` is 2 (`driving+replay`). What is
+missing is `IS_NPL` — LFS does not re-announce the players — so `CName`, `UCID` and
+`PType` are unavailable and `IS_STA.ViewPLID` is the only pointer to the player's
+own car.
 
 ### 1.2 `ISS_VISIBLE` is the authoritative answer
 
@@ -103,6 +133,7 @@ keystroke may be sent and a reason string when it may not:
 | `ISS_TEXT_ENTRY` is set | `text_entry` | `state_data['text_entry']` | the keystroke is typed into the LFS chat instead of acting as a control |
 | `ISS_DIALOG` is set | `dialog` | `state_data['dialog']` | the keystroke operates the open dialog |
 | the user is holding **Shift** or **Ctrl** | `modifier_held` | `OutGaugePack.Flags & OG_SHIFT` (1) / `OG_CTRL` (2) | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
+| OutGauge is silent | `no_outgauge` | `outgauge_status` + the age of the last packet (3 s) | no gauges, no pedals, and **no `viewed_plid`** — so the row below cannot be answered at all (`known-issues.md` #51) |
 | OutGauge describes another car | `not_local_driver` | `own_vehicle.is_local_driver` | TAB moves OutGauge to a spectated car; shifting on its rpm actuates *our* car (`conventions.md` §5.2) |
 | LFS drives the car itself | `ai_controlled` | `own_vehicle.data.is_ai` | our keys would fight the AI |
 | LFS is not the foreground window | `lfs_not_focused` | Win32 `GetForegroundWindow` | otherwise we type into the user's browser |
@@ -127,6 +158,13 @@ Rules that shaped the implementation:
   speed`. A bare `lfs` title substring is deliberately *not* enough: it matches a browser
   tab on the LFS forum and a file manager in a folder called LFS, which are exactly the
   windows the check exists to keep keystrokes out of.
+- **`no_outgauge` fails *closed*, and it is checked before `not_local_driver`.** The
+  two rows look similar and are opposites. Without OutGauge, `viewed_plid` stays 0,
+  so `is_local_driver` is False *for a driver sitting in their own car* — and the
+  refusal that came out named the variable instead of the fault. The order fixes the
+  message; failing closed fixes the behaviour, because acting blind is the hazard.
+  The guard does **not** guess when nobody has published `outgauge_status` at all
+  (a bare `InputGuard` in a test): same rule as the foreground check below.
 - **A stale Shift reading does not block.** OutGauge only streams on track in an
   internal view (`conventions.md` §5.3) — exactly when injection is allowed at all — so
   the flags are fresh whenever they matter; a reading older than 1 s is treated as
@@ -135,9 +173,9 @@ Rules that shaped the implementation:
   fallback listener if a broader guarantee is ever wanted. (`IS_BTC.CFlags` also has
   `ISB_SHIFT`/`ISB_CTRL`, but only for button clicks.)
 - **The input mode is deliberately not a condition.** `own_control_mode` /
-  `vehicle.data.control_mode` (mouse / keyboard / joystick) says nothing about whether
-  the *keyboard* binding works — a wheel user still has one. Gating on it would remove
-  the feature for those users.
+  `vehicle.data.control_mode` does not globally disable keys: shift keys work in both
+  modes. Clutch and handbrake may use an axis instead; actuators must verify the
+  result. AutoHold reports success only after the handbrake light turns on.
 - **Key settings are read live**, at the moment of the keypress. A key rebound in the
   menu takes effect immediately; `Gearbox` used to cache them in `__init__`, so a rebind
   only arrived after a restart.
