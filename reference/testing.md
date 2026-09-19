@@ -63,7 +63,8 @@ tests/
   test_lifecycle.py        connection-test timeout and retry, shutdown order, signal path
   test_insim_output.py     thread-safe send buffer, button registry, LFS text encoding
   test_vehicle_model.py    MCI frame reassembly, snapshot immutability, PIF_* control
-                           modes, own-PLID identity and the PType AI flag
+                           modes and help flags (incl. the IS_PFL change path),
+                           own-PLID identity and the PType AI flag
   test_screen_context.py   IS_STA/IS_CIM screen contexts, main-menu suppression, SHIFT+B
                            repaint, HUD clamp, warning blink, notification queue
   test_menu.py             every menu's button list checked against its action table,
@@ -81,8 +82,9 @@ tests/
   test_actuation.py        the input guard's refusal table, AutoHold/Gearbox key
                            injection and its guards, live key rebinding, gearbox
                            calibration (countdown, cancel, gear storage, legacy file),
-                           high-beam dedupe, strobe timing, and the single owner of
-                           the siren/strobe state
+                           the gearbox's drivetrain gate and its stand-down when LFS
+                           shifts by itself, high-beam dedupe, strobe timing, and the
+                           single owner of the siren/strobe state
   test_car_profiles.py     CarProfiles: the redline that only counts once it stops
                            rising, idle sampled only at a standstill, a stopped
                            engine never becoming an idle speed, and the camera
@@ -347,7 +349,55 @@ Scenarios ship without their `input.jsonl`: a recording is screen-resolution spe
 and has to be made once on the machine that runs the tests. Each scenario's
 `timeline.md` carries the step-by-step recording guide.
 
+Treat unrecorded scenario timelines as proposed checks, not measured protocol truth.
+In particular, `01_menu_walkthrough` currently claims `ISS_FRONT_END` throughout.
+A live replay on 2026-09-19 contradicted both that assertion and the mapping in
+`ui.md` §1.1: the user-reported main menu had flags 19904 (`FRONT_END`),
+the first Single Player click produced 19648 (without `FRONT_END`), and returning
+restored 19904. Options produced 3264 and `CIM_OPTIONS`; leaving restored 19904
+and `CIM_NORMAL`. These are observations, not a complete replacement screen map;
+confirm screens visually before changing production state classification.
+When recording a subset with `--marker-names`, the supplied names are written into
+the input recording; reconcile the final timeline with those recorded markers.
+
+On the Codex Windows sandbox, a running LFS process can be visible while its
+desktop window is not. The live runner then correctly refuses pre-flight.
+Running the same command with approved desktop access worked; keep focus and
+geometry guards enabled rather than bypassing this with `--force`.
+The runner no longer refuses a run because LFS is behind another window: the
+player raises LFS itself immediately before the first event, and takes the
+foreground back whenever it is lost mid-run, so an unattended run needs nobody
+to alt-tab for it. What is left is reported, not enforced — `preflight_warnings`
+and `refocused` in `run.json`. Only a raise that genuinely fails falls through
+to `--on-focus-loss`. A preflight refusal (the remaining ones: a moved LFS
+window, a changed resolution, a recording that leaves a key down) closes
+PACTTRACE without injecting any input and is not a driving result.
+
 ### If a driving trace has no OutGauge
+
+Live observation (2026-09-19, `05_fcw_rear_end_keyboard`): 257 MCI packets and
+one CON arrived, but no OutGauge despite DRIVER camera, ViewPLID matching the
+local driver, and an active on-track phase. `C:\LFS\cfg.txt` already configured
+OutGauge on 30000. Thus the independent-stream claim below is not verified for
+this configuration. Official InSim documentation qualifies SMALL_SSG with
+"If OutGauge has not been setup in cfg.txt". Investigate the existing cfg stream
+and use the relay workflow if necessary; do not diagnose missing gauges as zero
+pedals or automatically blame the camera. Do not bind a competing listener.
+
+The same live contact exposed incorrect derived fields in `packet_dump.py`:
+official CarContact puts throttle/clutch/gear in the HIGH nibble, brake/handbrake
+in the LOW nibble, and documents AccelF/AccelR in m/s². These derivations are
+now corrected and covered by packet tests. Older traces retain incorrect
+derived values and must be reinterpreted from their raw fields.
+
+Validated workaround for standalone runs: with UDP 30000 free, use
+`run_scenario.py <name> --udp-port 30000 --require OutGauge --require MCI`.
+The repeated mouse-driving scenario captured 2684 gauge samples, all for the
+local PLID, with a maximum receipt gap of 16 ms during the on-track phase.
+Do not use this while the add-on owns 30000; parallel operation needs a relay.
+The existing relay instructions also require a tracer adjustment: setting
+`--outgauge-interval 0` currently disables its callback binding, so receiving
+forwarded gauges must be enabled separately from requesting SMALL_SSG.
 
 The tracer asks LFS for its **own** OutGauge/OutSim stream over its own InSim
 connection (`SMALL_SSG` / `SMALL_SSP`, UDP 30011), which is a per-connection

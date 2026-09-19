@@ -664,6 +664,36 @@ class LanguageManager:
                 "se": "Tryck Mus V igen!"
             },
             # ─── Notifications (gearbox.py) ──────────────────────────
+            "LFS shifts by itself": {
+                "en": "LFS shifts by itself",
+                "de": "LFS schaltet selbst",
+                "it": "LFS cambia da solo",
+                "fr": "LFS passe les vitesses lui-même",
+                "tr": "LFS kendi vites değiştiriyor",
+                "no": "LFS girer selv",
+                "dk": "LFS skifter selv",
+                "se": "LFS växlar själv"
+            },
+            "LFS automatic gearbox is on": {
+                "en": "LFS automatic gearbox is on",
+                "de": "LFS-Automatikgetriebe ist an",
+                "it": "Il cambio automatico di LFS è attivo",
+                "fr": "La boîte automatique de LFS est activée",
+                "tr": "LFS otomatik şanzıman açık",
+                "no": "LFS' automatgir er på",
+                "dk": "LFS' automatgear er slået til",
+                "se": "LFS automatlåda är på"
+            },
+            "Not calibrated": {
+                "en": "Not calibrated",
+                "de": "Nicht kalibriert",
+                "it": "Non calibrato",
+                "fr": "Non calibré",
+                "tr": "Kalibre edilmedi",
+                "no": "Ikke kalibrert",
+                "dk": "Ikke kalibreret",
+                "se": "Inte kalibrerad"
+            },
             "Gearbox Calibration Started": {
                 "en": "Gearbox Calibration Started",
                 "de": "Getriebe-Kalibrierung gestartet",

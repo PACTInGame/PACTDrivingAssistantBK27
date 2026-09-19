@@ -460,7 +460,143 @@ def test_preflight_refuses_to_replay_where_it_cannot_drive_lfs(fake_pynput):
     assert any("not running on Windows" in problem for problem in problems)
 
 
+# ── taking the foreground instead of demanding it ────────────────────────────
+class _FakeFocus:
+    """Stands in for ``win_focus``: scripts the foreground, records the raises.
+
+    ``drop_after`` makes the Nth ``is_foreground`` call report that LFS has
+    lost the foreground, which is what a menu/track switch looks like.
+    """
+
+    IS_WINDOWS = True
+
+    def __init__(self, *, in_front=True, drop_after=None, can_raise=True):
+        self.foreground = in_front
+        self.drop_after = drop_after
+        self.can_raise = can_raise
+        self.checks = 0
+        self.raises = 0
+
+    def is_foreground(self, _match):
+        self.checks += 1
+        if self.drop_after is not None and self.checks == self.drop_after:
+            self.foreground = False
+        return self.foreground
+
+    def raise_window(self, _match, settle_s=0.35):
+        self.raises += 1
+        if self.can_raise:
+            self.foreground = True
+            return True
+        return False
+
+    # the rest of what pre-flight touches
+    def screen_size(self):
+        return (1920, 1080)
+
+    def lfs_window(self, _match):
+        return {"hwnd": 1, "title": "Live for Speed", "rect": (0, 0, 1920, 1080)}
+
+    def any_key_physically_down(self):
+        return False
+
+
+def _with_focus(monkeypatch, fake):
+    from simulation_tests import player as player_mod
+    monkeypatch.setattr(player_mod, "win_focus", fake)
+
+
+def test_preflight_does_not_refuse_a_run_just_because_lfs_is_behind(monkeypatch, fake_pynput):
+    """An unattended agent has nobody to alt-tab for it -- this must not block."""
+    _with_focus(monkeypatch, _FakeFocus(in_front=False))
+    player = _player([], require_focus=True)
+    player.meta = {"screen_size": (1920, 1080),
+                   "lfs_window": {"rect": (0, 0, 1920, 1080)}}
+
+    problems = player.preflight()
+
+    assert not any("foreground" in problem for problem in problems)
+    assert any("raise it itself" in warning for warning in player.warnings)
+
+
+def test_the_replay_takes_the_foreground_before_the_first_event(monkeypatch, fake_pynput):
+    fake = _FakeFocus(in_front=False)
+    _with_focus(monkeypatch, fake)
+    events = [{"t": 0.0, "kind": "key", "action": "down", "name": "w", "vk": 87},
+              {"t": 0.01, "kind": "key", "action": "up", "name": "w", "vk": 87}]
+
+    result = _player(events, require_focus=True).play()
+
+    assert fake.raises >= 1
+    assert result["aborted"] is False
+    assert result["events_applied"] == 2
+
+
+def test_a_focus_blip_is_taken_back_instead_of_killing_the_run(monkeypatch, fake_pynput):
+    """LFS drops the foreground for a moment switching menu -> track."""
+    fake = _FakeFocus(drop_after=1, can_raise=True)
+    _with_focus(monkeypatch, fake)
+    events = [{"t": 0.00, "kind": "key", "action": "down", "name": "w", "vk": 87},
+              {"t": 0.05, "kind": "key", "action": "up", "name": "w", "vk": 87}]
+
+    result = _player(events, require_focus=True, on_focus_loss="abort").play()
+
+    assert result["aborted"] is False
+    assert result["events_applied"] == 2
+    assert result["refocused"] >= 1
+
+
+def test_a_foreground_we_cannot_take_back_still_aborts(monkeypatch, fake_pynput):
+    """The guard is not gone: input that cannot reach LFS must not be sent."""
+    fake = _FakeFocus(drop_after=2, can_raise=False)
+    _with_focus(monkeypatch, fake)
+    events = [{"t": 0.00, "kind": "key", "action": "down", "name": "w", "vk": 87},
+              {"t": 0.50, "kind": "key", "action": "up", "name": "w", "vk": 87}]
+
+    result = _player(events, require_focus=True, on_focus_loss="abort").play()
+
+    assert result["aborted"] is True
+    assert "lost focus" in result["abort_reason"]
+    # and nothing may stay pressed
+    assert [k.vk for k in fake_pynput.keyboard.released] == [87]
+
+
 # ── scenario files ───────────────────────────────────────────────────────────
+def test_a_scenario_is_enabled_unless_it_says_otherwise(tmp_path):
+    scenario_mod.save(str(tmp_path), {"name": "demo"})
+    data = scenario_mod.load(str(tmp_path))
+    assert data["disabled"] is False
+    assert scenario_mod.disabled_reason(data) == ""
+
+
+def test_a_disabled_scenario_reports_why(tmp_path):
+    scenario_mod.save(str(tmp_path), {"name": "demo", "disabled": True,
+                                      "disabled_reason": "recording drifted"})
+    assert scenario_mod.disabled_reason(scenario_mod.load(str(tmp_path))) == "recording drifted"
+
+
+def test_a_scenario_disabled_without_a_reason_still_refuses(tmp_path):
+    """The flag alone must be enough -- a missing reason may not read as 'fine'."""
+    scenario_mod.save(str(tmp_path), {"name": "demo", "disabled": True})
+    assert scenario_mod.disabled_reason(scenario_mod.load(str(tmp_path)))
+
+
+def test_the_runner_refuses_a_disabled_scenario_before_touching_lfs(tmp_path, capsys):
+    from simulation_tests import run_scenario as run_mod
+    scenario_dir = tmp_path / "77_broken"
+    scenario_mod.save(str(scenario_dir), {"name": "77_broken", "disabled": True,
+                                          "disabled_reason": "recording drifted"})
+    (scenario_dir / "input.jsonl").write_text("", encoding="utf-8")
+
+    code = run_mod.main([str(scenario_dir)])
+
+    assert code == 8
+    err = capsys.readouterr().err
+    assert "recording drifted" in err
+    # nothing was started: no run directory, no tracer
+    assert not list((tmp_path).glob("**/trace.jsonl"))
+
+
 def test_scenario_defaults_are_filled_in_for_a_minimal_file(tmp_path):
     scenario_mod.save(str(tmp_path), {"name": "demo"})
     data = scenario_mod.load(str(tmp_path))
@@ -620,8 +756,22 @@ def test_car_contact_pedals_and_angles_are_unsigned_accelerations_signed():
     assert a["Speed"] == 200 and a["speed_kmh"] == pytest.approx(720.0)
     assert a["heading_deg"] == pytest.approx(351.56, abs=0.01)
     # ...while AccelF must stay negative: forward is positive, so this is braking.
-    assert a["AccelF"] == -9 and a["accel_f_g"] == pytest.approx(-4.5)
-    assert a["brake"] == pytest.approx(1.0) and a["throttle"] == pytest.approx(0.0)
+    assert a["AccelF"] == -9 and a["accel_f_ms2"] == -9
+    assert a["accel_f_g"] == pytest.approx(-9 / 9.80665)
+    assert a["brake"] == pytest.approx(0.0) and a["throttle"] == pytest.approx(1.0)
+    assert a["clutch"] == 0 and a["handbrake"] == pytest.approx(10 / 15)
+    assert a["gear"] == 3
+
+
+def test_contact_independent_pedal_nibbles_and_reverse():
+    packet = insim_patch.CarContact(_car_contact_bytes(
+        thr_brk=0x3C, clu_han=0xA5, gear_sp=0xF7))
+    a = packet_dump.packet_to_dict("CON", types.SimpleNamespace(A=packet))["A"]
+    assert a["throttle"] == pytest.approx(3 / 15)
+    assert a["brake"] == pytest.approx(12 / 15)
+    assert a["clutch"] == pytest.approx(10 / 15)
+    assert a["handbrake"] == pytest.approx(5 / 15)
+    assert a["gear"] == 15
 
 
 def test_an_is_con_of_an_unknown_size_is_a_clear_error_not_a_struct_error():

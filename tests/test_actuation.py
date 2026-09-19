@@ -324,6 +324,9 @@ def gearbox_factory(bus, make_settings, tmp_path, monkeypatch):
         gearbox.time_in_step = gearbox.clock()
         # Far enough back that the shift cooldown is over.
         gearbox.time_since_last_gear_change = gearbox.clock() - 10.0
+        # And the drivetrain has been closed and settled for a while, as it
+        # is on any car that has simply been driving (known-issues #47).
+        gearbox._clutch_closed_since = gearbox.clock() - 10.0
         gearbox.guard.foreground_check = lambda: True
         if calibrated:
             gearbox.idle, gearbox.redline, gearbox.forward_gears = 900, 7000, 6
@@ -444,6 +447,239 @@ def test_gearbox_does_nothing_without_a_calibration(
     assert keys_pressed() == []
 
 
+# ─── The shift decision needs a closed drivetrain (known-issues #47) ─────────
+
+def test_no_shift_while_the_clutch_is_open(bus, gearbox_factory, make_own_vehicle):
+    """A free-revving engine says nothing about which gear is right.
+
+    This is the salvo: the gearbox held its own clutch, read the engine on
+    the limiter, and called that "still too high a gear".
+    """
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state())
+    declutched = make_own_vehicle(speed=55, gear=4, rpm=6980, throttle=1.0,
+                                  clutch=1.0, local_plid=1, plid=1)
+
+    gearbox.process(declutched, {})
+
+    assert keys_pressed() == []
+
+
+def test_no_shift_until_the_rpm_has_settled(bus, gearbox_factory, make_own_vehicle):
+    """Right after the clutch closes the engine is still on the old speed."""
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock)
+    bus.emit('state_data', track_state())
+    revving = dict(speed=55, gear=4, rpm=6980, throttle=1.0, local_plid=1, plid=1)
+
+    gearbox.process(make_own_vehicle(clutch=1.0, **revving), {})
+    clock.advance(0.1)
+    gearbox.process(make_own_vehicle(clutch=0.0, **revving), {})   # just closed
+    assert keys_pressed() == []
+
+    clock.advance(Gearbox.RPM_SETTLE_S - 0.01)
+    gearbox.process(make_own_vehicle(clutch=0.0, **revving), {})
+    assert keys_pressed() == []
+
+    clock.advance(0.02)
+    gearbox.process(make_own_vehicle(clutch=0.0, **revving), {})
+
+    assert keys_pressed() == ['c', 's']
+
+
+def test_the_settle_timer_restarts_when_the_clutch_opens_again(
+        bus, gearbox_factory, make_own_vehicle):
+    """Half-closing and re-opening must not count towards the settle time."""
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock)
+    bus.emit('state_data', track_state())
+    revving = dict(speed=55, gear=4, rpm=6980, throttle=1.0, local_plid=1, plid=1)
+
+    gearbox.process(make_own_vehicle(clutch=1.0, **revving), {})   # open
+    clock.advance(0.2)
+    gearbox.process(make_own_vehicle(clutch=0.0, **revving), {})   # closing
+    clock.advance(0.2)
+    gearbox.process(make_own_vehicle(clutch=0.8, **revving), {})   # open again
+    clock.advance(0.2)
+    gearbox.process(make_own_vehicle(clutch=0.0, **revving), {})
+
+    assert keys_pressed() == []
+
+
+def test_a_full_throttle_run_no_longer_walks_up_the_whole_box(
+        bus, gearbox_factory, make_own_vehicle):
+    """The measured failure of #47, reproduced against the clock.
+
+    The engine is pinned on the limiter because the gearbox's own clutch is
+    open -- which is what a 100 ms cycle really sees during the 0.30 s hold
+    plus the ~0.18 s ramp with which LFS lets the clutch come back. The old
+    code shifted every 0.40 s regardless and walked 2 -> 3 -> 4 -> 5.
+    """
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock)
+    bus.emit('state_data', track_state())
+    gear = 4
+
+    def cycle(clutch):
+        return make_own_vehicle(speed=55, gear=gear, rpm=6980, throttle=1.0,
+                                clutch=clutch, local_plid=1, plid=1)
+
+    gearbox.process(cycle(0.0), {})
+    assert keys_pressed() == ['c', 's']       # the one shift that is due
+    gear += 1
+
+    # 0.48 s of open clutch, at the 100 ms assistance rate, then closed.
+    platform_shim.reset_recorded_calls()
+    for _ in range(5):
+        clock.advance(0.1)
+        gearbox.process(cycle(1.0), {})
+    for _ in range(2):
+        clock.advance(0.1)
+        gearbox.process(cycle(0.0), {})
+
+    assert keys_pressed() == []
+
+
+def test_no_upshift_under_braking(bus, gearbox_factory, make_own_vehicle):
+    """Upshifting during an intervention removes the engine braking."""
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state())
+    braking = make_own_vehicle(speed=55, gear=4, rpm=6980, throttle=1.0,
+                               brake=1.0, local_plid=1, plid=1)
+
+    gearbox.process(braking, {})
+
+    assert keys_pressed() == []
+
+
+def test_downshifting_under_braking_still_works(
+        bus, gearbox_factory, make_own_vehicle):
+    """The brake blocks the *up*shift only -- engine braking is wanted."""
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state())
+    slowing = make_own_vehicle(speed=30, gear=5, rpm=1200, throttle=0.0,
+                               brake=1.0, local_plid=1, plid=1)
+
+    gearbox.process(slowing, {})
+
+    assert keys_pressed() == ['c', 'x']       # clutch, shift down
+
+
+# ─── Gearbox versus LFS' own automatic gearbox (known-issues #47) ────────────
+
+def gearbox_reasons(seen):
+    return [p.get('reason') for p in seen.payloads('gearbox_availability')]
+
+
+def test_gearbox_stands_down_when_lfs_shifts_by_itself(
+        bus, gearbox_factory, make_own_vehicle):
+    """Two automatics on one crankshaft fight each other.
+
+    LFS turns ``PIF_AUTOGEARS`` on by itself for mouse/keyboard drivers
+    (``control-intervention.md`` §2.1), so this is not an exotic setup.
+    """
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state())
+    revving = make_own_vehicle(speed=90, gear=4, rpm=6800, throttle=1.0,
+                               local_plid=1, plid=1,
+                               player_flags=pyinsim.PIF_AUTOGEARS)
+
+    result = gearbox.process(revving, {})
+
+    assert keys_pressed() == []
+    assert result['auto_gearbox_active'] is False
+    assert result['suppressed_by'] == 'lfs_auto_gears'
+
+
+def test_gearbox_shifts_again_when_lfs_stops_shifting(
+        bus, gearbox_factory, make_own_vehicle, recorder):
+    """The suppression follows the flag, in both directions."""
+    seen = recorder('gearbox_availability')
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock)
+    bus.emit('state_data', track_state())
+    with_lfs_auto = make_own_vehicle(speed=90, gear=4, rpm=6800, throttle=1.0,
+                                     local_plid=1, plid=1,
+                                     player_flags=pyinsim.PIF_AUTOGEARS)
+    gearbox.process(with_lfs_auto, {})
+    assert keys_pressed() == []
+
+    # The driver switched it off in Options -> Controls; LFS reports the new
+    # flags on IS_PFL and the next MCI carries them into the vehicle data.
+    clock.advance(2.0)
+    manual = make_own_vehicle(speed=90, gear=4, rpm=6800, throttle=1.0,
+                              local_plid=1, plid=1,
+                              player_flags=pyinsim.PIF_SWAPSIDE)
+    gearbox.process(manual, {})
+
+    assert keys_pressed() == ['c', 's']
+    assert gearbox_reasons(seen) == ['lfs_auto_gears', None]
+
+
+def test_the_suppression_is_reported_once_not_once_per_cycle(
+        bus, gearbox_factory, make_own_vehicle, recorder):
+    """The event repaints the menu -- one per cycle would be a button storm."""
+    seen = recorder('gearbox_availability')
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock)
+    bus.emit('state_data', track_state())
+    revving = make_own_vehicle(speed=90, gear=4, rpm=6800, throttle=1.0,
+                               local_plid=1, plid=1,
+                               player_flags=pyinsim.PIF_AUTOGEARS)
+
+    for _ in range(10):
+        clock.advance(0.1)
+        gearbox.process(revving, {})
+
+    assert gearbox_reasons(seen) == ['lfs_auto_gears']
+
+
+def test_no_calibration_can_start_while_lfs_shifts_by_itself(
+        bus, gearbox_factory, make_own_vehicle):
+    """Step 3 asks the driver to hold the top gear -- impossible on LFS auto."""
+    gearbox = gearbox_factory(calibrated=False)
+    bus.emit('state_data', track_state())
+    standing = make_own_vehicle(speed=0.0, gear=1, rpm=900, local_plid=1,
+                                plid=1, player_flags=pyinsim.PIF_AUTOGEARS)
+
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(standing, {})
+
+    assert gearbox.calibrating is False
+
+
+def test_a_running_calibration_is_aborted_when_lfs_takes_over(
+        bus, gearbox_factory, make_own_vehicle):
+    clock = FakeClock()
+    gearbox = gearbox_factory(clock=clock, calibrated=False)
+    bus.emit('state_data', track_state())
+    standing = make_own_vehicle(speed=0.0, gear=1, rpm=900, local_plid=1, plid=1)
+    bus.emit('gearbox_calibrate', {})
+    gearbox.process(standing, {})
+    assert gearbox.calibrating is True
+
+    clock.advance(1.0)
+    lfs_took_over = make_own_vehicle(speed=0.0, gear=1, rpm=900, local_plid=1,
+                                     plid=1,
+                                     player_flags=pyinsim.PIF_AUTOGEARS)
+    gearbox.process(lfs_took_over, {})
+
+    assert gearbox.calibrating is False
+
+
+def test_unknown_flags_leave_the_gearbox_working(bus, gearbox_factory, revving_car):
+    """Before the first IS_NPL the flags are 0 -- that must not switch it off.
+
+    ``revving_car`` carries no flags at all, which is exactly that state.
+    """
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state())
+
+    gearbox.process(revving_car, {})
+
+    assert keys_pressed() == ['c', 's']
+
+
 # ─── Gearbox calibration ─────────────────────────────────────────────────────
 
 def notifications(seen):
@@ -558,8 +794,10 @@ def test_a_car_with_no_calibration_shifts_on_measured_values(
                                                 forward_gears=5))
     gearbox.clock = FakeClock()
     # Far enough back that the shift cooldown is over (the clock was swapped
-    # after __init__ took its first reading).
+    # after __init__ took its first reading), and the drivetrain has been
+    # closed long enough to decide on (known-issues #47).
     gearbox.time_since_last_gear_change = gearbox.clock() - 10.0
+    gearbox._clutch_closed_since = gearbox.clock() - 10.0
     gearbox.guard.foreground_check = lambda: True
     bus.emit('state_data', track_state())
     revving = make_own_vehicle(speed=90, gear=4, rpm=7800, throttle=1.0,

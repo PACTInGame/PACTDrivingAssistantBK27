@@ -145,6 +145,35 @@ def test_the_aeb_button_is_red_while_braking_cannot_be_armed(menu, settings, bus
     assert 33 not in {bid for bid, *_rest in menu.buttons_for('driving')}
 
 
+# ─── The gearbox says why it is not shifting ─────────────────────────────────
+
+def test_the_gearbox_button_is_red_while_lfs_shifts_by_itself(menu, settings, bus):
+    """Switched on but standing down is a state the driver has to see.
+
+    The reason line wins over the brake's, because this is the one the driver
+    can fix in seconds (known-issues #47).
+    """
+    settings.set('automatic_gearbox', True)
+    settings.set('automatic_emergency_brake', 2)
+    menu.open_driving_menu()
+
+    def text_of(button_id):
+        return next(text for bid, _x, _y, _w, _h, text, _style
+                    in menu.buttons_for('driving') if bid == button_id)
+
+    assert text_of(26).startswith("^2")
+
+    bus.emit('gearbox_availability', {'reason': 'lfs_auto_gears'})
+
+    assert text_of(26).startswith("^1")
+    assert 'LFS' in text_of(33)
+
+    bus.emit('gearbox_availability', {'reason': None})
+
+    assert text_of(26).startswith("^2")
+    assert 33 not in {bid for bid, *_rest in menu.buttons_for('driving')}
+
+
 # ─── Toggles write the setting they claim to ─────────────────────────────────
 
 @pytest.mark.parametrize("button_id, key", [

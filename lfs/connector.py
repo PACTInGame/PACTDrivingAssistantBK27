@@ -15,6 +15,14 @@ from misc import helpers
 logger = logging.getLogger(__name__)
 
 
+def _as_int(value, default: int = 0) -> int:
+    """Paketfelder sind nicht vertrauenswuerdig - nie ungeprueft vergleichen."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class LFSConnector:
     """Verwaltet die Verbindung zu Live for Speed"""
 
@@ -30,6 +38,7 @@ class LFSConnector:
         self._setup_handlers()
         self.event_bus.subscribe("send_light_command", self.send_light_command)
         self.event_bus.subscribe("request_axm_update", self._request_axm_update)
+        self.event_bus.subscribe("request_player_list", self._request_player_list)
         self.event_bus.subscribe("siren_state_changed", self._siren_state_changed)
         self.AIController = None
 
@@ -52,6 +61,23 @@ class LFSConnector:
             return
         self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_AXM)
 
+    def _request_player_list(self, data=None):
+        """Fordert ein IS_NPL je Spieler an (TINY_NPL)
+
+        LFS schickt IS_NPL von sich aus nur beim Beitritt und beim Verlassen
+        der Box. Wer die Identitaeten *jetzt* braucht - wer ist KI, welche
+        PLID gehoert dem lokalen Fahrer - muss danach fragen; nach einem
+        ``/restart`` ist das der Unterschied zwischen frischen Daten und dem
+        Stand von vor dem Neustart (reference/insim.md).
+        """
+        if not (self.insim and self.is_connected):
+            return
+        try:
+            self.insim.send(pyinsim.ISP_TINY, ReqI=255, SubT=pyinsim.TINY_NPL)
+        except Exception as e:
+            logger.warning("Requesting the player list failed: %s: %s",
+                           type(e).__name__, e)
+
     def _setup_handlers(self):
         """Registriert Standard-Packet-Handler und startet listener"""
 
@@ -59,7 +85,9 @@ class LFSConnector:
 
         self._packet_handlers = {
             pyinsim.ISP_NPL: self._handle_new_player,
+            pyinsim.ISP_PFL: self._handle_player_flags,
             pyinsim.ISP_PLL: self._handle_player_left,
+            pyinsim.ISP_RST: self._handle_race_start,
             pyinsim.ISP_STA: self._handle_state,
             pyinsim.ISP_BTC: self._handle_button_click,
             pyinsim.ISP_MSO: self._handle_message,
@@ -125,9 +153,32 @@ class LFSConnector:
 
         self.event_bus.emit('player_joined', npl)
 
+    def _handle_player_flags(self, insim, pfl):
+        """Hilfen-Flags eines Spielers haben sich geaendert (IS_PFL)"""
+        self.event_bus.emit('player_flags_changed', pfl)
+
     def _handle_player_left(self, insim, pll):
         """Verarbeitet Spieler die verlassen"""
         self.event_bus.emit('player_left', pll)
+
+    def _handle_race_start(self, insim, rst):
+        """Verarbeitet IS_RST - ein Rennen hat begonnen (auch ``/restart``)
+
+        Jedes Auto steht danach wieder am Grid und LFS kuendigt das ganze Feld
+        erneut per IS_NPL an. **IS_PLL kommt dabei nicht** (gemessen ueber neun
+        Szenarien, ``vehicles/vehicle_manager.py``), also ist das hier das
+        einzige Signal, an dem sich "alles von vorn" erkennen laesst.
+
+        ``ReqI != 0`` waere die Antwort auf eine eigene TINY_RST-Anfrage und
+        damit keine Meldung ueber ein neues Rennen; die App fragt das nie,
+        aber ein zweiter InSim-Client im selben Spiel kann es.
+        """
+        if _as_int(getattr(rst, 'ReqI', 0)) != 0:
+            return
+        self.event_bus.emit('race_restarted', rst)
+        # Frische Identitaeten holen: wer KI ist und welche PLID dem lokalen
+        # Fahrer gehoert, steht nur in IS_NPL.
+        self._request_player_list()
 
     def _handle_state(self, insim, sta):
         """Verarbeitet Spielstatus"""

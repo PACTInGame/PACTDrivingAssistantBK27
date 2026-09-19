@@ -59,6 +59,45 @@ class Gearbox(AssistanceSystem):
     COOLDOWN_AFTER_DOWNSHIFT = 0.8  # before an upshift is allowed
     COOLDOWN_SAME_DIRECTION = 0.4   # before another shift in the same direction
 
+    # ─── Der Antriebsstrang muss geschlossen sein ─────────────────────
+    #
+    # Die Schaltpunkte vergleichen die Motordrehzahl mit Leerlauf und
+    # Abregeldrehzahl. Diese Drehzahl sagt aber nur dann etwas ueber den
+    # richtigen Gang aus, wenn Motor und Raeder ueberhaupt verbunden sind:
+    #
+    #     omega_motor = omega_rad * i_gang * i_achse      (Kupplung zu)
+    #
+    # Bei offener Kupplung faellt diese Gleichung weg. Der Motor dreht dann
+    # gegen das Gaspedal frei hoch und steht binnen 100 ms am Begrenzer -
+    # *unabhaengig* davon, welcher Gang eingelegt ist. Genau darauf hat die
+    # alte Fassung reagiert (known-issues #47): sie hat ihre eigene Kupplung
+    # als "zu hohe Drehzahl, noch ein Gang" gelesen.
+    #
+    # Gemessen in 15_gearbox_tests (FZ5, t = 42.0 s): Tastendruck bei 41.96,
+    # Kupplung offen ab 42.00, Gang 2->3 bei 42.05, und die Drehzahl steigt
+    # von 6641 auf den Begrenzer bei 6983 statt zu fallen. Der naechste
+    # Schaltvorgang ist nach COOLDOWN_SAME_DIRECTION = 0.40 s erlaubt, die
+    # Kupplung ist aber erst nach CLUTCH_HOLD_S (0.30 s) *plus* der Rampe,
+    # mit der LFS sie kommen laesst (~0.18 s), wieder zu. Sie schliesst also
+    # nie: 2->3->4->5 in 0.8 s bei konstant 55 km/h.
+    #
+    # Deshalb zwei Bedingungen vor jeder Entscheidung, beide physikalisch
+    # und nicht getunt:
+    CLUTCH_ENGAGED_MAX = 0.05   # darueber ist der Antriebsstrang offen
+    # Nach dem Schliessen braucht die Drehzahl Zeit, den neuen Gang
+    # anzunehmen - Motortraegheit und der Kupplungsschlupf, den LFS
+    # modelliert. Im selben Trace dauert der Angleich 0.35-0.6 s; 0.25 s ist
+    # der Punkt, ab dem die Drehzahl die Richtung sicher zeigt, und liegt
+    # weit unter der Zeit, die ein Gang unter Vollgas bis zum Begrenzer
+    # braucht (2-4 s). Die Automatik wird davon also nicht langsamer.
+    RPM_SETTLE_S = 0.25
+
+    # Hochschalten unter Bremsung nimmt die Motorbremse weg und laesst das
+    # Auto im falschen Gang stehen - kein Automatikgetriebe tut das. Waehrend
+    # eines Notbremseingriffs war genau das die zweite Haelfte von #47
+    # (3 -> 4 -> 5 -> 6 bei voller Bremse).
+    MAX_BRAKE_FOR_UPSHIFT = 0.20
+
     # Schaltablauf (Sekunden). LFS liest die Tastatur einmal pro gerendertem
     # Bild, eine Haltezeit unterhalb einer Bildperiode wird schlicht verpasst -
     # 0.1 s sind auch bei 30 fps mehrere Bilder. Die Werte sind die, die die
@@ -111,6 +150,9 @@ class Gearbox(AssistanceSystem):
         self.last_throttle_values = []
         self.time_since_last_gear_change = self.clock()
         self.last_shift_direction = None  # 'up', 'down', or None
+        # Seit wann ist der Antriebsstrang geschlossen? None = offen, und
+        # dann wird gar nicht entschieden (siehe CLUTCH_ENGAGED_MAX).
+        self._clutch_closed_since = None
 
         # Tastendruck-Schutz (reference/ui.md §1.4). Vorher pruefte der
         # Gearbox ueberhaupt nichts: ein Schaltvorgang waehrend des Chats
@@ -120,6 +162,10 @@ class Gearbox(AssistanceSystem):
         # sie verhaelt sich der Gearbox wie vorher und braucht die manuelle
         # Kalibrierung.
         self.car_profiles = car_profiles
+        # Zuletzt gemeldeter Verfuegbarkeitsgrund (None = die Automatik
+        # arbeitet). Nur bei *Wechsel* veroeffentlicht - das Event geht ins
+        # Menue, eines pro Zyklus waere ein Button-Sturm.
+        self._reported_reason = None
         # True, solange die Werte aus der Kalibrierdatei des Fahrers stammen.
         # Nur dann sind sie endgueltig; Tabelle und Messung werden pro Zyklus
         # nachgezogen, damit eine besser werdende Messung auch ankommt.
@@ -637,6 +683,26 @@ class Gearbox(AssistanceSystem):
         self.last_shift_direction = direction
         return True
 
+    def _drivetrain_is_settled(self, own_vehicle: OwnVehicle) -> bool:
+        """Sind Motor und Raeder verbunden, und hat die Drehzahl sich gefangen?
+
+        Zwei Zustaende in einem Zaehler: ``_clutch_closed_since`` ist None,
+        solange die Kupplung offen ist, und traegt sonst den Zeitpunkt des
+        Schliessens. Kosten pro Zyklus: ein Vergleich, im Normalfall zwei.
+
+        Rueckgabe False heisst ausdruecklich "jetzt nicht entscheiden", nicht
+        "nicht schalten": der naechste Zyklus fragt neu.
+        """
+        clutch = own_vehicle.clutch
+        if clutch > self.CLUTCH_ENGAGED_MAX:
+            self._clutch_closed_since = None
+            return False
+        now = self.clock()
+        if self._clutch_closed_since is None:
+            self._clutch_closed_since = now
+            return False
+        return now - self._clutch_closed_since >= self.RPM_SETTLE_S
+
     def _process_shifting(self, own_vehicle: OwnVehicle):
         """
         Hauptlogik für das Schalten mit Hysterese.
@@ -662,6 +728,13 @@ class Gearbox(AssistanceSystem):
         if rpm_range <= 0:
             return
 
+        # Ohne geschlossenen Antriebsstrang sagt die Drehzahl nichts ueber
+        # den Gang aus (known-issues #47, Herleitung bei CLUTCH_ENGAGED_MAX).
+        # Die Kupplung kommt aus OutGauge, umfasst also die eigene genauso
+        # wie die des Fahrers und die von LFS' Autokupplung.
+        if not self._drivetrain_is_settled(own_vehicle):
+            return
+
         # Rohindex des hoechsten Gangs (forward_gears zaehlt Vorwaertsgaenge).
         top_gear_index = self.forward_gears + (self.FIRST_FORWARD_GEAR - 1)
 
@@ -683,6 +756,7 @@ class Gearbox(AssistanceSystem):
         if (current_gear >= self.FIRST_FORWARD_GEAR   # mindestens im 1. Vorwärtsgang
                 and current_gear < top_gear_index     # nicht über den höchsten Gang
                 and throttle > self.MIN_THROTTLE_FOR_UPSHIFT
+                and current_brake <= self.MAX_BRAKE_FOR_UPSHIFT
                 and current_rpm > upshift_rpm
                 and self._can_shift('up')):
             self._execute_shift('up', own_vehicle)
@@ -694,6 +768,60 @@ class Gearbox(AssistanceSystem):
                 and self._can_shift('down')):
             self._execute_shift('down', own_vehicle)
 
+    # ─── Verfuegbarkeit ───────────────────────────────────────────────
+
+    # Interne Gruende, die das Menue uebersetzt (ui/menu_system.py). Genau wie
+    # beim Bremseingriff steht hier nur der Schluessel, nicht der Fahrertext.
+    REASON_LFS_AUTO_GEARS = 'lfs_auto_gears'
+    REASON_CAR_NOT_SUPPORTED = 'car_not_supported'
+    REASON_NOT_CALIBRATED = 'not_calibrated'
+
+    @staticmethod
+    def lfs_shifts_by_itself(own_vehicle: OwnVehicle) -> bool:
+        """Schaltet LFS' *eigenes* Automatikgetriebe gerade mit?
+
+        ``PIF_AUTOGEARS`` aus IS_NPL/IS_PFL (``vehicles/vehicle.py``). Ist es
+        gesetzt, schaltet LFS selbst - und zwei Automatiken auf derselben
+        Kurbelwelle schalten gegeneinander: unsere Automatik tippt die
+        Gangtaste, LFS schaltet im selben Augenblick noch einmal, und das
+        Ergebnis ist ein Gang, den keiner der beiden wollte
+        (``reference/systems.md``).
+
+        Konservativ in beide Richtungen:
+
+        * Das Flag beschreibt den *lokalen Fahrer*. Zeigt die Kamera gerade
+          auf ein fremdes Auto, sagen die Daten nichts ueber uns aus - dann
+          gilt weiter, was zuletzt fuer uns galt, und die Frage wird nicht
+          neu beantwortet (``conventions.md`` §5.2). Das ist hier ohne
+          Bedeutung, weil ``_execute_shift`` in dem Fall ohnehin nicht
+          tippt, kostet aber nichts.
+        * Kam noch kein IS_NPL, ist ``player_flags`` 0. Dann ist die Antwort
+          "nein" - also das bisherige Verhalten. Eine unbekannte Antwort darf
+          keine Funktion abschalten.
+        """
+        return bool(getattr(own_vehicle.data, 'lfs_auto_gears', False))
+
+    def _publish_availability(self, reason):
+        """Sagt, ob die Automatik wirklich schaltet - und wenn nicht, warum
+
+        Ein Event je *Wechsel*. ``None`` geht mit raus, sonst bliebe ein
+        behobener Grund fuer immer im Menue stehen.
+        """
+        if self._reported_reason == reason:
+            return
+        previous = self._reported_reason
+        self._reported_reason = reason
+        self.event_bus.emit('gearbox_availability', {'reason': reason})
+        if reason is None:
+            if previous is not None:
+                logger.info("Automatic gearbox is shifting again.")
+            return
+        if reason == self.REASON_LFS_AUTO_GEARS:
+            logger.info("Automatic gearbox switched itself off: LFS' own "
+                        "automatic gearbox is active (PIF_AUTOGEARS). Two "
+                        "gearboxes on one car shift against each other.")
+            self._notify('^3' + self._t('LFS shifts by itself'))
+
     # ─── Zyklus ───────────────────────────────────────────────────────
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
@@ -704,6 +832,9 @@ class Gearbox(AssistanceSystem):
         Kalibrier-Countdown laeuft nur waehrend der Kalibrierung.
         """
         if not self.is_enabled():
+            # Abgeschaltet heisst abgeschaltet - kein Grund, den das Menue
+            # als Stoerung anzeigen muesste.
+            self._publish_availability(None)
             return {'auto_gearbox_active': False}
 
         # Fahrzeuge, deren Getriebe diese Logik nicht beschreibt. Vor allem
@@ -715,7 +846,23 @@ class Gearbox(AssistanceSystem):
                 self._notify('^1' + self._t('Automatic Gearbox not available'))
             if self.calibrating:
                 self._abort_calibration()
+            self._publish_availability(self.REASON_CAR_NOT_SUPPORTED)
             return {'auto_gearbox_active': False}
+
+        # LFS schaltet selbst. Dann haelt sich diese Automatik heraus - noch
+        # vor allem Weiteren, damit weder eine Kalibrierung noch ein
+        # Schaltvorgang beginnt. Gemessen (known-issues #47, Szenario
+        # 15_gearbox_tests): zwei Automatiken auf einem Auto ergeben
+        # Schaltsalven, eine dauernd offene Kupplung und weniger
+        # Beschleunigung als jede der beiden allein.
+        if self.lfs_shifts_by_itself(own_vehicle):
+            if self.calibration_requested:
+                self.calibration_requested = False
+            if self.calibrating:
+                self._abort_calibration('LFS shifts by itself')
+            self._publish_availability(self.REASON_LFS_AUTO_GEARS)
+            return {'auto_gearbox_active': False,
+                    'suppressed_by': self.REASON_LFS_AUTO_GEARS}
 
         # Kalibrierung laden wenn das Fahrzeug wechselt
         if self.car != own_vehicle.data.cname:
@@ -739,8 +886,17 @@ class Gearbox(AssistanceSystem):
 
         if self.calibrating:
             self._process_calibration(own_vehicle)
+            self._publish_availability(None)
         elif self.is_calibrated:
             self._process_shifting(own_vehicle)
+            self._publish_availability(None)
+        else:
+            # Eingeschaltet, erlaubtes Auto - aber ohne Leerlauf, Redline und
+            # Gangzahl gibt es keine Schaltpunkte. Bisher schwieg die
+            # Automatik hier einfach.
+            self._publish_availability(self.REASON_NOT_CALIBRATED)
+            return {'auto_gearbox_active': False,
+                    'suppressed_by': self.REASON_NOT_CALIBRATED}
 
         return {'auto_gearbox_active': True}
 

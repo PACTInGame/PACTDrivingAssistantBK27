@@ -278,12 +278,33 @@ read from the settings at press time, so a rebind in the menu works without a re
 - **`forward_gears` is the number of forward gears**, not the raw OutGauge gear index —
   one representation, displayed as it is stored. Files written by older builds carry
   the raw index under `max_gears` and are converted on load.
+- **It stands down when LFS shifts by itself.** `PIF_AUTOGEARS` in the driver's help
+  flags (`insim.md` §7, reached as `own_vehicle.data.lfs_auto_gears`) means LFS's own
+  automatic gearbox is on, and two automatics on one crankshaft shift against each
+  other. Checked before anything else, so no shift and no calibration can start; the
+  reason goes to the menu as `gearbox_availability` = `lfs_auto_gears` and the driver
+  gets one notification. It follows the flag in both directions — SHIFT+G on track
+  hands control back within a cycle. This is not an exotic case: SHIFT+G is a two-key
+  shortcut and the recorded test scenarios were all driven with it on.
+- **The shift decision needs a closed, settled drivetrain.** `omega_engine =
+  omega_wheel · i_gear · i_final` only holds with the clutch engaged; with it open the
+  engine revs free against the throttle and sits on the limiter no matter which gear is
+  in. So `_drivetrain_is_settled()` refuses to decide while `clutch > 0.05` and for
+  `RPM_SETTLE_S` (0.25 s) after it closes. Without this the gearbox read *its own*
+  clutch as "still too high a gear" and walked up the whole box — `known-issues.md` #47
+  has the measurement. The clutch value comes from OutGauge, so it covers the driver's
+  clutch and LFS's autoclutch as well as our own.
+- **No upshift while braking** (`MAX_BRAKE_FOR_UPSHIFT`, 0.20). Upshifting under braking
+  removes the engine braking and leaves the car in the wrong gear for the handback;
+  during an emergency-brake intervention it did exactly that, 3 → 4 → 5 → 6.
 - **Anti-hunting design** — read `_process_shifting`'s docstring before changing it:
   throttle-dependent shift points create a wide dead zone between the upshift threshold
   (`idle + range·(0.50 + 0.42·throttle)`) and the downshift threshold
   (`idle + range·(0.15 + 0.20·throttle)`), plus direction-dependent cooldowns
   (1.5 s before reversing an upshift, 0.8 s the other way, 0.4 s same direction) and a
-  5-sample throttle average.
+  5-sample throttle average. The cooldowns are a *floor*, not the protection: at 0.4 s
+  same-direction they are shorter than the clutch is open, which is why the settle gate
+  above exists.
 - Gear numbering follows OutGauge: `0` = reverse, `1` = neutral, `2` = 1st gear.
 
 ## Navigation — removed in WP10

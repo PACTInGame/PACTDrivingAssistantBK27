@@ -49,6 +49,14 @@ AEB_REASON_TEXTS = {
 # Why the throttle is not taken away during an intervention. Separate from the
 # table above on purpose: braking can be perfectly armed while the throttle cut
 # is not, and the two say very different things to the driver.
+# Warum die Automatik nicht schaltet, obwohl sie eingeschaltet ist
+# (``assistance/gearbox.py``).
+GEARBOX_REASON_TEXTS = {
+    'lfs_auto_gears': "LFS automatic gearbox is on",
+    'car_not_supported': "Automatic Gearbox not available",
+    'not_calibrated': "Not calibrated",
+}
+
 THROTTLE_REASON_TEXTS = {
     'throttle_axis_not_verified': "Measuring the throttle axis",
     'throttle_pedal_not_confirmed': "Measuring the throttle axis",
@@ -102,6 +110,10 @@ class MenuSystem:
         self._aeb_reason = None
         # Und warum das Gas waehrend eines Eingriffs nicht weggenommen wird.
         self._throttle_reason = None
+        # Und warum die Automatik nicht schaltet. Der haeufigste Grund ist
+        # LFS' eigenes Automatikgetriebe - ohne diese Zeile stand der
+        # Menuepunkt gruen da, waehrend die Automatik sich herausgehalten hat.
+        self._gearbox_reason = None
 
         self._painters: Dict[str, Callable[[], None]] = {
             'main': self.open_main_menu,
@@ -124,6 +136,8 @@ class MenuSystem:
                                             self._on_aeb_availability)
         self.ui_manager.event_bus.subscribe('throttle_cut_availability',
                                             self._on_throttle_availability)
+        self.ui_manager.event_bus.subscribe('gearbox_availability',
+                                            self._on_gearbox_availability)
 
     # ─── Sprache ──────────────────────────────────────────────────────
 
@@ -165,6 +179,15 @@ class MenuSystem:
         self._throttle_reason = reason
         if self.current_menu in ('driving', 'keys'):
             self._repaint_current_menu()
+
+    def _on_gearbox_availability(self, data):
+        """Warum die Automatik nicht schaltet (oder None, wenn sie es tut)."""
+        reason = data.get('reason') if isinstance(data, dict) else None
+        if reason == self._gearbox_reason:
+            return
+        self._gearbox_reason = reason
+        if self.current_menu == 'driving':
+            self.open_driving_menu()
 
     def _on_buttons_cleared(self, data=None):
         """SHIFT+B: LFS hat unsere Buttons geworfen (reference/ui.md §1.5)
@@ -281,7 +304,11 @@ class MenuSystem:
         fcw = "^2" if self.settings.get('forward_collision_warning') else "^1"
         bsw = "^2" if self.settings.get('blind_spot_warning') else "^1"
         ctw = "^2" if self.settings.get('cross_traffic_warning') else "^1"
-        agb = "^2" if self.settings.get('automatic_gearbox') else "^1"
+        # Rot heisst beim Getriebe wie beim Bremseingriff nicht nur "aus",
+        # sondern auch "eingeschaltet, schaltet aber nicht" - der Grund steht
+        # in der Detailzeile unter dem Menue.
+        agb_on = self.settings.get('automatic_gearbox')
+        agb = "^2" if agb_on and self._gearbox_reason is None else "^1"
         ah = "^2" if self.settings.get('auto_hold') else "^1"
         al = "^2" if self.settings.get('adaptive_lights') else "^1"
         hba = "^2" if self.settings.get('high_beam_assist') else "^1"
@@ -336,7 +363,15 @@ class MenuSystem:
         # Die Begruendung haengt *unter* dem Menue statt in der Zeile, damit
         # sie keine der festen Zeilen verschiebt, wenn sie erscheint oder
         # verschwindet.
-        if aeb_on and self._aeb_reason is not None:
+        if agb_on and self._gearbox_reason is not None:
+            # Vor dem Bremseingriff: das Getriebe ist der einzige Punkt, den
+            # der Fahrer selbst in Sekunden beheben kann (LFS-Automatik aus).
+            detail = self.translator.get(
+                GEARBOX_REASON_TEXTS.get(self._gearbox_reason,
+                                         "Automatic Gearbox not available"),
+                lang)
+            buttons.append((33, 0, 115, 65, 5, "^3" + detail, pyinsim.ISB_LIGHT))
+        elif aeb_on and self._aeb_reason is not None:
             detail = self.translator.get(
                 AEB_REASON_TEXTS.get(self._aeb_reason, "Braking unavailable"),
                 lang)

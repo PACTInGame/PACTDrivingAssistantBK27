@@ -64,7 +64,22 @@ which is more convenient for steering.
 
 Note `calculate_angle` divides `own_x/own_y` by 65536 but expects the *target* already
 in metres; `calculate_angle_meters` expects both in metres. Picking the wrong one is a
-silent 65536× error.
+silent 65536× error. (`calculate_angle_meters` has no caller since AI traffic's
+collision check moved to a corridor; it is kept because it is the metre-native half of
+this pair.)
+
+**The direction a car points, as a vector**, is `AIDriver.heading_vector(heading)`:
+
+```python
+radians = math.radians(heading / 182.0)
+forward = (-sin(radians), cos(radians))        # heading 0 -> +Y, growing anticlockwise
+```
+
+The same convention `calculate_angle` encodes implicitly, written out, because a test
+that needs *how far ahead* and *how far to the side* another car is wants the vector,
+not an angle difference: `ahead = d·forward`, `side = |d × forward|`, no trigonometry
+per pair and no square roots. Getting the sign wrong points the whole check backwards,
+so `tests/test_ai_traffic.py` pins it against `calculate_angle`.
 
 ## 3. Speed, distance, acceleration
 
@@ -228,8 +243,11 @@ So OutGauge stops streaming entirely when:
   established there;
 - `OutGauge Mode` is 0 in `cfg.txt`.
 
-Because `own_vehicle` is only ever updated from OutGauge, **every one of these silently
-freezes all assistance** (`known-issues.md` #24, #29). The existing workaround is
+`own_vehicle` is published from OutGauge **and** from every MCI frame, so a camera
+change no longer decides whether an own vehicle exists at all. What it still decides is
+how *fresh* the OutGauge half is: while OutGauge is silent, the gauge fields and the
+pedals stand still and only the MCI half (position, heading, speed) keeps moving
+(`known-issues.md` #24, #29). The existing workaround is
 `StateHandler.start_game_insim()`, which re-opens the OutGauge socket on track entry if
 more than 30 s have passed; `AIDriver` sidesteps it with the notification *"Camera needs
 to be on own vehicle."*
@@ -251,6 +269,23 @@ else when you join a multiplayer host as a guest. `PType` covers both cases, so
 This works in the garage, in menus, and regardless of camera, and it distinguishes "the
 car I drive" from "the car I am watching" — which OutGauge alone cannot.
 
+**"The first candidate keeps the title" is not for ever.** LFS re-assigns PLIDs at a
+race start and sends no `IS_PLL` for the old ones, so a rule that only ever accepted the
+*first* candidate froze `local_plid` on a PLID that could since have become an AI car —
+and `_apply_frame` would then feed that AI car's MCI data into `OwnVehicle` and drop it
+from `vehicles`, which is exactly the car the AI traffic has to see.
+`_consider_local_driver` therefore re-opens the election when
+`VehicleManager._own_plid_is_void()` says the held PLID cannot be ours any more: after
+an `IS_RST`, and when our own car has been missing from MCI for longer than
+`STALE_VEHICLE_S`. Until a new `IS_NPL` confirms one, the old value stands — a race
+start that is never followed by a player list must not blind the app.
+
+**While `local_plid` is `0`, `data.player_id` is a guess from OutGauge**, i.e. whichever
+car TAB last pointed at. `VehicleManager._own_plid()` refuses that guess when `players`
+says the car is an AI or a remote player: better an unknown identity than an own vehicle
+that is somebody else's car. Anything deciding *which cars are ours to control* reads
+`local_plid`, not `data.player_id` (`ai-traffic.md` §2).
+
 ### 5.4.1 What the code exposes
 
 | Field | Where | Meaning |
@@ -261,6 +296,8 @@ car I drive" from "the car I am watching" — which OutGauge alone cannot.
 | `vehicle.data.ucid` / `.ptype` | `VehicleData` | raw `IS_NPL` identity |
 | `vehicle.data.is_ai` | `VehicleData` | `PType` bit 1 — the authoritative AI flag |
 | `vehicle.data.is_remote` | `VehicleData` | `PType` bit 2 |
+| `vehicle.data.player_flags` | `VehicleData` | raw `PIF_*` help/mode bitfield, kept current from `IS_NPL` **and** `IS_PFL` |
+| `vehicle.data.lfs_auto_gears` | `VehicleData` | `PIF_AUTOGEARS` — LFS's own automatic gearbox is shifting this car |
 
 `own_vehicle.data.player_id` follows `local_plid` once it is known, so pressing TAB no
 longer repoints the whole object. `data.speed` is only taken from OutGauge while
@@ -270,6 +307,12 @@ because that is what the HUD is supposed to show.
 
 Note `IS_NPL` is also sent when a player *leaves the pits*, not only on joining — do not
 treat it as a one-shot "player created" event.
+
+And note what it is **not**: a live view of `Flags`. Everything in that bitfield can
+change on track without another `IS_NPL` — the driver's helps (SHIFT+G) and the control
+mode both arrive as `IS_PFL` instead. `VehicleManager` handles both, so read
+`data.player_flags` / `data.lfs_auto_gears` rather than caching a value off one packet.
+`insim.md` §7.
 
 ### 5.5 Do not detect AI drivers by name
 

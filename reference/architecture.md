@@ -102,7 +102,10 @@ dict, not the payloads.
   MCI frame, and each `VehicleData` object is *replaced* at the end of the frame rather
   than written to (`Vehicle.begin_frame` / `commit_frame`). Iterating it while packets
   keep arriving cannot raise and cannot see a half-updated car. `VehicleManager.vehicles`
-  itself is the live dict and must not be handed out.
+  itself is the live dict and must not be handed out. The snapshot also **shrinks**: a
+  car absent from a complete MCI frame is dropped, because LFS sends no `IS_PLL` at the
+  end of a race and a car nobody updates keeps its last distance for ever
+  (`known-issues.md` #49).
 - **`own_vehicle` is not.** `own_vehicle_updated` passes the live `OwnVehicle`, and
   OutGauge writes into it at ~30 Hz. Bind `data = own_vehicle.data` once per `process()`
   call instead of re-reading it line by line (`known-issues.md` #12).
@@ -171,7 +174,7 @@ lfs/
 vehicles/
   vehicle.py               Vehicle + VehicleData dataclass; position, heading, distance/angle to player, decoded names, IS_NPL identity; frame staging (begin_frame/commit_frame)
   own_vehicle.py           OwnVehicle(Vehicle): OutGauge data (rpm, gear, pedals, dash lights) + local_plid / viewed_plid / is_local_driver
-  vehicle_manager.py       Consumes MCI/NPL/PLL/OutGauge → reassembles MCI frames on CCI_FIRST/CCI_LAST → emits an immutable vehicles_updated snapshot / own_vehicle_updated
+  vehicle_manager.py       Consumes MCI/NPL/PFL/PLL/OutGauge → reassembles MCI frames on CCI_FIRST/CCI_LAST → drops cars the frame no longer carries → emits an immutable vehicles_updated snapshot / own_vehicle_updated
   car_profiles.py          CarProfiles: idle rpm / rev limit / gear count per car *model*, learned from OutGauge and persisted to data/car_profiles.json
 
 assistance/
@@ -229,7 +232,8 @@ IS_MCI (all car positions, every `Interval` ms, possibly split over several pack
   → VehicleManager._handle_vehicle_data
         accumulates cars until CCI_LAST (or a 0.5 s timeout) closes the frame
         updates staged Vehicle positions, computes distance/angle to player,
-        commits every touched Vehicle → emit 'vehicles_updated' (fresh dict)
+        commits every touched Vehicle → drops the cars the frame did not
+        contain (#49) → emit 'vehicles_updated' (fresh dict)
   → AssistanceManager caches the dict
 
 OutGauge packet (high rate, own car only: speed, rpm, gear, pedals, dash lights)

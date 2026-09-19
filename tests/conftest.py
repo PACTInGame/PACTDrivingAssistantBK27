@@ -182,7 +182,9 @@ def make_own_vehicle(make_outgauge_packet):
     Same units as ``make_vehicle``. The OutGauge half (pedals, gear, lights) is
     applied through the real ``update_outgauge_data`` so the packet contract is
     exercised too. ``gear`` is the raw OutGauge value: 0 = reverse,
-    1 = neutral, 2 = first gear.
+    1 = neutral, 2 = first gear. ``player_flags`` is the raw IS_NPL/IS_PFL
+    ``Flags`` bitfield (``pyinsim.PIF_*``); ``PIF_AUTOGEARS`` in it means LFS
+    shifts by itself.
     """
     def _make(plid: int = 1, x: float = 0.0, y: float = 0.0, z: float = 0.0,
               heading: float = 0.0, direction: float = None,
@@ -191,7 +193,8 @@ def make_own_vehicle(make_outgauge_packet):
               throttle: float = 0.0, brake: float = 0.0, clutch: float = 0.0,
               cname: bytes = b"XFG", pname: bytes = b"Tester",
               control_mode: int = 0, local_plid: int = None,
-              viewed_plid: int = None, **lights) -> OwnVehicle:
+              viewed_plid: int = None, player_flags: int = 0,
+              **lights) -> OwnVehicle:
         own = OwnVehicle()
         if local_plid is not None:
             # As IS_NPL would: the camera-independent own PLID (WP4).
@@ -201,7 +204,8 @@ def make_own_vehicle(make_outgauge_packet):
             plid=plid if viewed_plid is None else viewed_plid,
             speed=speed, gear=gear, rpm=rpm,
             throttle=throttle, brake=brake, clutch=clutch, **lights))
-        own.update_model_and_driver(cname, pname, control_mode)
+        own.update_model_and_driver(cname, pname, control_mode,
+                                    flags=player_flags)
         return own
 
     return _make
@@ -304,6 +308,26 @@ def make_outgauge_packet():
             Display1='',
             Display2='',
             ID=0,
+        )
+
+    return _make
+
+
+@pytest.fixture
+def make_pfl_packet():
+    """Factory for an ``IS_PFL`` packet (a player's help flags changed).
+
+    Same ``Flags`` bitfield as ``IS_NPL``; LFS sends this one when the driver
+    toggles a help in *Options -> Controls* without leaving the track.
+    """
+    def _make(plid: int = 1, flags: int = 0) -> FakePacket:
+        return FakePacket(
+            Size=8,
+            Type=pyinsim.ISP_PFL,
+            ReqI=0,
+            PLID=plid,
+            Flags=flags,
+            Spare=0,
         )
 
     return _make

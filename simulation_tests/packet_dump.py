@@ -104,6 +104,9 @@ def decode_flags(value: int, table: Tuple[Tuple[int, str], ...]) -> List[str]:
 FLAG_FIELDS: Dict[str, Dict[str, Tuple[Tuple[int, str], ...]]] = {
     "STA": {"Flags": ISS_FLAGS},
     "NPL": {"PType": PTYPE_FLAGS, "Flags": PIF_FLAGS},
+    # Same bitfield as NPL's. IS_PFL is the *change* notification, and the
+    # only one a driver pressing SHIFT+G on track produces (README §5).
+    "PFL": {"Flags": PIF_FLAGS},
     "OutGauge": {"Flags": OG_FLAGS, "DashLights": DL_FLAGS, "ShowLights": DL_FLAGS},
     "OBH": {"OBHFlags": OBH_FLAGS},
 }
@@ -210,17 +213,16 @@ def _derive_carcontact(contact: Dict[str, Any]) -> None:
     clu_han = contact.get("CluHan", 0)
     gear_sp = contact.get("GearSp", 0)
     # Nibble-packed pedal/gear state, per InSim.txt's CarContact.
-    contact["throttle"] = (thr_brk & 0x0F) / 15.0
-    contact["brake"] = (thr_brk >> 4) / 15.0
-    contact["clutch"] = (clu_han & 0x0F) / 15.0
-    contact["handbrake"] = (clu_han >> 4) / 15.0
-    contact["gear"] = gear_sp & 0x0F
-    # Signed bytes (AccelF negative = braking); see simulation_tests/insim_patch.py.
-    # Scale per the older InSim.txt, 1 unit = 0.5 g. Newer documentation calls the
-    # field m/s^2 -- not re-measured against this install, so treat the magnitude
-    # as indicative and the sign as the hard fact.
-    contact["accel_f_g"] = contact.get("AccelF", 0) / 2.0
-    contact["accel_r_g"] = contact.get("AccelR", 0) / 2.0
+    contact["throttle"] = ((thr_brk >> 4) & 0x0F) / 15.0
+    contact["brake"] = (thr_brk & 0x0F) / 15.0
+    contact["clutch"] = ((clu_han >> 4) & 0x0F) / 15.0
+    contact["handbrake"] = (clu_han & 0x0F) / 15.0
+    contact["gear"] = (gear_sp >> 4) & 0x0F  # 15 = reverse
+    # Official CarContact schema: signed m/s², forward/right positive.
+    contact["accel_f_ms2"] = contact.get("AccelF", 0)
+    contact["accel_r_ms2"] = contact.get("AccelR", 0)
+    contact["accel_f_g"] = contact["accel_f_ms2"] / 9.80665
+    contact["accel_r_g"] = contact["accel_r_ms2"] / 9.80665
 
 
 def _derive_con(data: Dict[str, Any]) -> None:

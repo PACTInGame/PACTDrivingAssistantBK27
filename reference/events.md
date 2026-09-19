@@ -16,7 +16,9 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `outgauge_data` | `OutGaugePack` | `VehicleManager`, `UIManager`, `InputGuard` (one per key-injecting system) |
 | `outsim_data` | `OutSimPack` | *(none — see known-issues #3)* |
 | `player_joined` | `IS_NPL` packet | `VehicleManager` |
-| `player_left` | `IS_PLL` packet | `VehicleManager` |
+| `player_flags_changed` | `IS_PFL` packet | `VehicleManager` |
+| `player_left` | `IS_PLL` packet | `VehicleManager`, `AIDriver` |
+| `race_restarted` | `IS_RST` packet (unsolicited only, `ReqI == 0`) | `VehicleManager` |
 | `button_clicked` | `IS_BTC` packet | `MenuSystem`, `LightAssists` |
 | `message_received` | `IS_MSO` packet | `ChatCommandHandler` |
 | `layout_received` | `IS_AXM` packet | `ParkDistanceControl` |
@@ -30,10 +32,18 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 |---|---|---|---|
 | `state_data` | see below | `StateHandler` | `AssistanceManager`, `UIManager`, `MenuSystem`, `LightAssists`, `ChatCommandHandler`, `AIDriver`, `InputGuard` (one per key-injecting system) |
 | `vehicles_updated` | `Dict[plid, Vehicle]` (excludes own car) — a **fresh dict per MCI frame** | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
-| `own_vehicle_updated` | `OwnVehicle` | `VehicleManager` | `AssistanceManager`, every `AssistanceSystem` via the base class |
+| `own_vehicle_updated` | `OwnVehicle` | `VehicleManager` — on **every OutGauge packet and every MCI frame** | `AssistanceManager`, every `AssistanceSystem` via the base class |
 | `player_name_changed` | `{player_name: str (decoded), control_mode}` | `VehicleManager` | `LightAssists`, `ChatCommandHandler`, `MenuSystem` (logs only since WP6), `ControllerEmulator`\* |
 | `player_data_updated` | `Dict[plid, {PName, CName, PNameBytes, CNameBytes, UCID, PType, Flags, IsAI, IsRemote, ControlMode}]` | `VehicleManager` | *(none — dead)* |
+
 | `assistance_results` | `{system_key: result_dict}` | `AssistanceManager` | *(none — dead)* |
+
+`player_flags_changed` carries `IS_PFL`, the change notification for the same `Flags`
+bitfield `IS_NPL` opens with. `IS_NPL` only arrives on joining and on leaving the pits,
+so **anything reading a `PIF_*` bit has to handle both** — a driver toggling a help on
+track (SHIFT+G) produces `IS_PFL` and nothing else. `VehicleManager` updates
+`players[plid]['Flags']` and `['ControlMode']`; the value reaches `Vehicle.data`
+(`player_flags`, `lfs_auto_gears`) on the next MCI frame. See `insim.md` §7.
 
 `buttons_cleared` is emitted when LFS tells us the user wiped our buttons (SHIFT+B,
 `BFN_USER_CLEAR`) or asked for them back (`BFN_REQUEST`). `MessageSender` drops its
@@ -42,11 +52,32 @@ banner (everything else it owns is repainted every UI pass anyway) and `MenuSyst
 redraws the menu page that is currently open. Anything new that only draws on change
 must subscribe too.
 
+`own_vehicle_updated` fires from **both** sources. OutGauge is the frequent one, but
+it only streams from an internal camera view (`conventions.md` §5.3), so an app started
+while LFS already sits in a chase camera would otherwise never learn that an own vehicle
+exists at all — and `AssistanceManager.process_all_systems()` returns immediately while
+`self.own_vehicle` is `None`, which would silently switch off every system, the AI
+traffic included, although it needs nothing from OutGauge. Every MCI frame therefore
+re-publishes it too.
+
+`race_restarted` is `IS_RST`, sent by LFS at every race start, `/restart` included. It
+matters because LFS then hands out **new PLIDs and sends no `IS_PLL` for the old ones**
+(measured, see `VehicleManager._drop_vanished`). `VehicleManager` uses it to re-open the
+local-driver election, and `LFSConnector` answers it with a `TINY_NPL` so the fresh
+identities arrive without waiting for anything.
+
 `vehicles_updated` carries an **immutable snapshot**: the dict is freshly built for
 each MCI frame and every `Vehicle.data` object in it is replaced, never mutated, by
 the next frame. A consumer may iterate it on a worker thread while packets keep
 arriving. `own_vehicle_updated` does **not** give this guarantee — it hands out the
 live `OwnVehicle`, which OutGauge keeps writing to (`known-issues.md` #12).
+
+**The snapshot shrinks as well as grows.** A car missing from a *complete* MCI frame
+is dropped, because LFS sends no `IS_PLL` when a race ends and a car nobody updates
+keeps its last `distance_to_player` for ever — an emergency brake once fired at a
+ghost frozen 6 m ahead two minutes after its race finished (`known-issues.md` #49).
+So **never cache a PLID from one frame and assume it is still there in the next**,
+and never hold a `Vehicle` across frames to read its distance.
 
 ### `state_data` payload
 
@@ -80,12 +111,19 @@ grep before editing. Keys may be added, never removed or renamed.
 | `pdc_changed` | `Dict[0..5, int]` — sensor → `-1` inactive, `0` clear, `1..3` near…nearest | `ParkDistanceControl` | `UIManager`, `PDCBeepController` |
 | `needed_deceleration_update` | `{deceleration: float}` m/s² — 0 unless FCW is at level 3 | `ForwardCollisionWarning` | `EmergencyBrake` |
 | `emergency_brake_changed` | `{active: bool}` | `EmergencyBrake` | `UIManager` |
+| `gearbox_availability` | `{reason: str\|None}` — `None` = shifting; `lfs_auto_gears`, `car_not_supported`, `not_calibrated` | `Gearbox` | `MenuSystem` |
 | `ai_traffic_state_changed` | `{active: bool}` | `AIDriver` | `MenuSystem` |
 
 PDC sensor index order: `0,1,2` = front left/middle/right, `3,4,5` = rear left/middle/right.
 
 Warning-output events are emitted **only on change**, not every cycle. Keep that
 contract — the UI relies on it and the bus is synchronous.
+
+`gearbox_availability` follows the same *availability* pattern as
+`emergency_brake_availability`: it answers "switched on, but is it actually doing
+anything?" and is emitted once per change of the answer, `None` included — a reason
+that never clears would sit in the menu for ever. It carries the internal key only;
+the driver-facing text is `GEARBOX_REASON_TEXTS` in `ui/menu_system.py`.
 
 `needed_deceleration_update` is the exception and is emitted **every cycle**, because
 its subscriber actuates the car: a demand that stopped arriving must be distinguishable
@@ -102,6 +140,7 @@ the track has to release an intervention even though `AssistanceManager` stops c
 | `siren_state_changed` | `{siren_active: bool}` | `LightAssists` | `LFSConnector`, `UIManager` |
 | `strobe_state_changed` | `{strobe_active: bool}` | `LightAssists` | `UIManager` |
 | `request_axm_update` | `{}` | `ParkDistanceControl` | `LFSConnector` |
+| `request_player_list` | `{}` | `AIDriver` | `LFSConnector` (sends `TINY_NPL`) |
 | `send_command_to_lfs` | **`str`** — e.g. `"/axload AI_Traffic"` | `AIDriver` | `MessageSender` |
 | `send_local_message_to_lfs` | **`str`** — chat line, may contain `^n` colours | `ChatCommandHandler` | `MessageSender` |
 | `send_lfs_command` | **`{command: str}`** | `ControllerEmulator`\* | `UIManager` |

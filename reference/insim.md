@@ -92,7 +92,9 @@ Bound in `LFSConnector._setup_handlers`:
 | `ISP_STA` | game state (on track, dialogs, text entry, camera, track name) | `game_state_changed` → `StateHandler` → `state_data` |
 | `ISP_MCI` | multi car info: position, speed, heading of every car | `vehicle_data_received` |
 | `ISP_NPL` | new player (also fired when leaving the pits) | `player_joined` |
+| `ISP_PFL` | a player's help flags changed on track (§7) | `player_flags_changed` |
 | `ISP_PLL` | player left | `player_left` |
+| `ISP_RST` | race start — also every `/restart` | `race_restarted` (only when `ReqI == 0`) |
 | `ISP_BTC` | button clicked | `button_clicked` |
 | `ISP_MSO` | chat/system message received | `message_received` |
 | `ISP_AXM` | autocross layout added/removed/cleared | `layout_received` |
@@ -118,6 +120,29 @@ Sent by this project:
 `BFN_USER_CLEAR` / `BFN_REQUEST`. The inbound half is republished as `buttons_cleared`
 because `MessageSender` only sends a button when it *changed*, and a button LFS has
 thrown away has not changed as far as the registry is concerned.
+
+**`IS_RST` is the only "everything from here is new".** LFS sends it at every race
+start, `/restart` included. Every car is back on the grid afterwards and the whole
+field is re-announced with `IS_NPL` — **possibly under different PLIDs, and with no
+`IS_PLL` for the old ones** (see below). `LFSConnector._handle_race_start` republishes
+it as `race_restarted` and immediately asks for a fresh player list (`TINY_NPL`);
+`VehicleManager` uses it to re-open the local-driver election
+(`conventions.md` §5.4). A packet with `ReqI != 0` is somebody's answered `TINY_RST`,
+not a race start, and is ignored.
+
+**`IS_NPL` only arrives unasked on joining and on leaving the pits.** Anything that
+needs the identities *now* — who is an AI, which PLID is the local driver — has to ask
+with `TINY_NPL`. Three places do: on entering the game (`StateHandler`), on `IS_RST`,
+and when AI traffic starts (`request_player_list`, after `/restart`).
+
+**`IS_PLL` does not arrive when a race ends.** Measured over nine consecutive
+scenarios on 2026-09-19: **zero** `IS_PLL`, although every car left the track between
+races and came back with a different PLID. `IS_PLL` means *this player left* (pits,
+disconnect, spectate), not *this race is over*. So **MCI presence, not `IS_PLL`, is the
+authority on which cars exist** — a car that stops appearing in a complete MCI frame is
+gone, and anything keeping per-PLID state has to notice that by itself. Getting this
+wrong left a ghost car frozen at 6 m in front of the player and had the emergency brake
+intervene against it (`known-issues.md` #49).
 
 `ISP_CIM` needs no `ISF_*` flag — LFS sends it whenever the local connection's
 interface mode changes. It is the only reliable way to tell the garage from the options
@@ -345,3 +370,46 @@ settled several protocol questions by feeding LFS a case and reading the packets
 (the `DL_SHIFT` shift light, the three `Car` bytes a mod sends — `conventions.md` §4/§5).
 A measured answer belongs in the docs *with the measurement*, because the next session
 cannot repeat it without LFS running.
+
+---
+
+## 7. The driver's help flags: `IS_NPL.Flags`, `IS_PFL`, and SHIFT+G
+
+The `PIF_*` bitfield says which of LFS's own driving aids the local driver has on. Two
+packets carry it and **both have to be handled** — that is the whole trap:
+
+| Packet | When |
+|---|---|
+| `IS_NPL` | joining, and leaving the pits. The value at that moment, nothing later. |
+| `IS_PFL` | **whenever a help changes on track.** Same `Flags` field, `PLID` + `Flags` + spare. |
+
+A driver who changes something mid-session produces `IS_PFL` and **no** `IS_NPL`. Code
+that only binds `ISP_NPL` therefore reads a value that can be minutes stale — which is
+exactly how the automatic gearbox spent its life fighting LFS's own
+(`known-issues.md` #47).
+
+### SHIFT+G cycles the driving help — measured 2026-09-19, LFS 0.8C28
+
+Pressing SHIFT+G on track steps through three levels, each announced by one `IS_PFL`
+(`simulation_tests/_temp/pfl_probe.py` is the probe; the driver was in mouse mode):
+
+```
+        NPL  Flags=0x0401  SWAPSIDE,MOUSE                            manual
++4.0 s  PFL  Flags=0x0641  SWAPSIDE,HELP_B,AUTOCLUTCH,MOUSE          autoclutch
++6.5 s  PFL  Flags=0x0649  SWAPSIDE,AUTOGEARS,HELP_B,AUTOCLUTCH,MOUSE  automatic gearbox
+```
+
+So `PIF_AUTOGEARS` (8) is the answer to "is LFS shifting by itself?", and LFS switches
+`PIF_HELP_B` and `PIF_AUTOCLUTCH` on with it — they come as a package, not
+independently. There is no `/` command for any of this (`Commands.txt` has none): the
+flag is the only way to know, and reading it is the only way to stay out of LFS's way.
+
+`VehicleManager` keeps the raw field in `Vehicle.data.player_flags` and the one derived
+answer in `Vehicle.data.lfs_auto_gears`. `_get_control_mode()` reads the same field.
+
+**One correction this measurement forces on `control-intervention.md` §2.1:** the
+`Flags=0x0649` recorded there for "mouse+keyboard" is the *help level*, not the control
+mode. Switching control mode did not turn `AUTOGEARS`/`HELP_B` on by itself; those bits
+belong to SHIFT+G. The conclusion drawn there still holds — a `mouse_kb` driver very
+often has LFS's brake help on, so anything measuring achieved deceleration has to
+expect it — but it is the driver's choice, not an automatic consequence of the mode.

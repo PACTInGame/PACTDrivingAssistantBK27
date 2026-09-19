@@ -479,6 +479,42 @@ def test_the_connector_drops_traffic_when_it_is_not_connected(bus, settings):
     connector.send_light_command({'light': 1, 'on': True})
     connector._siren_state_changed({'siren_active': True})
     connector._request_axm_update({})
+    connector._request_player_list({})
+
+
+# ─── IS_RST: a new race, and a new set of PLIDs ──────────────────────────────
+
+def test_a_race_start_is_published_and_asks_for_the_player_list(bus, settings, recorder,
+                                                               fake_insim):
+    """LFS hands out fresh PLIDs at a race start and sends no IS_PLL for the
+    old ones, so this packet is the only "everything from here is new"."""
+    from lfs.connector import LFSConnector
+
+    events = recorder('race_restarted')
+    connector = LFSConnector(bus, settings)
+    connector.insim = fake_insim
+    connector.is_connected = True
+
+    connector._handle_race_start(None, type('RST', (), {'ReqI': 0})())
+
+    assert events.count('race_restarted') == 1
+    assert (pyinsim.ISP_TINY,
+            {'ReqI': 255, 'SubT': pyinsim.TINY_NPL}) in connector.insim.sent
+
+
+def test_a_requested_race_state_is_not_a_new_race(bus, settings, recorder, fake_insim):
+    """``ReqI != 0`` is the reply to somebody's TINY_RST, not a race start."""
+    from lfs.connector import LFSConnector
+
+    events = recorder('race_restarted')
+    connector = LFSConnector(bus, settings)
+    connector.insim = fake_insim
+    connector.is_connected = True
+
+    connector._handle_race_start(None, type('RST', (), {'ReqI': 3})())
+
+    assert events.count('race_restarted') == 0
+    assert connector.insim.sent == []
 
 
 # ─── Connector shutdown and inbound IS_BFN ───────────────────────────────────

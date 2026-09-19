@@ -12,6 +12,11 @@ PTYPE_FEMALE = 1
 PTYPE_AI = 2
 PTYPE_REMOTE = 4
 
+# IS_NPL/IS_PFL Flags-Bit fuer LFS' eingebautes Automatikgetriebe. Als
+# Konstante hier, damit ``vehicle.py`` weiter ohne pyinsim importierbar
+# bleibt; der Wert ist derselbe wie ``pyinsim.PIF_AUTOGEARS``.
+PIF_AUTOGEARS = 8
+
 # ─── Beschleunigung aus zwei MCI-Paketen ──────────────────────────────
 #
 # Der MCI-Takt ist ``settings['assistance_refresh_rate']`` (50…200 ms), nicht
@@ -101,6 +106,12 @@ class VehicleData:
     cname_bytes: bytes = b""
     pname_bytes: bytes = b""
     control_mode: int = 0
+    # Rohes IS_NPL/IS_PFL-Flagfeld (PIF_*) und die eine Auswertung, die
+    # ausserhalb des Eingabemodus gebraucht wird: laeuft LFS' *eigenes*
+    # Automatikgetriebe? Beide Pakete tragen dasselbe Feld, IS_PFL ist die
+    # Aenderungsmeldung dazu (reference/insim.md).
+    player_flags: int = 0
+    lfs_auto_gears: bool = False
     # Identitaet aus IS_NPL - kameraunabhaengig (reference/conventions.md §5.4)
     ucid: int = -1          # -1 = unbekannt, 0 = lokale Verbindung / Host
     ptype: int = 0          # IS_NPL PType-Bitfeld
@@ -115,7 +126,11 @@ class Vehicle:
         self.data = VehicleData(player_id=player_id)
         # Waehrend eines MCI-Frames zeigt _staged auf die Arbeitskopie.
         self._staged = None
-        self.last_update = 0
+        # Wann dieses Fahrzeug zuletzt in einem MCI-Frame stand (perf_counter).
+        # ``VehicleManager`` raeumt danach auf: LFS meldet kein IS_PLL, wenn ein
+        # Rennen endet, und ein Fahrzeug, das niemand mehr anfasst, behaelt fuer
+        # immer seinen letzten ``distance_to_player`` (known-issues #49).
+        self.last_seen = 0.0
         self.previous_speed = 0.0
         # Zeitpunkt des letzten Positionsupdates (time.monotonic) und der
         # gefilterte Beschleunigungswert. Beide gehoeren zum Fahrzeug, nicht
@@ -219,7 +234,8 @@ class Vehicle:
         target.angle_to_player = angle
 
     def update_model_and_driver(self, cname, pname, control_mode: int,
-                                ucid: int = None, ptype: int = None) -> bool:
+                                ucid: int = None, ptype: int = None,
+                                flags: int = None) -> bool:
         """Aktualisiert Modell-, Fahrer- und Identitätsdaten
 
         ``cname``/``pname`` duerfen bytes oder str sein; sie werden hier genau
@@ -250,5 +266,8 @@ class Vehicle:
             target.ptype = ptype
             target.is_ai = bool(ptype & PTYPE_AI)
             target.is_remote = bool(ptype & PTYPE_REMOTE)
+        if flags is not None:
+            target.player_flags = flags
+            target.lfs_auto_gears = bool(flags & PIF_AUTOGEARS)
 
         return changed

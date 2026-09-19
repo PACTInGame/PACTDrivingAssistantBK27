@@ -19,6 +19,12 @@ MCI_MAX_CARS = 16
 # auf alten Daten stehen (known-issues #6).
 FRAME_TIMEOUT_S = 0.5
 
+# Wie lange ein Fahrzeug ueberleben darf, das in keinem MCI-Frame mehr steht.
+# Greift nur, wenn der Frame unvollstaendig war - bei einem vollstaendigen
+# Frame ist "nicht drin" gleichbedeutend mit "nicht mehr da". 1.0 s sind
+# mindestens fuenf Frames auch beim langsamsten erlaubten Takt (200 ms).
+STALE_VEHICLE_S = 1.0
+
 # Wie sicher die Erkennung des lokalen Fahrers ist. IS_NPL liefert zwei
 # unabhaengige Signale (reference/conventions.md §5.4):
 #   PType Bit 1 = KI, Bit 2 = fremder Spieler  -> beides aus = wir
@@ -52,12 +58,42 @@ class VehicleManager:
         self._frame_open = False
 
         self._local_driver_score = 0
+        # Ein IS_RST macht die gemerkte eigene PLID ungueltig, bis das
+        # naechste IS_NPL eine neue bestaetigt (_own_plid_is_void).
+        self._race_restarted = False
 
         # Event-Handler registrieren
         self.event_bus.subscribe('vehicle_data_received', self._handle_vehicle_data)
         self.event_bus.subscribe('player_joined', self._handle_player_joined)
+        self.event_bus.subscribe('player_flags_changed', self._handle_player_flags)
         self.event_bus.subscribe('player_left', self._handle_player_left)
+        self.event_bus.subscribe('race_restarted', self._handle_race_restarted)
         self.event_bus.subscribe('outgauge_data', self._handle_outgauge_data)
+
+    # ─── Eigene PLID ──────────────────────────────────────────────────
+
+    def _own_plid(self) -> int:
+        """Die PLID des eigenen Autos fuer diesen Frame, oder 0.
+
+        ``local_plid`` aus IS_NPL ist die bestaetigte Antwort. Solange die
+        fehlt, steht in ``own_vehicle.data.player_id`` nur das Auto, auf dem
+        gerade die *Kamera* sitzt - und TAB macht daraus jedes beliebige
+        fremde Auto. Eines, das LFS selbst als KI oder als fremden Spieler
+        fuehrt, ist nie unseres: dann bleibt die Identitaet lieber unbekannt,
+        statt das ``OwnVehicle`` auf ein KI-Auto umzubiegen und dieses Auto
+        zugleich aus ``self.vehicles`` verschwinden zu lassen
+        (reference/conventions.md §5.4).
+        """
+        own = self.own_vehicle
+        if own.local_plid:
+            return own.local_plid
+        guess = _as_int(own.data.player_id)
+        if not guess:
+            return 0
+        info = self.players.get(guess)
+        if info and (info.get("IsAI") or info.get("IsRemote")):
+            return 0
+        return guess
 
     # ─── MCI: Frame-Reassembly ────────────────────────────────────────
 
@@ -89,7 +125,7 @@ class VehicleManager:
         if self._frame and now - self._frame_started > FRAME_TIMEOUT_S:
             logger.debug("MCI frame still incomplete after %.0f ms - publishing "
                          "%d cars anyway.", FRAME_TIMEOUT_S * 1000, len(self._frame))
-            self._flush_frame()
+            self._flush_frame(complete=False)
 
         if marks_first or not self._frame:
             self._frame = []
@@ -98,7 +134,7 @@ class VehicleManager:
         self._frame.extend(cars)
 
         if marks_last:
-            self._flush_frame()
+            self._flush_frame(complete=True)
         elif marks_first:
             self._frame_open = True
         elif not self._frame_open:
@@ -106,18 +142,23 @@ class VehicleManager:
             # schickt, oder ein Mod. Ein volles Paket heisst, dass noch eins
             # folgt - alles andere ist ein fertiger Frame.
             if len(cars) < MCI_MAX_CARS:
-                self._flush_frame()
+                self._flush_frame(complete=True)
             else:
                 self._frame_open = True
 
-    def _flush_frame(self):
+    def _flush_frame(self, complete: bool = True):
+        """``complete`` heisst: der Frame enthaelt *alle* Autos auf der Strecke.
+
+        Nur dann darf ``_apply_frame`` daraus schliessen, dass ein fehlendes
+        Fahrzeug weg ist. Der Timeout-Pfad liefert bewusst ein Bruchstueck.
+        """
         frame = self._frame
         self._frame = []
         self._frame_open = False
         if frame:
-            self._apply_frame(frame)
+            self._apply_frame(frame, complete)
 
-    def _apply_frame(self, cars):
+    def _apply_frame(self, cars, complete: bool = True):
         """Uebertraegt einen vollstaendigen MCI-Frame und veroeffentlicht ihn
 
         Kosten pro Zyklus: eine flache Kopie der ``VehicleData`` je Fahrzeug
@@ -125,7 +166,8 @@ class VehicleManager:
         30 µs bei 40 Autos, bei einem Budget von 100 ms.
         """
         own = self.own_vehicle
-        own_plid = own.data.player_id
+        own_plid = self._own_plid()
+        frame_time = time.perf_counter()
         touched: List[Vehicle] = []
         seen = set()
         own_identity_changed = False
@@ -145,6 +187,7 @@ class VehicleManager:
                     self.vehicles[player_id] = vehicle
 
             vehicle.begin_frame()
+            vehicle.last_seen = frame_time
             touched.append(vehicle)
 
             vehicle.update_position(
@@ -164,6 +207,7 @@ class VehicleManager:
                     player_info.get("ControlMode", 0),
                     player_info.get("UCID"),
                     player_info.get("PType"),
+                    player_info.get("Flags"),
                 )
                 if changed and vehicle is own:
                     own_identity_changed = True
@@ -190,15 +234,60 @@ class VehicleManager:
         for vehicle in touched:
             vehicle.commit_frame()
 
+        self._drop_vanished(seen, complete, frame_time)
+
         if own_identity_changed:
             self.event_bus.emit('player_name_changed',
                                 {"player_name": own.data.pname,
                                  "control_mode": own.data.control_mode})
 
+        # Auch das eigene Auto veroeffentlichen, obwohl OutGauge dafuer der
+        # ueblichere Anlass ist: MCI kommt in *jeder* Kameraansicht, OutGauge
+        # nur aus einer Innenansicht (conventions.md §5.3). Ohne das hier
+        # kennt der AssistanceManager gar kein eigenes Fahrzeug, solange nie
+        # ein OutGauge-Paket kam - und ueberspringt dann jeden Durchlauf,
+        # samt KI-Verkehr, der von OutGauge gar nichts braucht.
+        self.event_bus.emit('own_vehicle_updated', own)
+
         # Frisches Dict: die Assistenzsysteme iterieren im Worker-Thread,
         # waehrend der Paket-Thread hier weiter einfuegt und loescht
         # (known-issues #12).
         self.event_bus.emit('vehicles_updated', dict(self.vehicles))
+
+    def _drop_vanished(self, seen: set, complete: bool, now: float):
+        """Wirft Fahrzeuge weg, die LFS nicht mehr meldet.
+
+        **LFS schickt dafuer kein IS_PLL.** Gemessen ueber neun aufeinander
+        folgende Szenarien (``simulation_tests``, 2026-09-19): null IS_PLL,
+        obwohl zwischen den Rennen jedes Mal alle Autos verschwanden und mit
+        anderen PLIDs zurueckkamen. Ohne dieses Aufraeumen bleibt das alte
+        Fahrzeug im Dict stehen - und weil ``_apply_frame`` nur die Fahrzeuge
+        des Frames anfasst, friert auch sein ``distance_to_player`` ein.
+
+        Ein solcher Geist ist nicht bloss Ballast: jeder Verbraucher, der
+        ueber ``vehicles`` laeuft, haelt ihn fuer ein echtes Auto. Live
+        gekostet hat das einen Notbremseingriff gegen ein Auto, das seit zwei
+        Minuten nicht mehr existierte - eingefroren auf 6.06 m Abstand
+        (known-issues #49).
+
+        ``complete`` entscheidet, wie scharf geraeumt wird: enthaelt der Frame
+        alle Autos, ist "nicht drin" gleich "weg". Beim Bruchstueck aus dem
+        Timeout-Pfad waere das falsch, dort zaehlt nur das Alter.
+
+        Kosten: eine Schleife ueber die Fahrzeuge, im Normalfall ohne Treffer.
+        """
+        if complete:
+            gone = [plid for plid in self.vehicles if plid not in seen]
+        else:
+            gone = [plid for plid, vehicle in self.vehicles.items()
+                    if plid not in seen
+                    and now - vehicle.last_seen > STALE_VEHICLE_S]
+        for plid in gone:
+            vehicle = self.vehicles.pop(plid, None)
+            if vehicle is not None:
+                # Ein offenes Frame haette sonst eine Arbeitskopie behalten.
+                vehicle.abort_frame()
+            logger.debug("PLID %s is no longer in the MCI frame - dropped.", plid)
 
     # ─── IS_NPL / IS_PLL ──────────────────────────────────────────────
 
@@ -255,15 +344,82 @@ class VehicleManager:
             return
         score = _LOCAL_SCORE_UCID if ucid == 0 else _LOCAL_SCORE_PTYPE
         current = self.own_vehicle.local_plid
-        if current and current != player_id and score <= self._local_driver_score:
+        if current and current != player_id and not self._own_plid_is_void():
             # Schon ein mindestens gleich guter Kandidat bekannt - der erste
             # gewinnt, sonst wandert die eigene PLID bei jedem IS_NPL weiter.
-            return
+            if score <= self._local_driver_score:
+                return
 
         self._local_driver_score = score
+        self._race_restarted = False
         self.own_vehicle.set_local_driver(player_id, ucid, ptype)
         # Falls das eigene Auto vorher als Fremdfahrzeug gefuehrt wurde.
         self.vehicles.pop(player_id, None)
+
+    def _handle_player_flags(self, pfl_packet):
+        """Verarbeitet geaenderte Hilfen-Flags (IS_PFL)
+
+        IS_NPL kommt beim Beitritt und beim Verlassen der Box; wer waehrend
+        der Fahrt in *Options -> Controls* eine Hilfe umschaltet, erzeugt
+        stattdessen IS_PFL mit demselben ``Flags``-Feld. Ohne diesen Handler
+        bliebe ``lfs_auto_gears`` auf dem Stand des Beitritts stehen, und die
+        Automatik wuerde erst nach dem naechsten Boxenstopp merken, dass LFS
+        inzwischen selbst schaltet.
+
+        Kosten: ein dict-Update pro Paket, und die Pakete kommen nur, wenn
+        der Fahrer wirklich etwas umschaltet.
+        """
+        player_id = _as_int(getattr(pfl_packet, 'PLID', 0))
+        if not player_id:
+            return
+        player_info = self.players.get(player_id)
+        if not player_info:
+            # Ein IS_PFL vor dem ersten IS_NPL ist nicht zu verwerten: uns
+            # fehlen Auto und Fahrer. Das naechste IS_NPL bringt die Flags mit.
+            return
+        flags = _as_int(getattr(pfl_packet, 'Flags', 0))
+        if player_info.get("Flags") == flags:
+            return
+        player_info["Flags"] = flags
+        player_info["ControlMode"] = self._get_control_mode(flags)
+        self.event_bus.emit('player_data_updated', dict(self.players))
+
+    def _own_plid_is_void(self) -> bool:
+        """Ist die gemerkte eigene PLID nicht mehr gueltig?
+
+        Zwei Anlaesse, und beide kommen ohne IS_PLL aus - das schickt LFS beim
+        Rennende naemlich nicht (siehe ``_drop_vanished``):
+
+        * ein Rennstart (IS_RST). Danach steht das ganze Feld neu am Grid und
+          LFS vergibt die PLIDs neu.
+        * das eigene Auto stand laenger als ``STALE_VEHICLE_S`` in keinem
+          MCI-Frame mehr. Dann gibt es diese PLID nicht mehr, wer immer sie
+          inzwischen bekommen hat.
+
+        Ohne diese Frage gewann "der erste Kandidat" fuer immer: nach einem
+        ``/restart`` zeigte ``local_plid`` weiter auf die alte PLID, und wenn
+        die inzwischen einem KI-Auto gehoerte, war das eigene Fahrzeugobjekt
+        ein fremdes Auto - mit allem, was daran haengt (Abstaende, Warnungen,
+        und welche Autos der KI-Verkehr uebernehmen darf).
+        """
+        if self._race_restarted:
+            return True
+        last_seen = self.own_vehicle.last_seen
+        return bool(last_seen) and time.perf_counter() - last_seen > STALE_VEHICLE_S
+
+    def _handle_race_restarted(self, rst_packet=None):
+        """IS_RST - ein neues Rennen, also ein neues Feld.
+
+        Die Wahl des lokalen Fahrers faengt von vorn an. Die alte PLID bleibt
+        so lange stehen, bis ein IS_NPL eine neue bestaetigt: ein Rennstart,
+        nach dem keine Spielerliste kommt, darf die App nicht blind machen.
+        ``players`` wird nicht geleert - jeder Eintrag wird vom naechsten
+        IS_NPL derselben PLID ueberschrieben, und ein Eintrag zu einer PLID,
+        die es nicht mehr gibt, wird nie wieder gelesen, weil MCI sie nicht
+        mehr meldet.
+        """
+        self._local_driver_score = 0
+        self._race_restarted = True
 
     def _handle_player_left(self, pll_packet):
         """Entfernt Spieler"""

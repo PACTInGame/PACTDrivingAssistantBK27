@@ -100,7 +100,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--abort-key", default=config.DEFAULT_ABORT_KEY)
     parser.add_argument("--on-focus-loss", choices=("abort", "pause", "ignore"),
                         default="abort")
-    parser.add_argument("--no-focus-check", action="store_true")
+    parser.add_argument("--no-focus-check", action="store_true",
+                        help="do not raise LFS and do not watch the foreground "
+                             "at all (unsafe: input can land in another window)")
     parser.add_argument("--strict-timing", action="store_true",
                         help=f"abort if an event is dispatched more than "
                              f"{player_mod.Player.LATE_BUDGET_S:g} s past its deadline")
@@ -125,7 +127,12 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
             data = scenario_mod.load(paths.scenario_dir(name))
             recorded = "recorded" if scenario_mod.has_recording(
                 paths.scenario_dir(name)) else "NOT RECORDED"
+            why = scenario_mod.disabled_reason(data)
+            if why:
+                recorded = "DISABLED"
             print(f"{name:<32} [{recorded}]  {data['description']}")
+            if why:
+                print(f"{'':<32}   disabled: {why}")
         return 0
     if not args.scenario:
         print("give a scenario name, or --list to see them", file=sys.stderr)
@@ -136,6 +143,17 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
         print(exc, file=sys.stderr)
         return 2
     scenario = scenario_mod.load(scenario_path)
+    why_disabled = scenario_mod.disabled_reason(scenario)
+    if why_disabled and not args.force:
+        # Before the tracer starts and before anything is injected: a disabled
+        # scenario costs nothing here, and running it anyway can leave LFS
+        # somewhere that breaks the next scenario in a batch.
+        print(f"{scenario['name']} is disabled: {why_disabled}", file=sys.stderr)
+        print("re-enable it in scenario.json, or pass --force to run it anyway",
+              file=sys.stderr)
+        return 8
+    if why_disabled:
+        print(f"  note: running a disabled scenario ({why_disabled})", file=sys.stderr)
     input_path = os.path.join(scenario_path, paths.INPUT_FILE)
     if not os.path.isfile(input_path):
         print(f"no recording at {input_path} -- record the scenario first", file=sys.stderr)
@@ -217,6 +235,9 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
         )
         problems = play.preflight()
         result["preflight"] = problems
+        result["preflight_warnings"] = list(play.warnings)
+        for warning in play.warnings:
+            print(f"  note: {warning}", file=sys.stderr)
         for problem in problems:
             print(f"  pre-flight: {problem}", file=sys.stderr)
         if problems and not args.force:

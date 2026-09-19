@@ -6,10 +6,14 @@ Three things this has to get right, in order of how badly they hurt:
    mouse button down hands the user a car at full throttle. Every key and button
    the player presses is tracked and released in a ``finally``, on every exit
    path including an abort and a crash.
-2. **Only LFS may receive the input.** This injects global OS input, so the
-   replay refuses to start, and aborts by default, unless LFS is the foreground
-   window -- the same rule the add-on follows for its own key injection
-   (reference/ui.md §1.4).
+2. **Only LFS may receive the input.** This injects global OS input, so LFS
+   has to own the foreground -- the same rule the add-on follows for its own
+   key injection (reference/ui.md §1.4). The player *takes* the foreground
+   (``win_focus.raise_window``) immediately before the first event and again
+   whenever it is lost mid-run, instead of refusing until a human has arranged
+   it: an unattended run has nobody to alt-tab for it, and a focus blip while
+   LFS switches between the menu and the track is routine. Only a raise that
+   actually fails falls back to ``on_focus_loss``.
 3. **The schedule must hold.** Events carry absolute times, so the player waits
    for ``t0 + t/speed`` rather than sleeping the gap between events: a late event
    never pushes the rest of the scenario back.
@@ -97,11 +101,19 @@ class Player:
         self._keyboard = None
         self._mouse = None
         self._paused_total = 0.0
+        self._refocused = 0
+        #: Non-blocking observations from pre-flight and from the raise itself.
+        self.warnings: List[str] = []
 
     # -- pre-flight ---------------------------------------------------------
     def preflight(self) -> List[str]:
-        """Reasons this replay is likely to misfire. Empty list = good to go."""
+        """Reasons this replay is likely to misfire. Empty list = good to go.
+
+        Blocking problems only. Things worth saying but not worth refusing over
+        land in :attr:`warnings`; the caller prints those and carries on.
+        """
         problems: List[str] = []
+        self.warnings = []
         # The recording itself first: a stream that leaves a key down is a
         # danger regardless of which machine replays it.
         problems.extend(input_model.check_recording(self.events))
@@ -123,7 +135,12 @@ class Player:
             problems.append(f"no window matching {self.lfs_match!r} -- is LFS running?")
             return problems
         if self.require_focus and win_focus.is_foreground(self.lfs_match) is not True:
-            problems.append("LFS is not the foreground window")
+            # Deliberately not a refusal. ``play()`` raises LFS itself just
+            # before the first event, so demanding the foreground here would
+            # only block an unattended run. Said out loud because if that raise
+            # fails, the opening events land in the wrong window.
+            self.warnings.append("LFS is not the foreground window -- the replay "
+                                 "will raise it itself before the first event")
         # The screen can be the same size while LFS sits somewhere else on it:
         # a windowed LFS that moved invalidates every recorded click just as
         # thoroughly as a resolution change does.
@@ -160,6 +177,9 @@ class Player:
         self._paused_total = 0.0
         started = time.time()
 
+        if self.require_focus:
+            self._take_foreground("before the first event")
+
         try:
             with high_resolution_timer():
                 self._t0 = self._clock()
@@ -191,6 +211,8 @@ class Player:
             "events_applied": applied,
             "markers_sent": markers_sent,
             "paused_s": round(self._paused_total, 3),
+            "refocused": self._refocused,
+            "warnings": list(self.warnings),
             "wall_duration_s": round(time.time() - started, 3),
             "speed": self.speed,
             # How well the schedule actually held. A late event does not shift
@@ -251,11 +273,34 @@ class Player:
         if self._abort.is_set():
             raise ReplayAbort(self._abort_reason)
 
+    def _take_foreground(self, when: str) -> bool:
+        """Put LFS in front. False only when the attempt was made and failed.
+
+        ``None`` from :func:`win_focus.raise_window` means the platform cannot
+        tell (or LFS is gone, which pre-flight already refuses over) -- not a
+        failure to report a second time.
+        """
+        # Generous here: this runs before the schedule clock starts, so waiting
+        # costs nothing, and a full-screen LFS can take a second to come up.
+        raised = win_focus.raise_window(self.lfs_match, settle_s=4.0)
+        if raised is None:
+            return True
+        if raised:
+            return True
+        self.warnings.append(f"could not bring LFS to the foreground {when}")
+        return False
+
     def _check_focus(self) -> None:
         if not self.require_focus or self.on_focus_loss == "ignore":
             return
         focused = win_focus.is_foreground(self.lfs_match)
         if focused is not False:
+            return
+        # Take it back before deciding anything. Losing the foreground for a
+        # moment while LFS switches between the menu and the track is routine,
+        # and aborting a 70 s scenario over it wastes the whole run.
+        if win_focus.raise_window(self.lfs_match) is True:
+            self._refocused += 1
             return
         if self.on_focus_loss == "pause":
             # Hold the schedule rather than firing the rest into another window.

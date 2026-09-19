@@ -39,25 +39,97 @@ controller.bind_ai_info_handler(plid, callback)         # callback(aii)
   `TRACK_LAYOUT_HINTS` (e.g. *"Select City"* for SO). **Only then** does it send
   `/axload AI_Traffic` and `/restart` to LFS and go active — those two commands throw
   away whatever layout the driver had loaded, so nothing is sent until the run is
-  certain to work.
+  certain to work. Straight after them it emits `request_player_list`: `/restart`
+  puts the whole field back on the grid and LFS re-announces it, and *which car is
+  an AI* and *which PLID is the local driver* are only in `IS_NPL`. Adopting cars
+  on pre-restart identities is how the first seconds of a run go wrong.
 - Because that pair of commands cannot be undone, the menu asks first: the first click
   on the toggle only arms the start (`^3Confirm: restart race` plus a notification
   saying what will happen), the second executes it. Leaving the menu, reopening it or a
   SHIFT+B repaint cancels the confirmation (`MenuSystem.ai_traffic_confirm_pending`).
-- **Stop** brakes every controlled car at 100 % for `STOP_BRAKE_CYCLES = 20` (2 s),
-  then calls `stop_ai_control` on each and clears all per-vehicle state.
-- A track change (`state_data`) forces a stop and drops the loaded routes. A packet
-  with no usable track name is "unknown", not a change — otherwise one malformed
-  `IS_STA` would stop running traffic. `self.routes` is *rebound*, never mutated, and
-  `_process_active` binds it once per pass, because that handler runs on the packet
-  thread while `process()` runs on a worker (`conventions.md` §6).
+- **Stop** brakes every controlled car that is still on track at 100 % for
+  `STOP_BRAKE_CYCLES = 20` (2 s), then calls `stop_ai_control` on each and clears
+  all per-vehicle state.
+- A track change (`state_data`) or leaving the race **abandons** control (§2.1) and
+  drops the loaded routes. A packet with no usable track name is "unknown", not a
+  change — otherwise one malformed `IS_STA` would stop running traffic.
+  `self.routes` is *rebound*, never mutated, and `_process_active` binds it once per
+  pass, because that handler runs on the packet thread while `process()` runs on a
+  worker (`conventions.md` §6).
 
 Cars are adopted only when LFS itself marks them as AI: `IS_NPL.PType` bit 1, exposed as
-`vehicle.data.is_ai` (`_is_local_ai_vehicle`, `conventions.md` §5.5). The player's own
-car is included as a candidate because the camera may be attached to an AI car.
+`vehicle.data.is_ai` (`_is_local_ai_vehicle`, `conventions.md` §5.5), and never the car
+of `own_vehicle.local_plid`. **The exclusion is on `local_plid`, not on
+`own_vehicle.data.player_id`**: the latter falls back to the car OutGauge is describing
+while no `IS_NPL` for the local driver has been seen, and TAB makes that any car on
+track (`conventions.md` §5.4).
+
+The whole candidate set is `vehicles` plus `own_vehicle` — `VehicleManager` keeps the
+own car out of `vehicles`, and it is both a possible AI (the camera may sit on one
+before the identity is known) and, always, a solid obstacle for everyone else.
+
+**A route assignment is no longer permanent.** A car that spends
+`OFF_ROUTE_REASSIGN_CYCLES = 10` consecutive cycles more than
+`OFF_ROUTE_DISTANCE_M = 25 m` from the road it was given has its route picked again.
+This is what a `/restart` does to a car adopted moments before it: the route search
+resyncs, but the *road* used to stay wrong for the rest of the run.
+
+**"From the road", not "from the nearest route point"** — `distance_to_route_sq`. Both
+shortcuts were measured against the shipped files (2026-09-19) and both produce a false
+positive at a *fixed place on a fixed corner, every lap*:
+
+| Measure | worst reading for a car driving 3 m off the centre line |
+|---|---|
+| nearest stored **point** | **20.8 m** (SO road 33, KY 20.7 m) against a 25 m threshold |
+| nearest **segment**, two either side of that point | 20.8 m — the seam of the same loop puts the nearest point two segments away around the wrap |
+| nearest segment, `OFF_ROUTE_SEGMENT_WINDOW = 4` either side | **3.0 m** on every shipped road, i.e. the offset itself |
+
+Point spacing in `track_data/*.json` is authored by hand and runs 1.1 m … 41.3 m, so a
+point-based measure says more about how densely somebody drew a road than about where
+the car is. The window is counted in *segments*, not metres, which is what keeps the
+answer spacing-independent: a sparse road has few segments and long ones.
+`tests/test_ai_traffic.py` walks every segment of every shipped road at three fractions
+and asserts the reading stays under 5 m — so a newly captured `track_data_XX.json` that
+would reintroduce this fails the suite.
+
+Cost: 41 squared distances for the nearest point (unchanged) plus 8 segment distances,
+~160 flops, per car per cycle.
 
 Because `IS_AII` requests are lost when the map reloads, `AIDriver` re-issues
 `request_ai_info` for any car silent for more than `AI_INFO_TIMEOUT = 2.0` s.
+
+### 2.0 Nothing is ever sent to a car that is not there
+
+**`IS_AIC` for a PLID LFS does not know produces a chat line**, *"IS_AIC - no
+driver to control"*, one per packet. With a full city that is one line per car,
+and it is what the driver sees when a race ends while traffic is running.
+
+So every packet this system sends goes through `AIDriver._control(plid, state)`,
+which drops anything addressed to a PLID outside `_live_plids` — the set of
+PLIDs the last vehicle list contained, rebuilt at the top of every pass and
+extended by `monitor_ai` when an `IS_AII` proves a car exists. `_live_plids` is
+*rebound*, never mutated: `monitor_ai` reads it on the packet thread
+(`conventions.md` §6).
+
+Three things used to get past that:
+
+* `_process_active` re-requested `IS_AII` for every assigned PLID **before** it
+  noticed they had all disappeared. The order is now reversed: departed cars are
+  forgotten first, and the re-request skips anything not live.
+* the stop sequence braked every assigned PLID for two seconds and then handed
+  each one back — 2×20 + 20 packets into an empty session. It now only touches
+  cars that are still reported, and finalises at once when none are.
+* `monitor_ai` answered a late `IS_AII` after the stop had finished. It now
+  returns unless the system is active and that PLID is assigned.
+
+### 2.1 Stopping versus letting go
+
+`_on_stop` is the **graceful** stop and is right only while the cars exist: brake,
+then hand back. `_abandon_control(reason)` is the other one — it drops every
+per-vehicle state and goes inactive **without sending anything**, because the
+cars are already gone. It runs when `state_data` reports that the race was left
+(`on_track` True→False) and when the track changes. Both used to call `_on_stop`,
+or nothing at all.
 
 ## 3. Control law (feedforward, per car per cycle)
 
@@ -85,13 +157,39 @@ Tuning constants (all class attributes on `AIDriver`, all commented with units):
 **Smoothing:** throttle and brake are first-order filtered (`1/10` and `1/2` per cycle).
 **Steering is intentionally not smoothed** — smoothing caused overshoot and oscillation.
 
-**Collision avoidance:** a ±12° forward cone (`CA_CONE_HALF_ANGLE`) out to
-`CA_DETECTION_DISTANCE = 50 m`, checked against the player's car and all other
-controlled AI cars. Allowed speed interpolates linearly from
-`CA_MAX_SPEED_AT_LIMIT = 70` km/h at 50 m down to 0 at
-`CA_EMERGENCY_DISTANCE = 10 m`, below which it full-brakes.
-`_calculate_following_speed` is deliberately simple and is the intended place to drop
-in a TTC-based model.
+**Collision avoidance**, in three parts, checked against **every car LFS reports** —
+the player's, the other controlled cars, and any AI this system never adopted. Which
+of them it is does not change how solid it is.
+
+*Geometry — a corridor, not a cone.* `_closest_obstacle_ahead` rotates each other car
+into this car's frame (`heading_vector`, one `sin`/`cos` per car per pass) and keeps it
+when it is in front, within `CA_DETECTION_DISTANCE = 50 m`, and no further sideways
+than `CA_CORRIDOR_HALF_WIDTH = 1.9 m + CA_CORRIDOR_SPREAD = 0.04` per metre of range.
+A fixed *angle* is the wrong shape: ±12° is ±1.06 m at 5 m, narrower than one car, so
+a stopped car half a width off centre was invisible exactly where braking mattered.
+A fixed *width* that opens slowly keeps a gentle curve inside it without reaching into
+the oncoming lane. Cost: one dot and one cross product per pair, no square roots.
+
+*Speed — Gipps' safe-speed law.* `_calculate_following_speed(gap, lead_speed)` returns
+
+```
+v = sqrt((a·τ)² + v_lead² + 2·a·max(0, gap − gap_min)) − a·τ
+```
+
+with `a = CA_COMFORT_DECEL = 4.0 m/s²` (~0.4 g — dry tarmac and a street tyre give
+~8.8 m/s², so half the friction circle is left for steering, which is what keeps the
+car on its route while it brakes), `τ = CA_REACTION_TIME = 0.35 s` (this controller's
+own dead time: one 100 ms cycle plus the brake filter's lag) and
+`gap_min = CA_STANDSTILL_GAP = 6 m` centre to centre, about 1.5 m of air between two
+4.5 m cars. The old linear law ignored the speed of the car ahead completely: two cars
+cruising 25 m apart at 60 km/h were braked to 26 km/h, and a car closing on a standing
+one was allowed 16 km/h at 10 m, roughly 1.6 m short of stopping.
+
+*Emergency — required deceleration.* `_required_deceleration(gap, v, v_lead)` is
+`(v² − v_lead²) / (2·(gap − gap_min))`. Above `CA_EMERGENCY_DECEL = 4.0 m/s²` this is
+no longer a following manoeuvre: full brake, no throttle, **and the brake filter is
+bypassed** (`_smoothed[plid]['brake'] = 100`). Ramping the brake in over four cycles is
+0.4 s, which at 50 km/h is 5.5 m — more than the gap this fires at.
 
 **Gear shifting and stalls** happen in `monitor_ai(aii)`, driven by `IS_AII`, not by
 `process()`. It shifts up above 3600 rpm (below 6th) and down below 1700 rpm (above
@@ -124,9 +222,12 @@ it is cached in `_straight_cache` and computed at most once per route point inst
 once per car per cycle. The cache is dropped when routes are loaded or dropped; it is
 bounded by the number of points in the track (~2500 booleans).
 
-Cost per controlled car per cycle: 41 squared-distance comparisons, one curvature
-analysis over the 5–8 points of the speed-dependent lookahead, one dict lookup, the
-marker scan, and one pass over the other controlled cars for collision avoidance.
+Cost per controlled car per cycle: 41 squared-distance comparisons, one more distance
+for the off-route check, one curvature analysis over the 5–8 points of the
+speed-dependent lookahead, one dict lookup, the marker scan, and one dot-plus-cross
+product per other car for collision avoidance. The obstacle list (`plid, x, y, speed`,
+in metres and km/h) is built **once per pass** instead of converting every other car's
+position inside every car's loop.
 Measured on a cloud container with 20 cars on a synthetic 2000-point route: 0.66 ms per
 `_process_active` pass, against 5.3 ms for the pre-WP10 behaviour.
 `tests/test_ai_traffic.py` guards both halves — no full scan in a steady-state cycle,

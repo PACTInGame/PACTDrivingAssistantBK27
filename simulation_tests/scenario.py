@@ -52,6 +52,13 @@ def default_scenario(name: str, description: str = "") -> Dict[str, Any]:
         # Marker names in the order the recorder should hand them out, so the
         # person recording only has to press the marker key at the right moment.
         "markers": [],
+        # A scenario whose recording no longer replays reliably. It stays in
+        # the directory -- deleting it would lose the reference and the run
+        # history that points at it -- but the runner refuses to start it, so
+        # a batch does not waste time on it and, worse, does not leave LFS in
+        # a state that breaks the *next* scenario.
+        "disabled": False,
+        "disabled_reason": "",
         "tracer": dict(DEFAULT_TRACER),
         "run": dict(DEFAULT_RUN),
     }
@@ -68,6 +75,8 @@ def load(scenario_path: str) -> Dict[str, Any]:
     data.setdefault("description", "")
     data.setdefault("preconditions", [])
     data.setdefault("markers", [])
+    data["disabled"] = bool(data.get("disabled", False))
+    data.setdefault("disabled_reason", "")
     tracer = dict(DEFAULT_TRACER)
     tracer.update(data.get("tracer") or {})
     data["tracer"] = tracer
@@ -75,6 +84,18 @@ def load(scenario_path: str) -> Dict[str, Any]:
     run.update(data.get("run") or {})
     data["run"] = run
     return data
+
+
+def disabled_reason(data: Dict[str, Any]) -> str:
+    """Why this scenario must not run, or ``""`` when it may.
+
+    Returns a reason string rather than a bool so every caller is pushed into
+    saying *why* it refused -- "scenario is disabled" on its own sends the
+    reader to the JSON file.
+    """
+    if not data.get("disabled"):
+        return ""
+    return data.get("disabled_reason") or "no reason recorded"
 
 
 def save(scenario_path: str, data: Dict[str, Any]) -> str:

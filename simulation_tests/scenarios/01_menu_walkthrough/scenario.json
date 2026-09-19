@@ -1,19 +1,19 @@
 {
   "name": "01_menu_walkthrough",
-  "description": "Click through the LFS menus and back, without ever entering a track.",
+  "description": "Main menu -> Single Player -> main menu -> Multiplayer -> main menu -> Options page sweep -> main menu. No driving or dialog test.",
   "created_utc": "2026-09-13T09:06:46Z",
   "preconditions": [
     "LFS is running with InSim enabled on port 29999",
-    "LFS is at the main menu"
+    "LFS is at the main menu",
+    "Screen resolution is 1920x1080 and LFS window rect is [0, 0, 1920, 1080]",
+    "Menu layout matches the validated recording; do not move or resize LFS"
   ],
   "markers": [
     "menu_single_player",
+    "back_from_single_player",
     "menu_multiplayer",
-    "menu_options",
-    "options_sweep",
-    "dialog_open",
-    "dialog_closed",
-    "back_at_menu"
+    "back_from_multiplayer",
+    "menu_options"
   ],
   "tracer": {
     "script": "insim_trace.py",
@@ -32,5 +32,6 @@
     "tail_s": 2.0,
     "require_main_menu": true,
     "menu_timeout_s": 20.0
-  }
+  },
+  "duration_s": 29.367
 }

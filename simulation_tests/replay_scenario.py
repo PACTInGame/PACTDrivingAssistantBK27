@@ -9,8 +9,9 @@ use ``run_scenario.py``, which starts the tracer and writes the trace.
 If a tracer is already running (started by hand), pass ``--markers`` and the
 scenario's markers are pushed into its trace as well.
 
-Safety: the replay refuses to start unless LFS is the foreground window, aborts
-if LFS loses focus, and releases every key and mouse button it is holding on any
+Safety: the replay puts LFS in the foreground itself before the first event and
+takes it back if it is lost mid-run (only a raise that fails falls through to
+``--on-focus-loss``), and it releases every key and mouse button it holds on any
 exit path. **Pause** aborts it at any time.
 """
 
@@ -26,6 +27,7 @@ from typing import List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from simulation_tests import config, input_model, paths, player as player_mod  # noqa: E402
+from simulation_tests import scenario as scenario_mod  # noqa: E402
 from simulation_tests import pynput_access  # noqa: E402
 from simulation_tests.control_channel import ControlClient  # noqa: E402
 
@@ -42,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--on-focus-loss", choices=("abort", "pause", "ignore"),
                         default="abort")
     parser.add_argument("--no-focus-check", action="store_true",
-                        help="do not require LFS to be the foreground window (unsafe)")
+                        help="do not raise LFS and do not watch the foreground "
+                             "at all (unsafe: input can land in another window)")
     parser.add_argument("--force", action="store_true",
                         help="run even though pre-flight found problems")
     parser.add_argument("--markers", action="store_true",
@@ -65,6 +68,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (ValueError, FileNotFoundError) as exc:
         print(exc, file=sys.stderr)
         return 2
+    why_disabled = scenario_mod.disabled_reason(scenario_mod.load(scenario_path))
+    if why_disabled and not args.force:
+        print(f"{args.scenario} is disabled: {why_disabled}", file=sys.stderr)
+        print("re-enable it in scenario.json, or pass --force to replay it anyway",
+              file=sys.stderr)
+        return 8
     input_path = os.path.join(scenario_path, paths.INPUT_FILE)
     if not os.path.isfile(input_path):
         print(f"no recording at {input_path} -- record the scenario first", file=sys.stderr)

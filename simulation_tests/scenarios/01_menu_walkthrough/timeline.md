@@ -1,52 +1,87 @@
 # 01_menu_walkthrough
 
-Click through the LFS menus and back, without ever entering a track.
+Recorded and replayed on 2026-09-19. The human confirmed that all clicks landed
+correctly and the replay returned to the main menu. Duration: 29.367 s;
+289 input events; 1920x1080 screen, LFS window rect [0, 0, 1920, 1080].
 
-> **Status: not recorded yet.** Record it with
-> `python simulation_tests/record_scenario.py 01_menu_walkthrough`, then replace the timeline
-> table below with the one from `timeline.draft.md` and fill in the last column.
+## Scope and preconditions
 
-## Why this scenario exists
+Start and end at the LFS main menu, with InSim on port 29999. Keep the recorded
+resolution, window geometry and menu layout. This scenario visits Single Player,
+Multiplayer and the options pages clicked in the recording. It does not enter a
+track, join a server or deliberately open a confirmation dialog.
 
-Buttons must never be drawn on the main menu or the multiplayer list, and must disappear by themselves in dialogs and text entry (reference/ui.md §1). This scenario produces the IS_STA/IS_CIM sequence those rules are written against.
+Markers denote the action about to happen, not confirmation that its target
+screen has been reached. There are exactly five markers; there is no final
+back_at_menu marker. Return from Options is the click at 25.04 s. The final
+4.33 seconds allow the menu to settle before recording ends.
 
-## Preconditions
+## Recorded timeline
 
-- LFS is running with InSim enabled on port 29999
-- LFS is at the main menu
+Times below are seconds from replay start. Subtract the trace's scenario_start
+from trace timestamps to compare. Actual state transitions can lag clicks.
 
-## Recording guide
+| Time (s) | Recorded input | Expected meaning / evidence |
+|---:|---|---|
+| 2.5071 | **MARKER `menu_single_player`** | Next click opens Single Player. |
+| 2.7789 | left click @ (1766, 505) | Open Single Player. |
+| 7.5859 | **MARKER `back_from_single_player`** | Next click returns from Single Player to main menu. |
+| 7.8263 | left click @ (64, 1041) | Return to main menu. |
+| 11.3048 | **MARKER `menu_multiplayer`** | Next click opens Multiplayer; no server is joined. |
+| 11.5387 | left click @ (1798, 431) | Open Multiplayer. |
+| 14.5267 | **MARKER `back_from_multiplayer`** | Next click returns from Multiplayer to main menu. |
+| 14.8161 | left click @ (170, 1027) | Return to main menu. |
+| 18.2686 | **MARKER `menu_options`** | Next click opens Options; expect CIM mode OPTIONS. |
+| 18.4985 | left click @ (1677, 702) | Open Options; expect CIM mode OPTIONS. |
+| 19.8857 | left click @ (244, 166) | Select recorded options page 1; exact page label is not captured by InSim. |
+| 20.3958 | left click @ (237, 224) | Select recorded options page 2; exact page label is not captured by InSim. |
+| 20.8908 | left click @ (236, 290) | Select recorded options page 3; exact page label is not captured by InSim. |
+| 21.3708 | left click @ (230, 353) | Select recorded options page 4; exact page label is not captured by InSim. |
+| 21.8507 | left click @ (230, 415) | Select recorded options page 5; exact page label is not captured by InSim. |
+| 22.4058 | left click @ (234, 484) | Select recorded options page 6; exact page label is not captured by InSim. |
+| 22.9532 | left click @ (243, 554) | Select recorded options page 7; exact page label is not captured by InSim. |
+| 23.4632 | left click @ (249, 615) | Select recorded options page 8; exact page label is not captured by InSim. |
+| 23.9807 | left click @ (242, 701) | Select recorded options page 9; exact page label is not captured by InSim. |
+| 25.0382 | left click @ (136, 1073) | Leave Options; expect CIM mode NORMAL and return to initial menu state. |
 
-Press the marker key (**Scroll Lock** by default) at each step marked `MARKER`.
-`record_scenario.py` names them in this order automatically, from the `markers`
-list in `scenario.json`.
+| 29.3670 | Recording ends | Main menu; no keys or mouse buttons held. |
 
-1. Start at the main menu.
-2. MARKER `menu_single_player` — open Single Player.
-3. MARKER `menu_multiplayer` — go back, open Multiplayer (the host list).
-4. MARKER `menu_options` — go back, open Options.
-5. MARKER `options_sweep` — walk through the options tabs (Game, Display, Audio, Controls).
-6. MARKER `dialog_open` — open any dialog that covers the screen (e.g. Options > Display > a confirm).
-7. MARKER `dialog_closed` — close it again.
-8. MARKER `back_at_menu` — return to the main menu, then stop the recording.
+## Validated baseline and evaluation limits
 
-## Timeline
+Baseline run: `01_menu_walkthrough_20260919-093027`. All 289 events were applied,
+with no replay abort, zero dropped trace records and maximum reported dispatch
+lateness 0.0001 s. Human visual confirmation covers the successful menu sequence.
 
-| t [s] | Δt [s] | input | expected in the trace |
-|------:|-------:|-------|-----------------------|
-| | | *not recorded yet* | |
+Measured STA flags: initial menu 19904; Single Player 19648; return 19904;
+Multiplayer 3264; return 19904; Options 3264; final menu 19904. CIM changed to
+OPTIONS at replay-relative 18.625 s and NORMAL at 26.609 s. These observed flag
+values conflict with the existing screen map in reference/ui.md; do not use that
+map or an assertion of FRONT_END throughout as an oracle for this recording.
 
-## What to check in the trace
+The options-page clicks produced no individual CIM transitions. Their exact
+labels and rendering cannot be asserted from this trace. This is a validated
+navigation stimulus, not proof of add-on HUD or sound correctness. The add-on
+functional verdict remains not evaluated.
 
-- `IS_STA.Flags` carries `FRONT_END` for the whole run and never `GAME` without it.
-- `ISS_DIALOG` appears between `dialog_open` and `dialog_closed` and nowhere else.
-- `IS_CIM.Mode` reaches `OPTIONS` during `options_sweep` and returns to `NORMAL`.
-- `ISS_VISIBLE` — whenever it is clear, the add-on must have no buttons on screen.
+Marker names were corrected after the baseline run using the human's reported
+sequence; all recorded input actions and timestamps are unchanged. Historical
+traces retain the old names. Their mapping to the current names is:
 
-## Analysis starting points
+| Baseline marker | Current marker |
+|---|---|
+| menu_single_player | menu_single_player |
+| menu_multiplayer | back_from_single_player |
+| menu_options | menu_multiplayer |
+| options_sweep | back_from_multiplayer |
+| back_at_menu | menu_options |
 
-```
-python simulation_tests/analyze_trace.py runs/01_menu_walkthrough_<stamp>/
+## Run and inspect
+
+```powershell
+python simulation_tests/run_scenario.py 01_menu_walkthrough --countdown 20
 python simulation_tests/analyze_trace.py runs/01_menu_walkthrough_<stamp>/ --timeline
-
 ```
+
+For re-recording, press Scroll Lock immediately before each of the five marked
+actions above, in order. After leaving Options, wait at the main menu, release
+all inputs, then press Pause. No additional final marker is required.

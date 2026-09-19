@@ -256,7 +256,7 @@ rather than writing literals.
 | 13–14 | `UIManager` | Blind spot warning: `13` left, `14` right |
 | 15 | `UIManager` | Automatic emergency braking indicator (`BTN_EMERGENCY_BRAKE`) — shares the notification slot with ID 61 and outranks it while an intervention runs |
 | 16–17 | `UIManager` | Gearbox calibration panel (`CALIBRATION_RANGE`): `16` the current prompt, `17` the live reading plus remaining seconds — see §1.7 |
-| 20–40 | `MenuSystem` | `20` floating "Main Menu" opener, `21` title, `22`–`31` entries, `40` close/cancel |
+| 20–40 | `MenuSystem` | `20` floating "Main Menu" opener, `21` title, `22`–`32` entries, `33` the shared availability detail line (§4), `40` close/cancel |
 | 41–60 | `UIManager` | PDC display: `41–43`/`44–46`/`47–49` front green/yellow/red, `51–53`/`54–56`/`57–59` rear, `60` "PDC" label |
 | 61 | `UIManager` | Notification line — the slot under the HUD (`NOTIFICATION_SLOT`), shared with ID 15 |
 | 62–63 | `LightAssists` (state) + `UIManager` (drawing) | `62` Siren, `63` Strobe (cop mode) |
@@ -340,6 +340,15 @@ menu.
 Toggling a setting immediately re-opens the same menu so the `^1`/`^2` colour prefix
 reflects the new state — that is the established pattern, keep it. `_toggle` and
 `_cycle` do exactly that.
+
+**Green means "working", not "switched on".** Two entries in the driving menu are red
+while the setting is on but the feature cannot act: automatic braking
+(`emergency_brake_availability`) and the automatic gearbox (`gearbox_availability`).
+Both publish an internal reason on change and the menu translates it through
+`AEB_REASON_TEXTS` / `GEARBOX_REASON_TEXTS` into **one shared detail line, button 33**,
+hung under the menu so it never shifts a fixed row. Only one reason is shown at a time
+— the gearbox first, because it is the one a driver can clear in two seconds (SHIFT+G).
+A system adding a third availability source shares that slot; do not add a second line.
 
 The menu reads `language` live through the `MenuSystem.language` property. It used to
 cache the value at construction, so a language change from anywhere but the menu itself

@@ -79,10 +79,17 @@ one driver switching *Options -> Controls* while sitting on track::
     mouse+keyboard   Flags=0x0649  SWAPSIDE,AUTOGEARS,HELP_B,AUTOCLUTCH,MOUSE
 
 So a driver who changes control mode mid-session gets the right actuation path on the
-next `IS_NPL`, and nothing needs to be cached across sessions. Note what else LFS
-changed by itself in that switch: it turned on `PIF_AUTOGEARS` and `PIF_HELP_B` — its
-own brake help for mouse/keyboard drivers. Anything measuring achieved deceleration
-has to expect LFS to already be helping.
+next `IS_NPL`, and nothing needs to be cached across sessions.
+
+**Corrected 2026-09-19.** The extra bits in that second line are not part of the mode.
+`PIF_AUTOGEARS` / `PIF_HELP_B` / `PIF_AUTOCLUTCH` are the **driving-help level**, which
+the driver cycles with SHIFT+G and which LFS announces with `IS_PFL`, not `IS_NPL`
+(`insim.md` §7 has the probe and the three measured levels). The driver on that day had
+simply switched helps on as well. The operational conclusion is unchanged and still
+matters — a `mouse_kb` driver very often has LFS's brake help running, so **anything
+measuring achieved deceleration has to expect LFS to already be helping** — but it is
+their choice, not something the mode switch does for them. Two consequences for code:
+bind `ISP_PFL`, and never conclude anything about the helps from the control mode.
 
 **One key per function, always.** LFS keeps exactly one key binding per function; a
 second `/key` for the same function replaces the first. So an "our own private key
@@ -127,6 +134,28 @@ is covered by the same mechanism as a keyboard one.
 
 `/key` writes the binding whatever the current control mode is, so it can be pushed at
 startup regardless of how the user is driving.
+
+**Mouse buttons work as a full actuation path — measured end to end.** With
+`user_brake_key = mouser` and `user_throttle_key = mousel`, `KeyBrakeOutput`
+pushed `/key mouser brake`, armed, and stopped an FZ5 from 65 km/h without
+contact in `simulation_tests` scenario `05_fcw_rear_end_keyboard` (run
+`20260919-104215`; the same recording hit the lead car at 78.5 km/h closing
+speed without the add-on). Achieved deceleration 8.7–8.9 m/s², which is where a
+road car on dry tarmac belongs. `misc/physical_keys.py` already tracks
+`VK_LBUTTON/RBUTTON/MBUTTON` through the mouse hook, so the key-release trap is
+covered for buttons exactly as it is for keys.
+
+Two caveats that came out of the same measurement, both logged in
+`known-issues.md`: the **throttle cut did not stay effective** (#46 — LFS went
+back to reading the held left button despite `/key -1 throttle`), and the
+**automatic gearbox upshifted into the stop** (#47, fixed 2026-09-19). Neither
+prevented the stop, but neither is the behaviour the design above assumes.
+
+Note what #46's measurement rested on: the cut "cost no deceleration only
+because the clutch happened to be open" — and that open clutch was #47's
+doing. With the gearbox no longer holding it, **#46 has to be re-measured**;
+the drivetrain is now closed during an intervention, which is the condition
+under which a leaked throttle actually fights the brake.
 
 ### 2.3 OutGauge closes the loop
 
