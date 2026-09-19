@@ -7,13 +7,11 @@ the deceleration gone, and the stopping distance grows by the same fraction --
 from ~12 m at 50 km/h to ~17 m. Every production AEB cuts the throttle first
 and brakes second, and so does this.
 
-Why it is not an "inject a key" job
-===================================
+Taking the function away, and why that is not enough
+====================================================
 
-There is no way to *un-press* the driver's pedal or key: LFS reads their
-hardware directly, and our release of an injected key is indistinguishable from
-their own (``reference/control-intervention.md`` §3.1). What we can do is take
-the **function** away from the input for as long as the intervention lasts::
+The first half is to take the **function** away from the input for as long as
+the intervention lasts::
 
     engage    /key -1 throttle        LFS stops reading the throttle key
               /axis -1 throttle       LFS stops reading the throttle axis
@@ -23,6 +21,40 @@ the **function** away from the input for as long as the intervention lasts::
 and the same control-mode split as the brake decides which pair is used: keys
 are simply ignored for throttle in ``wheel_js``, axes do not exist in
 ``mouse_kb`` (§2.1).
+
+**On the key path that is not sufficient, and it was measured not to be**
+(known-issues #46). ``/key -1 throttle`` stops LFS reading *new* presses, but
+an input the driver is **already holding** keeps delivering full throttle:
+LFS latches the held state and does not re-evaluate it until the input is
+released. In ``simulation_tests`` scenario 08 the cut went out and OutGauge
+reported ``Throttle = 1.00`` for the entire braking phase; scenario 26 (a
+different hazard, the same path) did the same. The car stopped anyway, because
+the brake beats the engine, but it stopped over a third more distance than it
+had to, and the system reported a cut that never happened.
+
+So the key path also **un-presses the input**, which the brake path may never
+do. The asymmetry is the whole point:
+
+===============  =========================================  ==================
+                 what an injected release does              is that allowed?
+===============  =========================================  ==================
+brake            takes away braking the driver commanded     **never** (§3.1,
+                                                             the key-release
+                                                             trap)
+throttle         takes away throttle the driver commanded     yes - that is
+                                                             the feature
+===============  =========================================  ==================
+
+``misc/physical_keys.py`` separates "the driver is holding it" from "LFS thinks
+it is down" using ``LLKHF_INJECTED``, so the release is issued only against
+LFS's belief, and on handback the input is pressed again **only if the driver
+never let go**. Without those hooks running the key path refuses to arm rather
+than report a cut it cannot deliver -- in practice they are always up by then,
+because the brake half of the same intervention refuses without them too.
+
+Fail-safe: a process that dies between the release and the handback leaves the
+driver with a throttle that needs one tap to come back. That is the benign
+direction, and it is the reverse of what a stranded *brake* press would do.
 
 The asymmetry that decides the safety design
 ============================================
@@ -62,11 +94,16 @@ import logging
 from typing import List, Optional
 
 from Controls.handover_marker import HandoverMarker
-from misc.key_names import lfs_name_for
+from misc.key_names import is_mouse_button, lfs_name_for, spelling_for
+from misc.platform_shim import instant_input
 
 logger = logging.getLogger(__name__)
 
 MARKER_OWNER = 'throttle'
+
+# pyautogui names the mouse buttons differently from LFS and from
+# ``settings.json``; the same table as in ``Controls/brake_key.py``.
+_MOUSE_BUTTONS = {'mousel': 'left', 'mouser': 'right', 'mousem': 'middle'}
 
 
 class _ThrottleCut:
@@ -144,16 +181,24 @@ class _ThrottleCut:
 
 
 class KeyThrottleCut(_ThrottleCut):
-    """``mouse_kb``: unassign the throttle key, then bind it back.
+    """``mouse_kb``: unassign the throttle key *and* un-press it.
 
     The key is the driver's own, and this class pushes that binding into LFS
     itself, for the same reason ``KeyBrakeOutput`` does: a restore can only be
-    trusted if we were the ones who wrote what it restores.
+    trusted if we were the ones who wrote what it restores. The injected
+    release is the half that actually removes throttle from a held input --
+    see the module docstring.
     """
 
-    def __init__(self, event_bus, settings, marker: HandoverMarker):
+    def __init__(self, event_bus, settings, marker: HandoverMarker,
+                 physical=None):
         super().__init__(event_bus, settings, marker)
         self._bound_key: Optional[str] = None
+        # ``misc.physical_keys.PhysicalKeyState``. Optional so the command
+        # half can still be exercised without a hook, but the cut refuses to
+        # arm without it (see ``unavailable_reason``).
+        self.physical = physical
+        self._released_by_us = False
 
     @property
     def key(self) -> str:
@@ -165,6 +210,12 @@ class KeyThrottleCut(_ThrottleCut):
             return 'throttle_key_not_bindable_in_lfs'
         if self._bound_key != self.key:
             return 'throttle_binding_not_pushed'
+        if self.physical is None or not self.physical.is_running():
+            # Without the hooks we cannot tell our own injected release from
+            # the driver's, so we could neither un-press safely nor know
+            # whether to press again on handback. Saying so beats reporting a
+            # cut that leaves the engine pulling (known-issues #46).
+            return 'no_physical_key_tracking'
         return None
 
     def push_binding(self) -> bool:
@@ -197,6 +248,66 @@ class KeyThrottleCut(_ThrottleCut):
     def _restore_commands(self) -> List[str]:
         lfs_key = lfs_name_for(self.key)
         return [f"/key {lfs_key} throttle"] if lfs_key else []
+
+    # ─── The half that removes a *held* throttle ──────────────────────
+
+    def suppress(self):
+        """Un-press the throttle input, if LFS currently believes it is down.
+
+        Called every cycle while the intervention runs, not once on engage: a
+        driver who lets go and stands on it again mid-intervention produces a
+        fresh press, and that one has to go the same way as the first.
+
+        Costs one dictionary lookup per cycle while nothing is held.
+        """
+        if not self._engaged or self.physical is None:
+            return
+        key = self.key
+        if not self.physical.down_for_lfs(key):
+            return
+        if self._inject(key, press=False):
+            self._released_by_us = True
+
+    def release(self):
+        """Give the throttle back: the binding, and the press if it is owed.
+
+        The press comes back only when the driver **never let go**. If they
+        released while we had it suppressed, LFS already agrees with their
+        hardware and injecting anything here would give them throttle they are
+        not asking for.
+        """
+        was_engaged = self._engaged
+        super().release()
+        if not was_engaged:
+            return
+        key = self.key
+        if self._released_by_us and self.physical is not None \
+                and self.physical.physically_down(key) \
+                and not self.physical.down_for_lfs(key):
+            self._inject(key, press=True)
+        self._released_by_us = False
+
+    def _inject(self, key, press: bool) -> bool:
+        """One injected press or release. False if it could not be sent.
+
+        ``instant_input`` for the same reason as in ``Controls/brake_key.py``:
+        pyautogui sleeps 0.1 s after every call, which is a whole assistance
+        cycle spent doing nothing.
+        """
+        try:
+            with instant_input() as keyboard:
+                if is_mouse_button(key):
+                    (keyboard.mouseDown if press else keyboard.mouseUp)(
+                        button=_MOUSE_BUTTONS[key])
+                else:
+                    (keyboard.keyDown if press else keyboard.keyUp)(
+                        spelling_for(key).pyautogui)
+        except Exception as exc:
+            logger.error("Throttle key %s failed: %s: %s",
+                         'press' if press else 'release',
+                         type(exc).__name__, exc)
+            return False
+        return True
 
 
 class AxisThrottleCut(_ThrottleCut):

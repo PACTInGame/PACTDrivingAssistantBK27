@@ -152,7 +152,41 @@ position/heading/speed half keeps moving, and — the part that actually broke t
 chase camera ran **no** assistance system at all, including the AI traffic, which needs
 nothing from OutGauge. What is left of #29 is genuinely OutGauge-only data.
 
-**#46 — The throttle cut does not stay effective in `mouse_kb` mode.**
+**#46 — FIXED 2026-09-19. The throttle cut did not remove a throttle the
+driver was already holding.** Kept because the measurement is the reference for
+the next change to that path, and because the fix rests on an asymmetry that is
+easy to get backwards.
+
+*The defect.* `/key -1 throttle` stops LFS reading **new** presses and does
+nothing about an input that is already down: LFS latches the held state and
+does not re-evaluate it until the input is released. Measured three times —
+`05_fcw_rear_end_keyboard` and `06_fcw_rear_end_keyboard` (throttle back to
+1.00 for 23 % and 18 % of the braking phase), and then, with the drivetrain
+closed after #47, `08_cross_traffic_warning_traffic_from_left_keyboard` and
+`26_foward_collision_warning_hard_scenario`, where OutGauge reported
+`Throttle = 1.00` for the **entire** braking phase. The car still stopped — the
+brake beats the engine — but over roughly a third more distance than it had to,
+and `throttle_cut_availability` reported `None`, i.e. "armed", throughout.
+
+*The fix.* `KeyThrottleCut` now also **un-presses the input**, and re-presses it
+on handback only if the driver never let go (`Controls/throttle_cut.py`). That
+is the exact manoeuvre the brake path may never perform — §3.1's key-release
+trap — and the reason it is allowed here is that its sign is inverted: an
+injected release takes away *braking the driver commanded* on one path and
+*throttle the driver commanded* on the other, and only the second is the
+feature. `misc/physical_keys.py` separates the two states, so the release is
+issued against LFS's belief and never against the hardware. Without those hooks
+the key path now reports `no_physical_key_tracking` instead of an armed cut it
+cannot deliver.
+
+*Still open:* the axis path (`wheel_js`) has not been re-measured against a held
+pedal; there is no equivalent of an injected release for an axis, and
+`/axis -1 throttle` may have the same latching problem. The original text
+follows.
+
+---
+
+**#46 (original) — The throttle cut does not stay effective in `mouse_kb` mode.**
 Measured in `simulation_tests` run `05_fcw_rear_end_keyboard_20260919-104215`
 (mouse buttons as pedals, `/key mousel throttle`): `KeyThrottleCut` sent
 `/key -1 throttle` at the start of the intervention and OutGauge's `Throttle`
@@ -167,6 +201,16 @@ to be open for most of it — 8.86 m/s² with the throttle on versus 8.73 m/s² 
 it off. Do not rely on the cut until it is re-measured with the clutch engaged.
 Reproduced in scenario `06_fcw_rear_end_keyboard` with a different car (RB4):
 throttle back to 1.00 for 18 % of the braking phase.
+
+**Re-measured 2026-09-19 with the drivetrain closed** (#47 fixed), in
+`08_cross_traffic_warning_traffic_from_left_keyboard`: the cut went out at
+t = 47.20 and OutGauge reported `Throttle = 1.00` for the whole braking phase,
+right up to the handback. So the leak is not conditional on the open clutch —
+it is the full-throttle case the design assumes it prevents. The intervention
+still stopped the car (41 -> 26 km/h in 1.4 s, collision avoided), so brake
+beats throttle in LFS, but a cut that never takes effect should not be
+reported as available. The `mouse_kb` + mouse-button path is the one to fix;
+whether a keyboard key behaves the same has not been measured.
 
 **#47 — FIXED 2026-09-19. The automatic gearbox fought LFS's own, and walked
 up the whole box against the rev limiter.** Kept here because the measurement

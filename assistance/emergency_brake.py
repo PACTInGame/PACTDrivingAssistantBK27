@@ -83,6 +83,11 @@ MOUSE_KB_MODES = (CONTROL_MODE_MOUSE, CONTROL_MODE_KEYBOARD)
 # ``automatic_emergency_brake``: 0 = off, 1 = warn only, 2 = warn and brake.
 AEB_MODE_BRAKE = 2
 
+# Which system a ``needed_deceleration_update`` came from, when it does not say.
+# Only ``ForwardCollisionWarning`` published this event before several systems
+# did, so an unlabelled demand is its.
+DEFAULT_DEMAND_SOURCE = 'forward_collision'
+
 # "Never checked yet" -- see ``EmergencyBrake._publish_availability``. Not
 # ``None``, because ``None`` is a real state there ("armed").
 _UNKNOWN = object()
@@ -128,6 +133,15 @@ class EmergencyBrake(AssistanceSystem):
     # belongs to PDC, not here. It is also the speed below which FCW stops
     # publishing a demand at all, which is why it appears twice below.
     MIN_SPEED_KMH = 10.0
+    # ...but that reasoning is about *longitudinal* traffic. A car creeping
+    # into a junction at 8 km/h in front of crossing traffic, or edging into
+    # the next lane while something overtakes at 50 km/h, is not performing a
+    # parking manoeuvre -- the energy in the crash belongs to the other car,
+    # and our speed only decides whether we are in its way. So the demands
+    # that come from those two systems carry a floor low enough to be out of
+    # OutGauge's noise and nothing more.
+    CROSSING_DEMAND_SOURCES = frozenset(('cross_traffic', 'blind_spot'))
+    MIN_SPEED_CROSSING_KMH = 3.0
     # ─── Anhalten bis zum Stillstand ──────────────────────────────────
     #
     # Under MIN_SPEED_KMH, FCW publishes a demand of 0 whatever is in front of
@@ -192,7 +206,8 @@ class EmergencyBrake(AssistanceSystem):
         self.key_output = KeyBrakeOutput(event_bus, settings, self.physical_keys)
         self.axis_output = AxisBrakeOutput(event_bus, settings,
                                            marker=self.marker)
-        self.key_throttle = KeyThrottleCut(event_bus, settings, self.marker)
+        self.key_throttle = KeyThrottleCut(event_bus, settings, self.marker,
+                                           physical=self.physical_keys)
         self.pedals = pedals if pedals is not None else PedalWatch(event_bus,
                                                                    settings)
         self.axis_throttle = AxisThrottleCut(event_bus, settings, self.marker,
@@ -201,7 +216,12 @@ class EmergencyBrake(AssistanceSystem):
         self.throttle_check = ThrottleAxisCheck(event_bus, settings,
                                                 self.pedals, self.axis_throttle)
 
+        # Sollverzoegerung je Quelle, gesammelt waehrend eines
+        # Assistenzdurchlaufs und am Ende davon geleert -- siehe
+        # ``_collect_demand``.
+        self._demands: Dict[str, float] = {}
         self._wanted_deceleration = 0.0
+        self._demand_source: Optional[str] = None
         self._engaged = False
         self._engaged_since = 0.0
         self._below_release_cycles = 0
@@ -275,7 +295,41 @@ class EmergencyBrake(AssistanceSystem):
     # ─── Events ───────────────────────────────────────────────────────
 
     def _on_deceleration(self, data):
-        self._wanted_deceleration = float(data.get('deceleration', 0.0) or 0.0)
+        """Collect one system's demand. The largest of them wins.
+
+        Three systems publish this event now -- forward collision, cross
+        traffic and blind spot -- and each one publishes every cycle. Keeping
+        a single scalar meant the *last* emitter of the pass overwrote the
+        others, so which hazard got braked for was decided by the iteration
+        order of ``AssistanceManager.systems``. They are kept apart by
+        ``source`` and reduced with ``max`` in ``_collect_demand``.
+        """
+        if not isinstance(data, dict):
+            return
+        source = data.get('source') or DEFAULT_DEMAND_SOURCE
+        self._demands[source] = float(data.get('deceleration', 0.0) or 0.0)
+
+    def _collect_demand(self):
+        """Take this pass's demands and clear the collection.
+
+        Clearing is what makes a *missing* demand distinguishable from a
+        demand of zero (reference/events.md). A system that is switched off,
+        has disabled itself after repeated failures, or is simply not called
+        because the car left the track publishes nothing -- and a value left
+        over from the last time it ran would keep the brake on with nobody
+        able to take it back.
+
+        This is why ``EmergencyBrake`` is the **last** system in
+        ``AssistanceManager._init_systems``: it consumes what the pass
+        produced, so every publisher has to have run first.
+        """
+        if self._demands:
+            self._demand_source = max(self._demands, key=self._demands.get)
+            self._wanted_deceleration = self._demands[self._demand_source]
+            self._demands = {}
+        else:
+            self._demand_source = None
+            self._wanted_deceleration = 0.0
 
     def _on_connection_changed(self, data=None):
         # LFS may have restarted; a binding we pushed into the old session
@@ -354,6 +408,9 @@ class EmergencyBrake(AssistanceSystem):
         # Bind once: OutGauge writes into own_vehicle from the packet thread
         # (known-issues #12).
         own = own_vehicle.data
+        # Before anything else: take what this pass's warning systems asked
+        # for. Every one of them has already run (see ``_collect_demand``).
+        self._collect_demand()
 
         # Not ``is_enabled()``: that one reports True while a press of ours is
         # outstanding, precisely so this pass still runs and can release it.
@@ -397,6 +454,11 @@ class EmergencyBrake(AssistanceSystem):
 
         fraction = self._arbitrated(self._brake_fraction(own), output)
         output.apply(fraction)
+        # Every cycle, not once on engage: a driver who lets go of the
+        # throttle and stands on it again mid-intervention produces a fresh
+        # press, and LFS reads a *held* input whatever its binding says
+        # (known-issues #46, Controls/throttle_cut.py).
+        self.key_throttle.suppress()
         return {'active': True,
                 'deceleration': self._wanted_deceleration,
                 'brake': fraction}
@@ -597,7 +659,7 @@ class EmergencyBrake(AssistanceSystem):
         """
         if not self._engaged:
             self._below_release_cycles = 0
-            if own.speed < self.MIN_SPEED_KMH:
+            if own.speed < self._speed_floor():
                 return False
             return self._wanted_deceleration >= self.ENGAGE_DECELERATION_MS2
 
@@ -622,6 +684,16 @@ class EmergencyBrake(AssistanceSystem):
 
         self._below_release_cycles = 0
         return True
+
+    def _speed_floor(self) -> float:
+        """Lowest speed at which the current demand may start an intervention.
+
+        See ``MIN_SPEED_CROSSING_KMH``: the 10 km/h floor is a statement about
+        rear-ending somebody, not about being hit from the side.
+        """
+        if self._demand_source in self.CROSSING_DEMAND_SOURCES:
+            return self.MIN_SPEED_CROSSING_KMH
+        return self.MIN_SPEED_KMH
 
     def _wants_brake_while_stopping(self, own_vehicle: OwnVehicle, own) -> bool:
         """Brake until the car really stands, then hold for the handover.
@@ -726,14 +798,16 @@ class EmergencyBrake(AssistanceSystem):
         self._stopping = False
         self._standstill_since = None
         self._peak_deceleration = self._wanted_deceleration
-        logger.info("Emergency brake engaged (demand %.1f m/s²).",
-                    self._wanted_deceleration)
+        logger.info("Emergency brake engaged (demand %.1f m/s², %s).",
+                    self._wanted_deceleration,
+                    self._demand_source or 'unknown source')
         # Only the state event. Deliberately *not* a ``notification``: those are
         # queued and shown one at a time for 3 s, so the driver saw "!! BRAKE !!"
         # about a second after the braking had already finished, and repeated
         # interventions stacked up behind each other. An intervention indicator
         # has to be live, so it is drawn from this event instead.
-        self.event_bus.emit('emergency_brake_changed', {'active': True})
+        self.event_bus.emit('emergency_brake_changed',
+                            {'active': True, 'source': self._demand_source})
 
     def _disengage(self):
         """Drop our share of the brake and forget the engagement.
@@ -753,7 +827,8 @@ class EmergencyBrake(AssistanceSystem):
             return
         self._engaged = False
         logger.info("Emergency brake released.")
-        self.event_bus.emit('emergency_brake_changed', {'active': False})
+        self.event_bus.emit('emergency_brake_changed',
+                            {'active': False, 'source': None})
 
     def _publish_availability(self, reason: Optional[str]):
         """Sagt, ob der Bremseingriff scharf ist - und wenn nicht, warum.

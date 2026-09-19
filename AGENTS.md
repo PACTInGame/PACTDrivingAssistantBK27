@@ -14,6 +14,16 @@ are relative to the repository root; bare reference filenames mean `reference/`.
 Keep durable project knowledge in these shared files, not only in private agent
 memory. Setup and verification: `reference/agent-workflow.md`.
 
+## Mandatory response and code quality rules
+
+- Always answer precisely and accurately.
+- Code must always be modular, maintainable, and thoroughly tested.
+- Never return long or verbose responses. Prefer single words or concise bullet
+  points whenever sufficient. Example: write `Bug found: <brief description>`
+  instead of a narrative explanation.
+- Do not narrate tool calls at length. Use one to three words when an update is
+  needed, for example: `Implementing now.`
+
 ---
 
 ## 1. The three rules that shape every code decision

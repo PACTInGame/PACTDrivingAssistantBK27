@@ -196,7 +196,8 @@ class VehicleManager:
                 _as_int(getattr(data, 'Z', 0)),
                 _as_int(getattr(data, 'Heading', 0)),
                 _as_int(getattr(data, 'Direction', 0)),
-                _as_int(getattr(data, 'Speed', 0)) / 91.02  # Convert to km/h
+                _as_int(getattr(data, 'Speed', 0)) / 91.02,  # Convert to km/h
+                ang_vel=_as_int(getattr(data, 'AngVel', 0)),
             )
 
             player_info = self.players.get(player_id)

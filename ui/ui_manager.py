@@ -95,6 +95,19 @@ CALIBRATION_SLOT_STATUS = (55, 47, 90, 6)
 # blinkendes Feld kann genau dann dunkel sein, wenn der Fahrer hinsieht.
 EMERGENCY_BRAKE_TEXT = "^1!! BRAKE !!"
 
+# Toter Winkel, drei Stufen (assistance/blind_spot_warning.py). Stufe 1 ist
+# die Anzeige "da ist jemand", Stufe 2 die Akutwarnung (blinkend, mit Ton),
+# Stufe 3 der Bremseingriff. Die Zeichen werden breiter statt nur roter: ein
+# Feld von 10x10 in der Peripherie wird ueber die Form gelesen, nicht ueber
+# die Farbe.
+BSW_TEXTS = {1: "^3!", 2: "^1!!", 3: "^1!!!"}
+# Wie oft die Akutwarnung toent, solange sie steht. ``fcw.wav`` faellt aus:
+# ``AudioPlayer`` unterdrueckt dessen Wiederholung 3 s lang (es ist der
+# einmalige Gong der Kollisionswarnung). ``warning_3`` ist 0.88 s lang, also
+# ist 1.0 s die kuerzeste Wiederholung ohne Ueberlappung.
+BSW_ACUTE_AUDIO = 'warning_3'
+BSW_ACUTE_BEEP_INTERVAL_S = 1.0
+
 # Notifications: eine Zeile fuer 3 s. Ohne Obergrenze staut eine Serie
 # (z.B. die Getriebekalibrierung) minutenlang.
 NOTIFICATION_DISPLAY_S = 3
@@ -183,6 +196,9 @@ class UIManager:
         self.collision_warning_level = 0
         self.cross_traffic_warning_level = 0
         self.cross_traffic_warning_side = None
+        self.blind_spot_left_level = 0
+        self.blind_spot_right_level = 0
+        self._blind_spot_beeped_at = 0.0
         self.hud_enabled = False
         self.emergency_brake_active = False
         # Zustand der Getriebekalibrierung, oder None wenn keine laeuft.
@@ -492,6 +508,8 @@ class UIManager:
         self.collision_warning_level = 0
         self.cross_traffic_warning_level = 0
         self.cross_traffic_warning_side = None
+        self.blind_spot_left_level = 0
+        self.blind_spot_right_level = 0
         self.emergency_brake_active = False
         self.current_menu = None
         self.calibration_state = None
@@ -575,6 +593,12 @@ class UIManager:
         # macht die Wiederholung frei und nach SHIFT+B kommt er von selbst
         # zurueck (reference/ui.md §1.5).
         self._draw_emergency_brake()
+        # Eine Uhr fuer alles, was blinkt - auch fuer die Anzeigen, die vor
+        # dem hud_active-Test gezeichnet werden.
+        blink_on = self._advance_blink()
+        self._draw_blind_spot(blink_on)
+        if max(self.blind_spot_left_level, self.blind_spot_right_level) >= 2:
+            self._blind_spot_beep()
         # Wie der Notbrems-Anzeiger unabhaengig von hud_active: eine laufende
         # Kalibrierung fordert den Fahrer gerade zu etwas auf, das sie in
         # 12 s misst. Jeden Durchlauf neu gezeichnet, damit sie nach SHIFT+B
@@ -585,7 +609,6 @@ class UIManager:
             return
 
         hud_x, hud_y = self.hud_origin()
-        blink_on = self._advance_blink()
 
         speed_text = f"{self.speed} km/h" if self.settings.get(
             "unit") == "metric" else f"{round(self.speed * 0.621371)} mph "
@@ -686,19 +709,64 @@ class UIManager:
                                           pyinsim.ISB_LIGHT)
 
     def _update_blind_spot_display(self, data):
-        """Aktualisiert Toter-Winkel-Anzeige"""
+        """Uebernimmt den Toter-Winkel-Zustand (assistance/blind_spot_warning.py)
+
+        Gezeichnet wird in ``_draw_blind_spot`` - einmal sofort, damit die
+        Warnung nicht bis zum naechsten UI-Durchlauf wartet, und danach in
+        jedem Durchlauf, weil Stufe 2 blinkt und ein Blinken eine Uhr braucht.
+
+        ``left_level``/``right_level`` sind neu; ein Payload, der nur
+        ``left``/``right`` traegt (aeltere Emitter, Tests), wird als Stufe 1
+        gelesen.
+        """
         if not isinstance(data, dict):
             return
-        _, hud_y = self.hud_origin()
-        if data.get('left'):
-            self.message_sender.create_button(BTN_BSW_LEFT, 20, hud_y, 10, 10, "^3!",
-                                              pyinsim.ISB_DARK)
-        else:
-            self.message_sender.remove_button(BTN_BSW_LEFT)
+        previous = max(self.blind_spot_left_level, self.blind_spot_right_level)
+        self.blind_spot_left_level = _as_int(
+            data.get('left_level', 1 if data.get('left') else 0))
+        self.blind_spot_right_level = _as_int(
+            data.get('right_level', 1 if data.get('right') else 0))
+        # Der Ton gehoert an die *Flanke*: er soll beim Erreichen der
+        # Akutstufe kommen, nicht erst beim naechsten Wiederholungstakt.
+        if max(self.blind_spot_left_level,
+               self.blind_spot_right_level) >= 2 > previous:
+            self._blind_spot_beep(force=True)
+        self._draw_blind_spot(self._blink_on)
 
-        if data.get('right'):
-            self.message_sender.create_button(BTN_BSW_RIGHT, 180, hud_y, 10, 10, "^3!",
-                                              pyinsim.ISB_DARK)
-        else:
-            self.message_sender.remove_button(BTN_BSW_RIGHT)
+    def _blind_spot_beep(self, force: bool = False):
+        """Wiederholter Warnton, solange die Akutstufe steht."""
+        now = time.perf_counter()
+        if not force and now - self._blind_spot_beeped_at < BSW_ACUTE_BEEP_INTERVAL_S:
+            return
+        self._blind_spot_beeped_at = now
+        self.event_bus.emit('play_audio', {'audio_file': BSW_ACUTE_AUDIO})
+
+    def _draw_blind_spot(self, blink_on: bool):
+        """Zeichnet die beiden Felder links und rechts neben dem HUD.
+
+        Wie der Notbrems-Anzeiger unabhaengig von ``hud_active``: das ist eine
+        Warnung, keine Anzeige. Der Bildschirmkontext darf sie unterdruecken,
+        die HUD-Einstellung nicht (reference/ui.md §1.5).
+
+        Vorher wurde ausschliesslich im Event gezeichnet, ohne
+        ``buttons_allowed`` zu pruefen - eine Warnung, die waehrend eines
+        LFS-Dialogs eintraf, landete auf einem Bildschirm, auf dem wir nichts
+        zu suchen haben, und kam nach SHIFT+B nie von selbst zurueck.
+        """
+        _, hud_y = self.hud_origin()
+        allowed = self.on_track and self.buttons_allowed
+        for button, level, x in ((BTN_BSW_LEFT, self.blind_spot_left_level, 20),
+                                 (BTN_BSW_RIGHT, self.blind_spot_right_level, 180)):
+            if not allowed or level <= 0:
+                self.message_sender.remove_button(button)
+                continue
+            # Stufe 2 blinkt, Stufe 3 steht: waehrend eines Bremseingriffs
+            # darf das Feld nicht ausgerechnet dann dunkel sein, wenn der
+            # Fahrer hinsieht - dieselbe Begruendung wie beim
+            # Notbrems-Anzeiger.
+            style = pyinsim.ISB_DARK
+            if level >= 3 or (level == 2 and blink_on):
+                style = pyinsim.ISB_LIGHT
+            self.message_sender.create_button(button, x, hud_y, 10, 10,
+                                              BSW_TEXTS[min(level, 3)], style)
 

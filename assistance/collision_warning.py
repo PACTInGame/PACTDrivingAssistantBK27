@@ -141,6 +141,12 @@ class ForwardCollisionWarning(AssistanceSystem):
         if always_emit_deceleration or level_changed:
             self.event_bus.emit('needed_deceleration_update', {
                 'deceleration': deceleration,
+                # Mehrere Systeme fordern inzwischen Verzoegerung an (auch
+                # Quer- und Toter-Winkel-Warnung). ``EmergencyBrake`` fuehrt
+                # sie je Quelle und nimmt die groesste - ohne diesen
+                # Schluessel wuerde die zuletzt gesendete gewinnen, also
+                # ausgerechnet die Reihenfolge im AssistanceManager.
+                'source': 'forward_collision',
             })
         if level_changed:
             self.current_warning_level = warning_level

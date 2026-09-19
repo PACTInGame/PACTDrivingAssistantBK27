@@ -72,11 +72,27 @@ tests/
   test_collision_warning.py  FCW physics with hand-computed expectations, the detection
                            gates, warning-level hysteresis, and Vehicle acceleration
                            from the real packet interval
+  test_path_conflict.py    the shared rectangle geometry: the support function, the
+                           contact window over four separating axes, the free
+                           distance to another car's corridor, the yaw-rate arc,
+                           and the demand formula
   test_blind_spot.py       BSW corridor geometry and validity, the geometric trigger,
-                           relative-speed relevance and hold time, and the polygon
-                           budget of the pre-filter
+                           relative-speed relevance and hold time, the polygon
+                           budget of the pre-filter, and the three warning levels
+                           (acute by contact or by lane entry, braking only when
+                           slow and only before we are in the other car's lane)
   test_cross_traffic.py    CTW direction/side conventions, the speed+reverse gate that
-                           replaced the gear gate, and the size-aware arrival window
+                           replaced the gear gate, the body-aware contact window, the
+                           braking demand and its exclusions, and that the warning
+                           always precedes the intervention
+  (offline replay)         `tools/replay_trace.py` is not a test but belongs
+                           next to them: it feeds a recorded simulation trace
+                           back through BSW and CTW, so a threshold can be
+                           swept over every recorded scenario in seconds
+                           instead of a minute per in-game run. It cannot say
+                           whether an intervention would have changed the
+                           outcome -- the trace is a fixed history -- so
+                           confirm that in game. See the module docstring.
   test_pdc.py              AXM object identity and the AXM→MCI scale, the -1/0 sensor
                            contract, and the single-threaded beeper
   test_actuation.py        the input guard's refusal table, AutoHold/Gearbox key
@@ -214,7 +230,8 @@ No mocks needed, no LFS. These are already pure or nearly so:
 | `vehicles/vehicle.py` — `update_distance_to_player`, `update_angle_to_player` | metre conversion, angle 0 = straight ahead, wraparound at 0/360 |
 | `assistance/AI_Driver.py` — `get_closest_index_on_route`, `load_routes_from_file` | *(done — `test_ai_traffic.py`)* |
 | `assistance/AI_Driver.py` — `calculate_angle`, `calculate_angle_meters`, `analyze_upcoming_track`, `calculate_feedforward_steering`, `calculate_feedforward_throttle_brake`, `get_next_points_for_distance` | straight line → curvature 0; known arc → known curvature; clamping at ±45°; wraparound on closed loops |
-| `assistance/cross_traffic_warning.py` — `_direction_vector`, `_find_intersection`, `_compute_side` | *(done — `test_cross_traffic.py`)* |
+| `assistance/cross_traffic_warning.py` — `_direction_vector`, `_compute_side` | *(done — `test_cross_traffic.py`)* |
+| `assistance/path_conflict.py` | *(done — `test_path_conflict.py`)* |
 | `assistance/blind_spot_warning.py` | *(done — `test_blind_spot.py`)* |
 | `assistance/park_distance_control.py`, `misc/pdc_beep.py` | *(done — `test_pdc.py`)* |
 | `assistance/collision_warning.py` — `_calculate_needed_braking` | *(done — `test_collision_warning.py`)* |

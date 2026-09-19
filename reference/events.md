@@ -107,10 +107,10 @@ grep before editing. Keys may be added, never removed or renamed.
 |---|---|---|---|
 | `collision_warning_changed` | `{level: 0..3}` | `ForwardCollisionWarning` | `UIManager` |
 | `cross_traffic_warning_changed` | `{level: 0..2, side: 'left'\|'right'\|None}` | `CrossTrafficWarning` | `UIManager` |
-| `blind_spot_warning_changed` | `{left: bool, right: bool}` | `BlindSpotWarning` | `UIManager` |
+| `blind_spot_warning_changed` | `{left: bool, right: bool, left_level: 0..3, right_level: 0..3}` | `BlindSpotWarning` | `UIManager` |
 | `pdc_changed` | `Dict[0..5, int]` — sensor → `-1` inactive, `0` clear, `1..3` near…nearest | `ParkDistanceControl` | `UIManager`, `PDCBeepController` |
-| `needed_deceleration_update` | `{deceleration: float}` m/s² — 0 unless FCW is at level 3 | `ForwardCollisionWarning` | `EmergencyBrake` |
-| `emergency_brake_changed` | `{active: bool}` | `EmergencyBrake` | `UIManager` |
+| `needed_deceleration_update` | `{deceleration: float, source: str}` m/s² | `ForwardCollisionWarning`, `CrossTrafficWarning`, `BlindSpotWarning` | `EmergencyBrake` |
+| `emergency_brake_changed` | `{active: bool, source: str\|None}` — which warning asked for it | `EmergencyBrake` | `UIManager` |
 | `gearbox_availability` | `{reason: str\|None}` — `None` = shifting; `lfs_auto_gears`, `car_not_supported`, `not_calibrated` | `Gearbox` | `MenuSystem` |
 | `ai_traffic_state_changed` | `{active: bool}` | `AIDriver` | `MenuSystem` |
 
@@ -125,12 +125,34 @@ anything?" and is emitted once per change of the answer, `None` included — a r
 that never clears would sit in the menu for ever. It carries the internal key only;
 the driver-facing text is `GEARBOX_REASON_TEXTS` in `ui/menu_system.py`.
 
-`needed_deceleration_update` is the exception and is emitted **every cycle**, because
-its subscriber actuates the car: a demand that stopped arriving must be distinguishable
-from a demand of zero. `EmergencyBrake` acts on it only in the mode and control path
-that `control-intervention.md` allows, and it also listens to `state_data` — leaving
-the track has to release an intervention even though `AssistanceManager` stops calling
-`process()` at that moment.
+`blind_spot_warning_changed` carries both shapes on purpose: `left`/`right` are the
+original "is anybody there", `left_level`/`right_level` the three-stage severity
+(1 display, 2 acute — blinking and audible, 3 braking). Keys may be added, never
+removed, so a subscriber that only knows the booleans still works.
+
+### `needed_deceleration_update` — three emitters, and why the order matters
+
+It is the exception to the on-change rule and is emitted **every cycle** by every
+emitter, because its subscriber actuates the car: a demand that stopped arriving must be
+distinguishable from a demand of zero. `EmergencyBrake` acts on it only in the mode and
+control path that `control-intervention.md` allows, and it also listens to `state_data`
+— leaving the track has to release an intervention even though `AssistanceManager`
+stops calling `process()` at that moment.
+
+Since WP12 three systems publish it, so the payload carries **`source`**
+(`forward_collision`, `cross_traffic`, `blind_spot`; a payload without one is read as
+`forward_collision`). `EmergencyBrake` keeps them apart, acts on the **largest**, and
+**clears the collection when it consumes it**. Two consequences that are contracts, not
+implementation details:
+
+- **`EmergencyBrake` must run after every emitter.** `AssistanceManager._init_systems`
+  inserts `fcw`, `bsw`, `ctw`, then `aeb`; `systems` is a dict and is iterated in
+  insertion order. Moving the brake earlier makes two of the three demands one cycle
+  (100 ms, 1.4 m at 50 km/h) old.
+- **A system that is not called publishes nothing, and that is how a stale demand
+  cannot happen.** Switched off in the menu, self-disabled after five consecutive
+  failures, or simply off track — in every case the demand disappears instead of being
+  held at its last value by a subscriber with a pressed brake key.
 
 ## Commands and actuation (app → LFS / hardware)
 

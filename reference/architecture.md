@@ -181,8 +181,9 @@ assistance/
   base_system.py           AssistanceSystem ABC: process(), is_enabled()
   manager.py               Constructs and drives every system each cycle
   collision_warning.py     Forward collision warning (FCW)
-  blind_spot_warning.py    Blind spot warning (BSW), uses shapely polygons
-  cross_traffic_warning.py Cross traffic warning (CTW), ray-intersection + TTC
+  path_conflict.py         Shared geometry: do two moving rectangles meet, and how far may we still go (used by BSW and CTW)
+  blind_spot_warning.py    Blind spot warning (BSW), 3 levels; shapely corridor for level 1, path_conflict for 2 and 3
+  cross_traffic_warning.py Cross traffic warning (CTW), path_conflict + braking demand
   park_distance_control.py PDC: 6 sensors vs. layout objects and cars via spatial hash grid
   auto_hold.py             Automatic handbrake when stopped (injects a keypress)
   adaptive_lights.py       Adaptive brake lights, high beam assist, cop siren/strobe

@@ -7,6 +7,25 @@ automatic gearbox.
 Treat everything here with the ECU mindset from `AGENTS.md` §1: an intervention that
 works 95 % of the time is not a feature, it is a hazard.
 
+**Who may ask for braking.** `EmergencyBrake` is the single actuator; three warning
+systems feed it a deceleration demand over `needed_deceleration_update` and none of them
+touches an input device (`events.md`). Adding a fourth means adding a `source`, putting
+the system in front of `aeb` in `AssistanceManager._init_systems`, and answering the
+question below — nothing else.
+
+**Braking is not automatically the safe answer, and every source has to say why it is.**
+The physics is in `assistance/path_conflict.py`; the decision is not.
+
+| Source | We are… | Braking… | So when the conflict can no longer be avoided |
+|---|---|---|---|
+| `forward_collision` | running into somebody ahead | always reduces our impact speed | brake anyway (mitigation) |
+| `cross_traffic` | driving into somebody's path | keeps us out of it, while there is room | brake anyway |
+| `blind_spot` | being overtaken from behind | only helps *before* we enter their lane | **stop asking** — once we are in their corridor, braking lengthens their approach and raises the speed they arrive with |
+
+That last row is the reason `BlindSpotWarning` drops its demand at `free_distance == 0`
+while `CrossTrafficWarning` escalates there. Getting it the wrong way round turns an
+assistant into the cause of the crash.
+
 ---
 
 ## 1. The fundamental problem
@@ -217,6 +236,14 @@ Rules that follow, all resting on the physical-state tracking above:
 
 - **Never issue a `keyUp` while the physical key is down.** Suppress it; the real
   release arrives when the driver lets go, and LFS's state stays truthful.
+  **This is a rule about the brake, not about injection in general.** The same
+  keystroke has opposite meanings on the two functions: an injected release
+  takes away *braking the driver commanded* — forbidden — or *throttle the
+  driver commanded*, which is precisely what a throttle cut is for. The
+  throttle path therefore does exactly what this line forbids, on purpose, and
+  presses the input again on handback only if the driver never let go
+  (`Controls/throttle_cut.py`, `known-issues.md` #46). Before copying either
+  rule to a new function, work out which way its sign points.
 - **Re-press when the driver releases during an intervention.** The inverse case: the
   driver lets go while AEB still wants brake — LFS gets the genuine keyup, so we must
   inject a fresh keydown immediately. For emergency braking, continuing to brake is

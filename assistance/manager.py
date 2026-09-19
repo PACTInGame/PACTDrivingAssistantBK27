@@ -73,19 +73,31 @@ class AssistanceManager:
 
     def _init_systems(self):
         """Initialisiert alle Assistenzsysteme"""
+        # ─── Reihenfolge ist Vertrag, nicht Geschmack ─────────────────
+        # ``systems`` ist ein dict und wird in Einfuegereihenfolge
+        # durchlaufen. Drei Systeme veroeffentlichen
+        # ``needed_deceleration_update``: FCW, BSW und CTW. ``EmergencyBrake``
+        # sammelt sie und leert die Sammlung am Ende jedes eigenen
+        # Durchlaufs - genau daran erkennt es eine Quelle, die *nichts* mehr
+        # sendet (abgeschaltet, selbst deaktiviert, Strecke verlassen) und
+        # unterscheidet sie von einer, die 0 sendet.
+        #
+        # Deshalb muss der Bremseingriff **hinter allen dreien** stehen.
+        # Vorher stand er direkt hinter FCW, damit dessen Anforderung im
+        # selben Zyklus wirkt; genau dieselbe Begruendung verlangt jetzt den
+        # letzten Platz unter den warnenden Systemen, sonst waeren Quer- und
+        # Toter-Winkel-Anforderung einen Zyklus (100 ms, bei 50 km/h 1.4 m)
+        # alt.
         self.systems['fcw'] = ForwardCollisionWarning(self.event_bus, self.settings)
-        # Direkt hinter FCW: es veroeffentlicht die Sollverzoegerung, auf die
-        # der Bremseingriff reagiert - so wirkt sie im selben Zyklus statt
-        # einen spaeter.
+        self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
+        self.systems['ctw'] = CrossTrafficWarning(self.event_bus, self.settings)
         self.systems['aeb'] = EmergencyBrake(self.event_bus, self.settings,
                                             pedals=self.pedals)
-        self.systems['bsw'] = BlindSpotWarning(self.event_bus, self.settings)
         self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
         self.systems['autoh'] = AutoHold(self.event_bus, self.settings)
         self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
         self.systems['gearbox'] = Gearbox(self.event_bus, self.settings,
                                           car_profiles=self.car_profiles)
-        self.systems['ctw'] = CrossTrafficWarning(self.event_bus, self.settings)
         self.systems['ai_traffic'] = AIDriver(self.event_bus, self.settings)
         # NavigationSystem gibt es nicht mehr: es hatte nie einen
         # Einstellungsschluessel, lief also nie, und war in der vorliegenden

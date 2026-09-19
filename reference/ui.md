@@ -241,6 +241,29 @@ The fix, and the pattern for anything similar:
 Watch the queue: `known-issues.md` #45 records a still-unidentified emitter that floods it
 at cycle rate.
 
+### 1.8 A warning that blinks has to be drawn by the UI pass, not by its event
+
+The blind-spot fields (IDs 13/14) were drawn straight from
+`blind_spot_warning_changed`, once per change. That works for a steady symbol and for
+nothing else:
+
+- **It cannot blink.** Level 2 alternates styles, and an alternation needs a clock. The
+  one clock is `UIManager._advance_blink()`, and it only ticks in `update_hud()`.
+- **It ignored `buttons_allowed`.** A warning arriving during an LFS dialog was drawn on
+  a screen we may not draw on (§1.3).
+- **It never came back after SHIFT+B** (§1.5), because nothing redrew it.
+
+So `_update_blind_spot_display` now only stores the two levels (and draws once, so the
+warning does not wait for the next UI pass), and `_draw_blind_spot()` runs every pass —
+before the `hud_active` test, like the intervention indicator: it is a warning, not a
+display, and only the screen context may suppress it. Level 3 deliberately does **not**
+blink, for the same reason the intervention indicator does not.
+
+The repeating tone comes from the same pass, every `BSW_ACUTE_BEEP_INTERVAL_S` (1.0 s),
+with the edge into level 2 sounding immediately. It uses `warning_3`, not `fcw`:
+`AudioPlayer` suppresses repeats of `fcw` for 3 s, because that one is the collision
+warning's single gong.
+
 ## 2. Button ID allocation — respect this map
 
 IDs are global and collide silently. `UIManager` owns the authoritative comment block;

@@ -135,7 +135,8 @@ def settings(make_settings) -> SettingsManager:
 
 # ─── Vehicle factories ───────────────────────────────────────────────────────
 
-def _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration):
+def _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration,
+                    ang_vel=0):
     if direction is None:
         direction = heading
     # update_position derives the acceleration from the previous sample, so
@@ -149,6 +150,7 @@ def _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration):
         lfs_heading(heading), lfs_heading(direction),
         speed,
         timestamp=NOMINAL_DT_S,
+        ang_vel=ang_vel,
     )
 
 
@@ -157,7 +159,9 @@ def make_vehicle():
     """Factory for a foreign :class:`Vehicle`.
 
     x/y/z in **metres**, heading/direction in **degrees** (0 = +Y, CCW),
-    speed in **km/h**, acceleration in **m/s²** (negative = braking).
+    speed in **km/h**, acceleration in **m/s²** (negative = braking),
+    ``ang_vel`` the raw ``CompCar.AngVel`` word (16384 = 360 °/s
+    anticlockwise), which is what the yaw rate is read from.
 
     ``cname`` / ``pname`` are **bytes**, because that is what IS_NPL delivers
     and what the lookup tables are keyed on (``reference/conventions.md`` §4).
@@ -166,9 +170,10 @@ def make_vehicle():
               heading: float = 0.0, direction: float = None,
               speed: float = 0.0, acceleration: float = 0.0,
               cname: bytes = b"XFG", pname: bytes = b"Tester",
-              control_mode: int = 0) -> Vehicle:
+              control_mode: int = 0, ang_vel: int = 0) -> Vehicle:
         vehicle = Vehicle(plid)
-        _apply_position(vehicle, x, y, z, heading, direction, speed, acceleration)
+        _apply_position(vehicle, x, y, z, heading, direction, speed,
+                        acceleration, ang_vel)
         vehicle.update_model_and_driver(cname, pname, control_mode)
         return vehicle
 
@@ -194,12 +199,13 @@ def make_own_vehicle(make_outgauge_packet):
               cname: bytes = b"XFG", pname: bytes = b"Tester",
               control_mode: int = 0, local_plid: int = None,
               viewed_plid: int = None, player_flags: int = 0,
-              **lights) -> OwnVehicle:
+              ang_vel: int = 0, **lights) -> OwnVehicle:
         own = OwnVehicle()
         if local_plid is not None:
             # As IS_NPL would: the camera-independent own PLID (WP4).
             own.set_local_driver(local_plid)
-        _apply_position(own, x, y, z, heading, direction, speed, acceleration)
+        _apply_position(own, x, y, z, heading, direction, speed, acceleration,
+                        ang_vel)
         own.update_outgauge_data(make_outgauge_packet(
             plid=plid if viewed_plid is None else viewed_plid,
             speed=speed, gear=gear, rpm=rpm,

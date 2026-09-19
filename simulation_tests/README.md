@@ -119,6 +119,28 @@ harness can decide whether the *add-on* behaved — that is what the scenario's
   that the situation happened, not that the HUD or the beeper fired. That still
   needs a human, or a diagnostic output the add-on does not have yet.
 
+#### Some scenarios have to be run three times, not once
+
+Where the *situation* is produced by the driver meeting an AI car at a
+particular place, a fraction of a second of drift at the start moves the
+meeting point by metres, and metres are the whole scenario. Such a run that
+shows nothing has not shown that nothing happens — it may simply not have set
+the situation up.
+
+`24_blind_spot_warning_false_positive` is the shipped example and the reason
+this paragraph exists. It is recorded cornering alongside another car, and the
+false positive it was recorded for depends on being a couple of metres further
+forward than the AI. In one run the ego was a few metres further back, at which
+point an acute warning was not *possible* — a green result that proved
+nothing. **Run it at least three times and read all three**; a false-positive
+scenario passes only when every run is quiet, and a positive one only when the
+situation actually occurred in the run you are reading.
+
+The cheaper move for anything that is a *threshold* rather than an outcome:
+replay the traces you already have through the systems offline with
+`tools/replay_trace.py`, which is exactly repeatable, and use the in-game runs
+to confirm.
+
 Exit codes: `0` ok · `2` bad arguments · `3` pre-flight refused · `4` tracer did
 not start · `5` LFS not at the main menu · `6` replay aborted · `7` required
 telemetry missing · `8` the scenario is disabled.

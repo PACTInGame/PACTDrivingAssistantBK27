@@ -38,6 +38,11 @@ MAX_SAMPLE_DT_S = 0.5
 # der Reaktionszeit-Puffer der Kollisionswarnung.
 ACCEL_SMOOTHING_TAU_S = 0.15
 
+# ``CompCar.AngVel``: signed short, 16384 = 360 deg/s anticlockwise
+# (reference/conventions.md section 2). Stored as rad/s, in the same sense as
+# every other angle in this project, so nobody has to remember the word.
+ANGVEL_TO_RAD_S = 2.0 * math.pi / 16384.0
+
 
 def decode_car_name(value) -> str:
     """Dekodiert CName/Track byte-treu.
@@ -98,6 +103,12 @@ class VehicleData:
     distance_to_player: float = 0.0
     angle_to_player: float = 0.0
     acceleration: float = 0.0
+    # Gierrate in rad/s, positiv gegen den Uhrzeigersinn - direkt aus
+    # ``CompCar.AngVel``, nicht abgeleitet. Sie sagt, wohin das Auto gleich
+    # zeigen wird, und ist damit die einzige Groesse, aus der sich ein
+    # *beginnender* Spurwechsel ablesen laesst, bevor er stattgefunden hat
+    # (assistance/path_conflict.py).
+    yaw_rate: float = 0.0
     # Namen kommen als bytes von LFS und werden genau einmal beim Eingang
     # dekodiert (reference/conventions.md §4). Die Rohbytes bleiben daneben
     # stehen, damit niemand sie zurueckrechnen muss.
@@ -169,7 +180,8 @@ class Vehicle:
 
     def update_position(self, x: float, y: float, z: float, heading: float,
                         direction: float, speed: float,
-                        timestamp: Optional[float] = None):
+                        timestamp: Optional[float] = None,
+                        ang_vel: int = 0):
         """Aktualisiert Position und Bewegungsdaten
 
         ``speed`` in km/h. ``timestamp`` ist die Ankunftszeit des Pakets auf
@@ -187,6 +199,7 @@ class Vehicle:
         target.heading = heading
         target.direction = direction
         target.speed = speed
+        target.yaw_rate = ang_vel * ANGVEL_TO_RAD_S
 
         now = time.monotonic() if timestamp is None else timestamp
         previous = self.previous_update_time

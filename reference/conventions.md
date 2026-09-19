@@ -31,7 +31,7 @@ So AXM→MCI scale conversion is `* 4096` (65536/16). You will see this literal 
 |---|---|---|
 | `CompCar` | `Heading` | word, 0 = +Y (north), 32768 = 180°, **anticlockwise** |
 | `CompCar` | `Direction` | word, same encoding — direction of *motion*, valid only if Speed > 0 |
-| `CompCar` | `AngVel` | signed short, 16384 = 360 °/s anticlockwise |
+| `CompCar` | `AngVel` | signed short, 16384 = 360 °/s anticlockwise — stored as `VehicleData.yaw_rate` in **rad/s** |
 | `ObjectInfo` | `Heading` | byte, 0…255 = 0…360° |
 
 The idiom used everywhere in this codebase:

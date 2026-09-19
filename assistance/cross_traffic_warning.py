@@ -1,8 +1,10 @@
 import math
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 
 from assistance.base_system import AssistanceSystem
-from assistance.park_distance_control import get_vehicle_size
+from assistance.path_conflict import (
+    BRAKE_DEMAND_MS2, INF, body_from, contact_window, direction_vector,
+    free_distance, stopping_deceleration)
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.helpers import is_reversing
@@ -12,65 +14,11 @@ from vehicles.vehicle import Vehicle
 KMH_TO_MS = 0.277778
 METRE = 65536.0     # MCI-Positionseinheiten pro Meter
 
-
-def _direction_vector(heading: float) -> Tuple[float, float]:
-    """Gibt den normierten Richtungsvektor basierend auf dem LFS-Heading zurück.
-
-    Nutzt die bewährte Konvertierung aus der Codebase:
-      angle_deg = (heading + 16384) / 182.05
-
-    Im LFS-Koordinatensystem gilt (reference/conventions.md §1, InSim.txt):
-    **X wächst nach Osten, Y wächst nach Norden, Z nach oben** - ein
-    rechtshändiges System. Headings zählen **gegen** den Uhrzeigersinn ab der
-    +Y-Achse: 0 = Nord, 16384 = West, 32768 = Süd, 49152 = Ost.
-
-    Der Summand +16384 dreht von "0 = +Y" auf "0 = +X", damit das Ergebnis
-    direkt in cos/sin passt.
-
-    Der frühere Kommentar behauptete das Gegenteil (Y nach Süden, Headings im
-    Uhrzeigersinn). Der Code war immer richtig, der Kommentar nie
-    (known-issues #16).
-    """
-    angle_deg = (heading + 16384) / 182.05
-    rad = math.radians(angle_deg)
-    return math.cos(rad), math.sin(rad)
-
-
-def _find_intersection(
-    x1: float, y1: float, dx1: float, dy1: float,
-    x2: float, y2: float, dx2: float, dy2: float
-) -> Optional[Tuple[float, float, float, float]]:
-    """Findet den Schnittpunkt zweier Strahlen (Fahrwege).
-
-    Strahl 1: P1 + t1 * D1
-    Strahl 2: P2 + t2 * D2
-
-    Returns:
-        (t1, t2, ix, iy) wobei t1/t2 die Parameter sind und ix/iy der Schnittpunkt,
-        oder None wenn die Strahlen parallel sind oder der Schnittpunkt hinter den Fahrzeugen liegt.
-    """
-    # Kreuzprodukt D1 x D2 (2D: dx1*dy2 - dy1*dx2)
-    cross = dx1 * dy2 - dy1 * dx2
-
-    if abs(cross) < 1e-9:
-        # Strahlen sind (nahezu) parallel – kein Querverkehr
-        return None
-
-    # Differenzvektor P2 - P1
-    diffx = x2 - x1
-    diffy = y2 - y1
-
-    t1 = (diffx * dy2 - diffy * dx2) / cross
-    t2 = (diffx * dy1 - diffy * dx1) / cross
-
-    # Schnittpunkt muss VOR beiden Fahrzeugen liegen (t > 0)
-    if t1 <= 0 or t2 <= 0:
-        return None
-
-    ix = x1 + t1 * dx1
-    iy = y1 + t1 * dy1
-
-    return t1, t2, ix, iy
+# Alias auf die gemeinsame Geometrie. Die Herleitung des Vektors steht dort;
+# hier bleibt der Name, weil er die Historie dieses Moduls traegt
+# (known-issues #16: der Kommentar behauptete jahrelang ein linkshaendiges
+# Koordinatensystem, der Code war immer richtig).
+_direction_vector = direction_vector
 
 
 def _compute_side(own_dx: float, own_dy: float, own_x: float, own_y: float,
@@ -108,19 +56,73 @@ def _compute_side(own_dx: float, own_dy: float, own_x: float, own_y: float,
 
 
 class CrossTrafficWarning(AssistanceSystem):
-    """Querverkehrswarnung – warnt vor kreuzenden Fahrzeugen"""
+    """Querverkehrswarnung - warnt vor kreuzenden Fahrzeugen und bremst.
 
-    # Maximale Distanz zum Schnittpunkt (in Metern) für Berücksichtigung
-    MAX_INTERSECTION_DISTANCE = 100.0
-    # Grundtoleranz für gleichzeitige Ankunft am Schnittpunkt (Sekunden).
-    # Deckt Messrauschen und das 100-ms-Raster ab; die Fahrzeuggröße kommt in
-    # _arrival_window() dazu.
-    ARRIVAL_TIME_TOLERANCE = 0.5
-    # Minimaler Kreuzungswinkel (Grad) um nahezu parallele Fahrzeuge auszuschließen
+    Zwei Ausgaben aus einer Rechnung (``assistance/path_conflict.py``):
+
+    * ``cross_traffic_warning_changed`` - die Anzeige, Stufe 1 visuell,
+      Stufe 2 zusaetzlich akustisch und blinkend.
+    * ``needed_deceleration_update`` mit ``source='cross_traffic'`` - die
+      Sollverzoegerung fuer ``EmergencyBrake``, jeden Zyklus, genau wie die
+      Kollisionswarnung sie liefert. Ob daraus ein Eingriff wird, entscheidet
+      allein ``EmergencyBrake`` und nur bei ``automatic_emergency_brake == 2``
+      (reference/control-intervention.md).
+
+    **Beide Fahrzeuge sind Rechtecke.** Die alte Rechnung verglich die
+    Ankunftszeiten zweier *Punkte* am Schnittpunkt der beiden Fahrwege und
+    erlaubte dafuer ein Zeitfenster, das aus den Fahrzeuggroessen geschaetzt
+    wurde. Das genuegte fuer eine Warnung, nicht fuer einen Bremseingriff: ein
+    Eingriff muss wissen, **wo** der Konflikt anfaengt, nicht nur **wann**. Die
+    Kontaktzeit kommt jetzt aus dem Separating Axis Theorem ueber beide
+    Umrisse, der Bremsweg aus dem Abstand bis zum Fahrschlauch des anderen.
+    """
+
+    # ─── Erfassungsbereich ────────────────────────────────────────────
+    # Vorauswahl auf dem Abstand, den der VehicleManager ohnehin je Frame
+    # rechnet - ein Vergleich statt einer Strahlenschnittrechnung pro
+    # Fahrzeug. Weiter weg gibt es keinen Querverkehr, um den es sich zu
+    # kuemmern lohnt.
+    MAX_RANGE_M = 100.0
+    # Minimaler Kreuzungswinkel (Grad) um nahezu parallele Fahrzeuge
+    # auszuschliessen. Alles darunter ist Laengsverkehr und gehoert der
+    # Kollisions- bzw. der Toter-Winkel-Warnung.
     MIN_CROSSING_ANGLE_DEG = 20.0
     # Unterhalb dieser Geschwindigkeit gibt es keine Querverkehrswarnung.
     MIN_OWN_SPEED_KMH = 5.0
     MIN_OTHER_SPEED_KMH = 3.0
+    # Weiter als so voraus ist eine Vorhersage mit konstanter Geschwindigkeit
+    # nichts wert - beide Fahrer lenken und bremsen in der Zwischenzeit.
+    MAX_PREDICTION_S = 6.0
+
+    # ─── Bremseingriff ────────────────────────────────────────────────
+    # Restabstand zum Fahrschlauch des anderen, den wir nicht aufbrauchen
+    # wollen. Groesser als die 0.5 m der Kollisionswarnung: dort haben wir es
+    # mit einem Fahrzeug zu tun, das in dieselbe Richtung faehrt, hier mit
+    # einem, das quer durch unsere Front will.
+    SAFETY_BUFFER_M = 1.0
+    # Zeit, bis ein Eingriff wirkt: ein 100-ms-Zyklus plus Tastendruck plus
+    # LFS' eigener Bremsdruckaufbau. Dieselbe Groessenordnung wie in der
+    # Kollisionswarnung.
+    REACTION_TIME_S = 0.2
+    # Weiter voraus wird nicht gebremst. Die Sollverzoegerung waere dort
+    # ohnehin klein, aber ein Konflikt in 5 s ist eine Vorhersage und kein
+    # Grund, jemandem die Kontrolle abzunehmen.
+    BRAKE_HORIZON_S = 4.0
+    # ─── Warnstufen aus der Sollverzoegerung ──────────────────────────
+    # Eine Warnung muss vor dem Eingriff kommen, und die Zeitschwellen oben
+    # koennen das nicht garantieren: der Bremsweg waechst mit v², die
+    # Kontaktzeit nur mit v. Gemessen in ``simulation_tests`` Szenario 08 -
+    # mit Vollgas auf die Kreuzung zu war der Bedarf bei 6.25 m/s², also
+    # ueber der Eingriffsschwelle, waehrend die Kontaktzeit noch bei 3.7 s
+    # lag und damit unter jeder Warnstufe. Der Fahrer bekam die Bremsung
+    # ohne vorherige Warnung.
+    #
+    # Deshalb zweitens: dieselbe Zahl, die den Eingriff ausloest, traegt auch
+    # die Anzeige. Als Anteil von ``BRAKE_DEMAND_MS2`` formuliert, damit die
+    # Reihenfolge Anzeige -> Ton -> Bremse per Konstruktion stimmt und nicht
+    # per Zufall.
+    VISUAL_DEMAND_FRACTION = 0.4
+    ACOUSTIC_DEMAND_FRACTION = 0.75
 
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("cross_traffic_warning", event_bus, settings)
@@ -131,7 +133,8 @@ class CrossTrafficWarning(AssistanceSystem):
         """Prüft auf Querverkehr-Kollisionsgefahr"""
         warning_level = 0
         warning_side = None
-        min_ttc = float('inf')
+        min_ttc = INF
+        deceleration = 0.0
 
         # Einmal binden: OutGauge schreibt nebenläufig in own_vehicle.data
         # (known-issues #12).
@@ -148,10 +151,13 @@ class CrossTrafficWarning(AssistanceSystem):
         # die falsche Richtung, dann wäre jeder Schnittpunkt falsch.
         if (not self.is_enabled() or own.speed < self.MIN_OWN_SPEED_KMH
                 or is_reversing(own.heading, own.direction)):
-            self._emit_if_changed(warning_level, warning_side)
-            return {'level': 0, 'side': None, 'ttc': float('inf')}
+            self._publish(0, None, 0.0)
+            return {'level': 0, 'side': None, 'ttc': INF, 'deceleration': 0.0}
 
-        # Warnschwellen basierend auf Einstellung (0=Early, 1=Medium, 2=Late)
+        # Warnschwellen basierend auf Einstellung (0=Early, 1=Medium, 2=Late).
+        # Die Schwellen sind Zeiten bis zur **Berührung**, nicht mehr bis zum
+        # Schnittpunkt der Mittelpunkte - für ein 4.5 m langes Auto sind das
+        # rund 0.2 bis 0.4 s Unterschied, die dem Fahrer zugutekommen.
         ctw_dist = self.settings.get("cross_traffic_warning_distance")
         if ctw_dist == 0:
             visual_threshold = 3.5
@@ -163,93 +169,122 @@ class CrossTrafficWarning(AssistanceSystem):
             visual_threshold = 2.5
             acoustic_threshold = 1.5
 
-        # Eigene Position in Metern (LFS nutzt 1/65536 Meter)
-        own_x = own.x / METRE
-        own_y = own.y / METRE
-        own_speed_ms = own.speed * KMH_TO_MS  # km/h -> m/s
-
-        # Eigener Richtungsvektor
-        own_dx, own_dy = _direction_vector(own.heading)
-
-        # Eigene Abmessungen einmal pro Zyklus, nicht pro Fahrzeug.
-        own_length, own_width = get_vehicle_size(own.cname)
+        own_speed_ms = own.speed * KMH_TO_MS
+        own_body = body_from(own, own_speed_ms)
+        visual_demand = self.VISUAL_DEMAND_FRACTION * BRAKE_DEMAND_MS2
+        acoustic_demand = self.ACOUSTIC_DEMAND_FRACTION * BRAKE_DEMAND_MS2
 
         for vehicle in vehicles.values():
             data = vehicle.data
             if data.speed < self.MIN_OTHER_SPEED_KMH:
                 # Stehendes/sehr langsames Fahrzeug ignorieren
                 continue
+            if data.distance_to_player > self.MAX_RANGE_M:
+                continue
 
-            other_x = data.x / METRE
-            other_y = data.y / METRE
-            other_speed_ms = data.speed * KMH_TO_MS
-            other_dx, other_dy = _direction_vector(data.heading)
+            other_body = body_from(data)
 
             # Kreuzungswinkel prüfen (parallele Fahrzeuge ausschließen)
-            dot = own_dx * other_dx + own_dy * other_dy
+            dot = own_body.dx * other_body.dx + own_body.dy * other_body.dy
             dot = max(-1.0, min(1.0, dot))  # Clamp für acos
-            crossing_angle_deg = math.degrees(math.acos(abs(dot)))
-            if crossing_angle_deg < self.MIN_CROSSING_ANGLE_DEG:
+            if math.degrees(math.acos(abs(dot))) < self.MIN_CROSSING_ANGLE_DEG:
                 # Fast parallel/gleiche Richtung – kein Querverkehr
                 continue
 
-            # Schnittpunkt der beiden Fahrwege berechnen
-            result = _find_intersection(
-                own_x, own_y, own_dx, own_dy,
-                other_x, other_y, other_dx, other_dy
-            )
-            if result is None:
+            # Wie weit dürfen wir noch, bevor wir in seinem Fahrschlauch
+            # stehen? ``inf`` heißt "nie hinein oder schon hindurch" - dann
+            # ist er kein Querverkehr für uns, egal was die Zeiten sagen.
+            free = free_distance(own_body, other_body)
+            if free == INF:
                 continue
 
-            t1, t2, ix, iy = result
-
-            # t1 und t2 sind die Distanzen zum Schnittpunkt (da Richtungsvektoren normiert sind)
-            dist_own = t1  # Meter
-            dist_other = t2  # Meter
-
-            # Nur Schnittpunkte innerhalb von MAX_INTERSECTION_DISTANCE berücksichtigen
-            if dist_own > self.MAX_INTERSECTION_DISTANCE or dist_other > self.MAX_INTERSECTION_DISTANCE:
+            window = contact_window(own_body, other_body)
+            if window is None or window[1] < 0.0:
+                # Kein Kontakt, oder er liegt hinter uns.
                 continue
 
-            # Zeit bis zum Schnittpunkt
-            time_own = dist_own / own_speed_ms if own_speed_ms > 0.1 else float('inf')
-            time_other = dist_other / other_speed_ms if other_speed_ms > 0.1 else float('inf')
-
-            # Prüfe, ob sich die Belegungszeiten am Schnittpunkt überlappen.
-            # Punktförmige Fahrzeuge mit fester ±0.5-s-Toleranz übersahen den
-            # klassischen Fall: ein langes Fahrzeug, das langsam kreuzt,
-            # blockiert die Kreuzung sekundenlang.
-            time_diff = abs(time_own - time_other)
-            if time_diff > self._arrival_window(
-                    own_length, own_width, own_speed_ms,
-                    data.cname, other_speed_ms):
+            ttc = window[0] if window[0] > 0.0 else 0.0
+            if ttc > self.MAX_PREDICTION_S:
                 continue
 
-            # Time-to-collision aus Sicht des eigenen Fahrzeugs
-            ttc = time_own
+            demand = 0.0
+            if ttc <= self.BRAKE_HORIZON_S and not self._overtaking_us(
+                    own_body, other_body):
+                demand = stopping_deceleration(free, own_speed_ms,
+                                               self.SAFETY_BUFFER_M,
+                                               self.REACTION_TIME_S)
+                if demand > deceleration:
+                    deceleration = demand
 
+            # Zwei Wege zu einer Stufe, und die hoehere gewinnt: die
+            # Kontaktzeit (wie nah ist es zeitlich) und die Sollverzoegerung
+            # (wie nah ist es an dem Punkt, an dem nur noch Bremsen hilft).
+            level = 0
+            if ttc < acoustic_threshold or demand >= acoustic_demand:
+                level = 2
+            elif ttc < visual_threshold or demand >= visual_demand:
+                level = 1
+
+            # Die Seite gehoert dem Fahrzeug, das die Stufe traegt; bei
+            # gleicher Stufe dem naeheren.
+            if level > warning_level or (level == warning_level
+                                         and level > 0 and ttc < min_ttc):
+                warning_level = level
+                warning_side = _compute_side(own_body.dx, own_body.dy,
+                                             own_body.x, own_body.y,
+                                             other_body.x, other_body.y)
             if ttc < min_ttc:
                 min_ttc = ttc
-                side = _compute_side(own_dx, own_dy, own_x, own_y, other_x, other_y)
 
-                if ttc < acoustic_threshold:
-                    warning_level = 2  # Akustisch + blinkend
-                    warning_side = side
-                elif ttc < visual_threshold:
-                    warning_level = max(warning_level, 1)  # Visuell
-                    if warning_level == 1:
-                        warning_side = side
-
-        self._emit_if_changed(warning_level, warning_side)
+        self._publish(warning_level, warning_side, deceleration)
 
         return {
             'level': warning_level,
             'side': warning_side,
             'ttc': min_ttc,
+            'deceleration': deceleration,
         }
 
-    def _emit_if_changed(self, warning_level: int, warning_side: Optional[str]):
-        """Emittiert Events nur bei Änderung des Warnzustands."""
+    @staticmethod
+    def _overtaking_us(own_body, other_body) -> bool:
+        """Kommt er von hinten und ist schneller als wir?
+
+        Der Kreuzungswinkel geht bis 20 Grad hinunter, und darunter faengt der
+        Bereich der Toter-Winkel-Warnung an - ein Auto, das uns mit 28 Grad
+        Winkelunterschied dicht ueberholt, sieht von hier aus wie Querverkehr.
+        Fuer die *Warnung* ist das in Ordnung. Fuer einen Bremseingriff nicht:
+        er ist hinter uns und schneller, also nimmt Bremsen uns nicht aus
+        seinem Weg, sondern verlaengert seine Annaeherung und erhoeht die
+        Geschwindigkeit, mit der er ankommt
+        (reference/control-intervention.md, Tabelle der Quellen). Diese
+        Situation gehoert der Toter-Winkel-Warnung, die dort richtig
+        entscheidet.
+
+        Gemessen: in ``simulation_tests`` Szenario 22 forderte die
+        Querverkehrswarnung in dem Zyklus, in dem der ueberholende Wagen
+        seitlich an uns vorbeischrammte, 20 m/s2 an - genau die falsche
+        Antwort, nur unauffaellig, weil der Toter-Winkel-Eingriff ohnehin
+        schon lief.
+        """
+        behind = (own_body.dx * (other_body.x - own_body.x)
+                  + own_body.dy * (other_body.y - own_body.y)) < 0.0
+        return behind and other_body.speed > own_body.speed
+
+    # ─── Ausgabe ──────────────────────────────────────────────────────
+
+    def _publish(self, warning_level: int, warning_side: Optional[str],
+                 deceleration: float):
+        """Warnzustand nur bei Änderung, Sollverzögerung jeden Zyklus.
+
+        Der Vertrag von ``needed_deceleration_update`` ist bewusst derselbe
+        wie bei der Kollisionswarnung (reference/events.md): sein Abonnent
+        greift in die Fahrzeugführung ein, und eine Anforderung, die
+        *ausbleibt*, muss von einer Anforderung "0" unterscheidbar sein.
+        """
+        self.event_bus.emit('needed_deceleration_update', {
+            'deceleration': deceleration,
+            'source': 'cross_traffic',
+        })
         if warning_level != self.current_warning_level or warning_side != self.current_side:
             self.current_warning_level = warning_level
             self.current_side = warning_side
@@ -257,33 +292,3 @@ class CrossTrafficWarning(AssistanceSystem):
                 'level': warning_level,
                 'side': warning_side,
             })
-
-
-    def _arrival_window(self, own_length: float, own_width: float,
-                        own_speed_ms: float, other_cname: str,
-                        other_speed_ms: float) -> float:
-        """Zulässiger Ankunftszeit-Unterschied für ein konkretes Fahrzeugpaar.
-
-        Beide Fahrzeuge sind Körper, keine Punkte. Die Konfliktfläche an der
-        Kreuzung ist entlang **unseres** Weges so lang wie unsere Länge plus
-        die Breite des anderen, entlang **seines** Weges so lang wie seine
-        Länge plus unsere Breite. Wir belegen sie also für
-
-            (own_length + other_width) / own_speed
-
-        Sekunden, er für ``(other_length + own_width) / other_speed``. Es
-        kracht, wenn sich die beiden Zeitfenster überlappen; verglichen wird
-        deshalb gegen die Summe der halben Belegungszeiten plus der
-        Grundtoleranz für Messrauschen.
-
-        Beispiel: ein 5.4 m langer Transporter mit 10 km/h braucht
-        (5.4 + 1.8) / 2.78 = 2.6 s, um eine 1.8 m breite Spur zu räumen -
-        die alte feste Toleranz von 0.5 s hat ihn schlicht übersehen.
-
-        Kosten: ein Dict-Zugriff und vier Multiplikationen pro Fahrzeug, das
-        alle vorherigen Filter überstanden hat.
-        """
-        other_length, other_width = get_vehicle_size(other_cname)
-        own_occupancy = (own_length + other_width) / max(own_speed_ms, 0.1) / 2.0
-        other_occupancy = (other_length + own_width) / max(other_speed_ms, 0.1) / 2.0
-        return self.ARRIVAL_TIME_TOLERANCE + own_occupancy + other_occupancy

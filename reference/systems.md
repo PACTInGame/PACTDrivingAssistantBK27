@@ -96,7 +96,83 @@ laterally 1…4.5 m off the axis, i.e. the adjacent lane. Each is tested against
   `angle_to_player`) and one modular heading test. A shapely polygon and two
   `intersects` are paid only for cars that pass all of them — normally none to two,
   instead of one polygon per car per cycle.
-- Output: `blind_spot_warning_changed` `{left, right}` on change.
+- **Three levels per side** (`left_level` / `right_level` in the event):
+  1. **Display** — the corridor geometry above. Somebody is where no mirror looks.
+  2. **Acute** — blinking and audible: the two outlines are predicted to touch within
+     `ACUTE_TTC_S` (2.5 s), on the straight line or on the arc the yaw rate describes.
+     That one criterion covers both cases the driver feels — "I am getting too close"
+     and "I am driving into their path".
+  3. **Braking** — level 2, plus own speed below `BRAKE_SPEED_KMH` (30), the other car
+     behind us and at least `MIN_APPROACH_DELTA_KMH` (10) faster, and a stop still able
+     to keep us out of its corridor. This is turning into flowing traffic. The demand
+     goes out as `needed_deceleration_update` with `source='blind_spot'`.
+- **Levels 2 and 3 do not use the corridor.** They ask "do these two rectangles meet",
+  through `assistance/path_conflict.py`. The corridor is fixed to *our* heading, so it
+  turns **away** from the car we are steering towards — the warning would go quiet at
+  the exact moment it is needed.
+- **The yaw rate is what makes a lane change visible in time.** With the heading
+  alone, scenario 22 still read "never crosses their path" 0.7 s after the driver
+  started turning — two degrees of heading across a 1.8 m gap is four seconds of
+  travel, while `AngVel` already said 20 °/s. Both `free_distance` and
+  `contact_window` therefore also walk the arc. That moved the intervention 0.25 s
+  earlier and turned scenario 22's contact into a 2.9 m miss.
+- **`_MIN_RELATIVE_YAW_RATE` (12 °/s) is measured, not chosen.** Over scenario 24
+  — two cars side by side through a long bend — the *relative* yaw rate reaches
+  10.6 °/s from line choice and steering corrections alone (median 2.8). A real
+  turn-in is above 20 °/s when it matters. At the original 1 °/s the arc turned
+  corner noise into a predicted collision.
+- **The prediction horizon scales with what supports it** (`STEADY_TTC_S`, 1.5 s,
+  against `ACUTE_TTC_S`, 2.5 s), and this is what keeps the warning out of corners.
+  Two cars taking the same bend side by side hold a persistent couple of degrees of
+  heading between them — the rest of the corner one has already taken. Over 2.5 s at
+  110 km/h that is 70 m of travel, and a degree of error is 1.2 m of lateral offset:
+  scenario 24 predicted contact in 1.9 s between two cars that simply drove on like
+  that. So the full warning time is given only when the relative yaw rate shows
+  somebody actually steering into somebody; otherwise the system looks 1.5 s ahead,
+  where the error is under half a metre. The cost is one second of warning for a car
+  closing on a fixed shallow angle — and a second is still left.
+- **In a shared corner nothing is extrapolated at all.** 1.5 s is still too long when
+  the two cars are close: in one of three runs of scenario 24 they were 3.4 m apart
+  instead of 5.5, and the same persistent angle predicted contact in 1.0 s. So when
+  **both** cars are cornering (`MIN_CORNERING_YAW`, 2 °/s — measured, a straight never
+  exceeds 1.7) and neither is steering into the other, the angle between them *is* the
+  bend, and only a real overlap warns. Racing alongside somebody must not blink and
+  beep, or the driver switches the system off and it protects nothing.
+- **Making the model cleverer does not fix that, and it was tried.** Giving each car
+  its own arc instead of using the difference reproduces a steady corner correctly in
+  principle, but the measured radii differ (196 m against 164 m in scenario 24), so
+  the two arcs meet as well — just later. No extrapolation is reliable over 70 m;
+  bounding the horizon is.
+- Scenario 24 needs **three runs** before a quiet result means anything: where the
+  two cars meet decides whether the situation exists at all
+  (`simulation_tests/README.md` §3). Two of three runs showed the false positive; the
+  third could not have produced it.
+- **Two true statements about different moments are not one true statement.** Level 2
+  also used to fire when "we enter their corridor within 1.5 s" *and* "they are within
+  2.5 s behind us". Both held in scenario 25 — turning in slowly behind traffic that
+  was drawing level at 93 km/h: corridor entry in 1.4 s, headway 0.06 s. They were
+  27 m down the road by the time we got there. The contact prediction asks about one
+  moment at a time and gets it right, so the second criterion was removed. The cost is
+  a known limitation: a car held at a fixed angle across a lane with **no** yaw rate
+  reads as passing through, not merging (`test_blind_spot.py` pins it).
+- **Why two acute criteria and not one.** The contact prediction assumes a constant
+  heading. For a fast lane change that is wrong in the dangerous direction: at 60 km/h
+  and 20° the prediction has us crossing the next lane and leaving it again before the
+  other car arrives, so the *sharper* manoeuvre produced *no* warning. The lane-entry
+  criterion asks the question a driver would.
+- **Two exclusions, both cheap and both load-bearing:**
+  - `_is_plain_following` — same lane *and* parallel is a tailgater, not a lane-change
+    conflict, and the side would be decided by noise. Either car turning ends it.
+  - a contact window that starts at `-inf` — "overlapping since forever" is degenerate
+    data, and a warning with no beginning could never end.
+- **Braking is refused once we are already in their corridor** (`free_distance == 0`).
+  They are behind us and faster: braking cannot take us out of their way, it only
+  lengthens their approach and raises the speed they arrive with. This is the exact
+  **opposite** of the cross traffic case, where we are the ones running into somebody.
+- Output: `blind_spot_warning_changed` `{left, right, left_level, right_level}` on
+  change; `needed_deceleration_update` every cycle.
+- **Cost, measured with 40 cars:** 3 µs spread over a track, 402 µs in the
+  (unrealistic) case where all 40 sit beside or behind us, against a 100 ms budget.
 - **Open product question:** the corridor is 85 m long, which is lane-change-assist
   geometry rather than a blind spot. The relevance rule keeps far-away same-speed
   traffic quiet, but a fast approacher 80 m back does raise a blind-spot warning.
@@ -104,8 +180,8 @@ laterally 1…4.5 m off the axis, i.e. the adjacent lane. Each is tested against
 
 ## Cross Traffic Warning — `cross_traffic_warning.py`
 
-Ray-ray intersection between our path and each other car's path, then compares arrival
-times.
+Rectangle-vs-rectangle conflict prediction between our path and each other car's
+(`assistance/path_conflict.py`), and — since WP12 — a braking demand.
 
 - Skips: own speed < `MIN_OWN_SPEED_KMH` (5), **reversing**, other car <
   `MIN_OTHER_SPEED_KMH` (3), crossing angle < `MIN_CROSSING_ANGLE_DEG` (20°),
@@ -117,18 +193,55 @@ times.
   `misc.helpers.is_reversing(heading, direction)` — reversing has to stay excluded
   because the direction vector is derived from `heading` and would point the wrong
   way.
-- **`_arrival_window()` is size-aware.** Vehicles are bodies, not points: we occupy
-  the conflict area for `(own_length + other_width) / own_speed`, they for
-  `(other_length + own_width) / other_speed`. The window is the sum of the two
-  half-occupancies plus `ARRIVAL_TIME_TOLERANCE` (0.5 s) for noise. A 5 m car
-  crossing at 10 km/h blocks the junction for ~2.4 s and was simply missed by the
-  old fixed ±0.5 s. Lengths come from `park_distance_control.get_vehicle_size`.
+- **Both vehicles are rectangles.** The ray intersection plus a size-derived arrival
+  window it replaced was good enough for a warning but not for an intervention: an
+  intervention has to know **where** the conflict starts, not only **when**. The TTC is
+  now the first-contact time from `contact_window()` (a separating-axis test over both
+  outlines, exact for rectangles at constant velocity), and the braking distance is
+  `free_distance()` — how far our centre may still travel before our outline touches
+  their travel corridor. Sizes still come from `park_distance_control.get_vehicle_size`.
 - Thresholds on TTC by `cross_traffic_warning_distance`: early `3.5/3.0`,
-  medium `2.5/1.5`, late `1.5/1.0` s (visual / acoustic).
+  medium `2.5/1.5`, late `1.5/1.0` s (visual / acoustic). They are now times to
+  **contact**, not to the meeting point of the two centres — about 0.3 s earlier for
+  two normal cars, in the driver's favour.
+- **The warning level has two sources, and the higher wins**: the contact time
+  against the thresholds above, *and* the braking demand against
+  `VISUAL_DEMAND_FRACTION` / `ACOUSTIC_DEMAND_FRACTION` of the engage threshold
+  (0.4 / 0.75, i.e. 2.4 and 4.5 m/s²). The second one exists because the time
+  thresholds cannot guarantee that a warning precedes an intervention: the
+  stopping distance grows with v² and the contact time only with v. Measured in
+  `simulation_tests` scenario 08 — accelerating hard towards a junction, the
+  demand was already 6.25 m/s² while the contact was still 3.7 s away, so the
+  driver got the brake with no warning in front of it. Tying the display to the
+  same number that triggers the brake makes the order display → tone → brake
+  true by construction.
+- **No braking for a car overtaking us from behind** (`_overtaking_us`). 20° is
+  the lower end of "crossing", and a car drawing level at that angle looks like
+  cross traffic from here. Warning is fine; braking is not, for the reason in
+  `control-intervention.md`'s table of sources — that geometry belongs to the
+  blind spot warning.
+- **The braking demand** is `v² / 2s` over the free distance, less `SAFETY_BUFFER_M`
+  (1.0) and `v · REACTION_TIME_S` (0.2). Published every cycle with
+  `source='cross_traffic'`; `EmergencyBrake` owns the 6.0 m/s² threshold and the
+  actuation. Three properties that make it engage at the right moment and only then:
+  - it is **self-limiting**: at 36 km/h it is 3.5 m/s² thirty metres out and 7.9 m/s²
+    at twelve, so it crosses the threshold at the last point where a stop short of the
+    other car's path is still possible;
+  - it is **self-consistent under braking**: brake at the demanded rate and `v²/s` stays
+    put, so the intervention does not collapse the moment it starts working;
+  - it **needs no latch**: as our speed falls the predicted conflict resolves by itself,
+    the demand goes to zero, and the brake is handed back — that is exactly the state
+    "we braked enough to let them through".
+- **No braking when there is nothing to brake for:** if we clear the junction first, if
+  their path crosses ours behind us, or if they are more than `BRAKE_HORIZON_S` (4 s)
+  away, the demand is 0.
 - `_compute_side` uses the 2D cross product; the code is right for LFS's
   right-handed CCW system and the docstrings now say so (they used to claim Y grows
   south, which is what `known-issues.md` #16 was about). See `conventions.md` §1.
-- Output: `cross_traffic_warning_changed` `{level, side}` on change.
+- Output: `cross_traffic_warning_changed` `{level, side}` on change;
+  `needed_deceleration_update` every cycle.
+- **Cost, measured with 40 cars:** 14 µs spread over a track, 61 µs with all 40 packed
+  around us, against a 100 ms budget.
 
 ## Park Distance Control — `park_distance_control.py`
 
@@ -354,9 +467,18 @@ that actuates the car.** It covers arbitration, handback, fail-safe behaviour, w
 actually accepts in each control mode, and the key-release trap. What follows is only
 the shape of the system.
 
-Turns FCW's `needed_deceleration_update` into real braking. FCW stays a pure warning
-system; everything that takes control away from the driver lives here, behind
+Turns a `needed_deceleration_update` into real braking. The warning systems stay pure
+warning systems; everything that takes control away from the driver lives here, behind
 `automatic_emergency_brake == 2` (0 off, 1 warn only, 2 warn and brake).
+
+- **Three systems ask now** — forward collision, cross traffic and blind spot — and the
+  demands are kept apart by `source` and reduced with `max`. See `events.md` for the
+  ordering contract this creates (`aeb` runs last) and for why the collection is cleared
+  on every pass.
+- **The 10 km/h floor is about rear-ending, not about being hit.** A crossing or
+  blind-spot demand engages from `MIN_SPEED_CROSSING_KMH` (3) upwards: a car creeping
+  into a junction at 8 km/h is not performing a parking manoeuvre, and the energy in
+  that crash belongs to the other vehicle.
 
 - **Path selection:** by `own_vehicle.data.control_mode`, and the two paths are not
   interchangeable. Mouse and keyboard (`mouse_kb`) get `Controls/brake_key.py`, which

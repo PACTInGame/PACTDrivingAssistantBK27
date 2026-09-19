@@ -10,6 +10,8 @@ frame, because the pre-filter reads both.
 import pytest
 from shapely import Polygon
 
+from assistance.emergency_brake import EmergencyBrake
+
 from assistance.blind_spot_warning import (
     BlindSpotWarning, _create_blindspot_rectangle, _normalize_angle,
     car_angle_degrees, create_rectangle_for_car,
@@ -37,6 +39,25 @@ def bsw(bus, settings):
     system = BlindSpotWarning(bus, settings)
     system.clock = FakeClock()
     return system
+
+
+NO_WARNING = {'left_warning': False, 'right_warning': False}
+
+# ``CompCar.AngVel``: 16384 units = 360 deg/s anticlockwise
+# (``reference/conventions.md`` section 2). Negative turns clockwise, i.e. to
+# the right.
+YAW_20_DEG_S_RIGHT = -int(round(20.0 / 360.0 * 16384))
+
+
+def yaw_units(deg_per_s):
+    """Degrees per second -> the raw ``CompCar.AngVel`` word."""
+    return int(round(deg_per_s / 360.0 * 16384))
+
+
+def warnings(result):
+    """Only the two booleans, so a test can ignore the levels and the demand."""
+    return {'left_warning': result['left_warning'],
+            'right_warning': result['right_warning']}
 
 
 def run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others, **own_kwargs):
@@ -145,7 +166,8 @@ def test_car_of_the_same_speed_in_the_blind_spot_warns(
 
     assert result['left_warning'] is True
     assert result['right_warning'] is False
-    assert events.last('blind_spot_warning_changed') == {'left': True, 'right': False}
+    assert events.last('blind_spot_warning_changed') == {
+        'left': True, 'right': False, 'left_level': 1, 'right_level': 0}
 
 
 def test_same_speed_on_the_right_warns_on_the_right(
@@ -163,22 +185,28 @@ def test_a_car_60_m_behind_does_not_warn(
     in_lane = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                   [dict(x=0.0, y=-60.0, heading=0.0, speed=50.0)],
                   speed=50.0)
-    assert in_lane == {'left_warning': False, 'right_warning': False}
+    assert warnings(in_lane) == NO_WARNING
 
     bsw.clock.advance(10.0)
     next_lane = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                     [dict(x=-3.0, y=-60.0, heading=0.0, speed=50.0)],
                     speed=50.0)
-    assert next_lane == {'left_warning': False, 'right_warning': False}
+    assert warnings(next_lane) == NO_WARNING
 
 
 def test_a_car_directly_behind_is_never_in_the_blind_spot(
         bsw, make_own_vehicle, make_vehicle, relate_to_own):
-    """The corridor starts 1 m off the axis; a car in our own lane misses it."""
+    """The corridor starts 1 m off the axis; a car in our own lane misses it.
+
+    It must miss the acute stages too, and for a different reason: at 3 m
+    centre-to-centre two 3.7 m cars already overlap, so the contact prediction
+    says "touching, and has been forever". ``_is_plain_following`` rejects the
+    pair before that - same lane, same direction, nothing happening.
+    """
     result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                  [dict(x=0.0, y=-3.0, heading=0.0, speed=50.0)],
                  speed=50.0)
-    assert result == {'left_warning': False, 'right_warning': False}
+    assert warnings(result) == NO_WARNING
 
 
 def test_a_fast_approach_from_far_back_still_warns(
@@ -205,7 +233,7 @@ def test_a_car_pointing_the_other_way_is_ignored(
     result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                  [dict(x=-3.0, y=-5.0, heading=180.0, speed=50.0)],
                  speed=50.0)
-    assert result == {'left_warning': False, 'right_warning': False}
+    assert warnings(result) == NO_WARNING
 
 
 # ─── Movement filter ─────────────────────────────────────────────────────────
@@ -221,7 +249,7 @@ def test_a_parked_car_in_the_blind_spot_does_not_warn(
     result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                  [dict(x=-3.0, y=-5.0, heading=0.0, speed=0.0)],
                  speed=50.0)
-    assert result == {'left_warning': False, 'right_warning': False}
+    assert warnings(result) == NO_WARNING
 
 
 def test_a_car_falling_behind_does_not_warn(
@@ -230,7 +258,7 @@ def test_a_car_falling_behind_does_not_warn(
     result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                  [dict(x=-3.0, y=-5.0, heading=0.0, speed=30.0)],
                  speed=50.0)
-    assert result == {'left_warning': False, 'right_warning': False}
+    assert warnings(result) == NO_WARNING
 
 
 def test_a_car_two_kmh_slower_still_warns(
@@ -248,7 +276,7 @@ def test_creeping_traffic_below_the_movement_floor_does_not_warn(
     result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
                  [dict(x=-3.0, y=-5.0, heading=0.0, speed=3.0)],
                  speed=3.0)
-    assert result == {'left_warning': False, 'right_warning': False}
+    assert warnings(result) == NO_WARNING
 
 
 # ─── Hold time ───────────────────────────────────────────────────────────────
@@ -291,7 +319,7 @@ def test_no_polygon_is_built_for_cars_the_prefilter_rejects(
                 for i in range(40)]
     result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, far_away, speed=50.0)
 
-    assert result == {'left_warning': False, 'right_warning': False}
+    assert warnings(result) == NO_WARNING
     assert bsw.polygons_built == 0
 
 
@@ -321,3 +349,304 @@ def test_the_event_is_only_emitted_on_change(
         run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
             [dict(x=-3.0, y=-5.0, heading=0.0, speed=50.0)], speed=50.0)
     assert events.count('blind_spot_warning_changed') == 1
+
+
+# --- Level 2: the acute warning ---------------------------------------------
+#
+# Level 1 says "somebody is there". Level 2 says "and you are about to hit
+# them" - it blinks and it beeps, so it has to be right. The two ways in are
+# the two the user named: coming too close, and driving into their path.
+
+
+def test_driving_into_the_path_of_an_overtaking_car_raises_level_two(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Swerving left at 60 km/h with a faster car 8 m back in the left lane."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.5, y=-8.0, heading=0.0, speed=70.0)],
+                 heading=10.0, speed=60.0)
+    assert result['left_level'] == 2
+    assert result['right_level'] == 0
+
+
+def test_the_turn_itself_is_the_signal_not_the_angle_it_has_reached(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """A decision worth knowing about, because it is also a limitation.
+
+    A car in the next lane 8 m back, faster. What decides whether that is a
+    warning is not where we are pointing - it is whether the wheel is moving.
+
+    The alternative was a criterion that asked "are we in his lane soon" and
+    "is he close behind" separately. It caught the held-angle case and it also
+    caught ``simulation_tests`` scenario 25, where the two questions were true
+    at two different moments and nothing was ever going to happen. Comparing
+    moments that are not the same moment is the worse error of the two, so
+    this is the trade that was made.
+    """
+    others = [dict(x=-3.5, y=-8.0, heading=0.0, speed=70.0)]
+
+    # Straight, wheel still: nothing is happening.
+    quiet = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                heading=0.0, speed=60.0)
+    assert quiet['left_level'] <= 1
+
+    # Straight, wheel going over: the merge has started and it warns, although
+    # the heading has not moved a degree yet.
+    bsw.clock.advance(10.0)
+    turning = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                  heading=0.0, speed=60.0, ang_vel=yaw_units(15.0))
+    assert turning['left_level'] == 2
+
+    # Twenty degrees off the lane with the wheel held: told that, the
+    # prediction has us out the other side before the other car arrives, and
+    # it is right about what it was told. This is the limitation.
+    bsw.clock.advance(10.0)
+    held = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+               heading=20.0, speed=60.0)
+    assert held['left_level'] <= 1
+
+
+def test_driving_straight_beside_the_same_car_stays_at_level_one(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Same two cars, same speeds - we are simply not going anywhere."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.5, y=-8.0, heading=0.0, speed=70.0)],
+                 heading=0.0, speed=60.0)
+    assert result['left_level'] == 1
+
+
+def test_a_two_degree_wobble_is_not_a_lane_change(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Steering noise must not blink and beep: at 2 degrees the next lane is
+    still 50 m of travel away."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.5, y=-20.0, heading=0.0, speed=70.0)],
+                 heading=2.0, speed=60.0)
+    assert result['left_level'] <= 1
+
+
+def test_the_acute_warning_picks_the_side_the_car_is_on(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=3.5, y=-8.0, heading=0.0, speed=70.0)],
+                 heading=-10.0, speed=60.0)
+    assert result['right_level'] == 2
+    assert result['left_level'] == 0
+
+
+def test_crossing_traffic_is_not_a_blind_spot_case(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """90 degrees across our path belongs to the cross traffic warning; the
+    acute heading gate (66 degrees) is what keeps the two apart."""
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-8.0, y=-3.0, heading=90.0, speed=50.0)],
+                 speed=25.0)
+    assert result['left_level'] == 0
+    assert result['right_level'] == 0
+
+
+# --- Level 3: the braking demand --------------------------------------------
+
+
+def merging(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+            own_kmh=25.0, heading=15.0, other_kmh=55.0, gap=15.0):
+    """Turning left into flowing traffic: a faster car ``gap`` m back, left."""
+    return run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+               [dict(x=-3.5, y=-gap, heading=0.0, speed=other_kmh)],
+               heading=heading, speed=own_kmh)
+
+
+def test_merging_into_faster_traffic_asks_for_braking(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The case the level exists for: we pull out at 25 km/h in front of
+    something doing 55, and the only thing that still prevents it is not
+    going any further."""
+    result = merging(bsw, make_own_vehicle, make_vehicle, relate_to_own)
+    assert result['left_level'] == 3
+    assert result['deceleration'] >= EmergencyBrake.ENGAGE_DECELERATION_MS2
+
+
+def test_above_the_speed_floor_it_warns_but_does_not_brake(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """At 45 km/h a lane change is corrected with the wheel. A full stop in
+    moving traffic would only move the problem to the car behind."""
+    result = merging(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                     own_kmh=45.0, other_kmh=75.0)
+    assert result['left_level'] == 2
+    assert result['deceleration'] == 0.0
+
+
+def test_a_car_that_is_barely_faster_is_not_braked_for(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """"Deutlich schneller": 5 km/h of difference is a normal merge."""
+    result = merging(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                     other_kmh=30.0)
+    assert result['left_level'] < 3
+    assert result['deceleration'] == 0.0
+
+
+def test_nothing_is_braked_for_when_we_are_already_in_his_lane(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The asymmetry against the cross traffic warning, and it matters.
+
+    He is behind us and faster. Once our car is in his lane, braking does not
+    take us out of it - it only lengthens the time he needs to reach us and
+    raises the speed he arrives with. So the warning stays and the demand
+    goes.
+    """
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                 [dict(x=-3.4, y=-12.0, heading=0.0, speed=55.0)],
+                 heading=5.0, speed=25.0, x=-3.4)
+    assert result['left_level'] + result['right_level'] > 0
+    assert result['deceleration'] == 0.0
+
+
+def test_the_demand_is_published_every_cycle_with_its_source(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own, recorder):
+    events = recorder('needed_deceleration_update')
+    for _ in range(3):
+        merging(bsw, make_own_vehicle, make_vehicle, relate_to_own)
+
+    assert events.count('needed_deceleration_update') == 3
+    assert events.last('needed_deceleration_update')['source'] == 'blind_spot'
+
+
+def test_a_quiet_road_publishes_a_zero_demand(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own, recorder):
+    """The contract ``EmergencyBrake`` relies on: a demand of zero arrives,
+    so a demand that stops arriving means something else."""
+    events = recorder('needed_deceleration_update')
+    run(bsw, make_own_vehicle, make_vehicle, relate_to_own, [], speed=50.0)
+    assert events.last('needed_deceleration_update') == {
+        'deceleration': 0.0, 'source': 'blind_spot'}
+
+
+def test_the_level_reaches_the_ui_in_the_event(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own, recorder):
+    """``left``/``right`` stay for subscribers that predate the levels."""
+    events = recorder('blind_spot_warning_changed')
+    merging(bsw, make_own_vehicle, make_vehicle, relate_to_own)
+    assert events.last('blind_spot_warning_changed') == {
+        'left': True, 'right': False, 'left_level': 3, 'right_level': 0}
+
+def test_the_yaw_rate_makes_the_acute_warning_arrive_before_the_heading_does(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Measured in ``simulation_tests`` scenario 22 and fixed here.
+
+    One degree of heading across a 1.8 m gap is six seconds of travel, so the
+    heading alone says "no conflict" - while the driver is already 20 deg/s
+    into the turn and a second from contact. Same instant, same heading, only
+    ``ang_vel`` differs.
+    """
+    others = [dict(x=3.5, y=-15.0, heading=0.0, speed=55.0)]
+    straight = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                   heading=-1.0, speed=25.0)
+    assert straight['right_level'] <= 1
+
+    bsw.clock.advance(10.0)
+    turning = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                  heading=-1.0, speed=25.0, ang_vel=YAW_20_DEG_S_RIGHT)
+    assert turning['right_level'] >= 2
+
+
+def test_cornering_beside_another_car_is_not_an_acute_warning(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """``simulation_tests`` scenario 24, and it took three runs to see it.
+
+    Two cars side by side at 107 km/h through a long bend, 5.5 m apart, with a
+    2.4 degree heading difference between them - the rest of the corner one
+    has already taken and the other has not. Extrapolated for 2.5 s that is
+    70 m of travel, over which a couple of degrees is several metres of
+    lateral error, and the prediction has them meeting in 1.9 s. They did not
+    meet; they drove on like that.
+
+    What keeps it quiet is ``STEADY_TTC_S``: without a relative yaw rate that
+    shows somebody actually steering into somebody, the warning only looks
+    1.5 s ahead, where that error is under half a metre.
+
+    The *relative* yaw here is 2 deg/s. Over the whole run it never exceeded
+    10.6, which is the measurement ``path_conflict._MIN_RELATIVE_YAW_RATE``
+    sits above.
+    """
+    others = [dict(x=-5.5, y=0.5, heading=2.4, speed=107.0,
+                   ang_vel=yaw_units(10.4))]
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                 heading=0.0, speed=107.0, ang_vel=yaw_units(8.7))
+    assert result['left_level'] <= 1
+    assert result['deceleration'] == 0.0
+
+
+def test_turning_in_behind_traffic_that_has_already_passed_is_quiet(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """``simulation_tests`` scenario 25, at the frame it used to fire.
+
+    The numbers are LFS's own: we are turning right at 22 km/h with 36 deg/s
+    on the wheel, and an RB4 doing 93 km/h is drawing level 7 m away. We are
+    indeed about to be in its lane - in 1.4 s - and it is indeed close behind
+    - 0.06 s. Those are two different moments, and by the first one it is 27 m
+    down the road. Nothing happens, and nothing should be announced.
+    """
+    others = [dict(x=-71.06, y=87.61, heading=0.02, speed=92.8,
+                   cname=b"RB4", ang_vel=-1)]
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                 x=-75.58, y=93.25, heading=357.08, speed=22.3,
+                 cname=b"RB4", ang_vel=-623)
+    assert result['right_level'] <= 1
+    assert result['deceleration'] == 0.0
+
+
+def test_the_full_warning_time_needs_a_manoeuvre_behind_it(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """``STEADY_TTC_S`` against ``ACUTE_TTC_S``, on one geometry.
+
+    A car closing on a shallow angle two seconds out. Held at that angle it is
+    a prediction from a couple of degrees over 2 s, and the warning waits; with
+    the wheel visibly going over it is a manoeuvre, and the warning comes at
+    once. The cost of the first case is one second of warning time, and there
+    is still a second left before contact.
+    """
+    others = [dict(x=-3.5, y=-8.0, heading=0.0, speed=70.0)]
+
+    steady = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                 heading=2.0, speed=60.0)
+    assert steady['left_level'] <= 1
+
+    bsw.clock.advance(10.0)
+    manoeuvring = run(bsw, make_own_vehicle, make_vehicle, relate_to_own,
+                      others, heading=2.0, speed=60.0,
+                      ang_vel=yaw_units(15.0))
+    assert manoeuvring['left_level'] == 2
+
+
+def test_racing_side_by_side_through_a_bend_is_never_an_acute_warning(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Scenario 24 again, from the run where the two cars were closer.
+
+    3.4 m apart instead of 5.5 at 105 km/h, and the same persistent 2.5
+    degrees between them now predicts contact in 1.0 s - inside even the
+    shortened horizon. Both cars are cornering (8.1 and 6.4 deg/s) and neither
+    is steering into the other, so the angle between them *is* the bend, and
+    nothing is extrapolated at all: only a real overlap would warn.
+
+    Driving alongside somebody through a corner must not blink and beep, or
+    the driver switches the system off and it protects nothing.
+    """
+    others = [dict(x=-3.4, y=0.3, heading=0.0, speed=105.0,
+                   ang_vel=yaw_units(6.4))]
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                 heading=2.5, speed=105.0, ang_vel=yaw_units(8.1))
+    assert result['left_level'] <= 1
+    assert result['deceleration'] == 0.0
+
+
+def test_a_straight_road_still_gets_the_steady_warning(
+        bsw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The corner rule must not silence the case it is not about.
+
+    Same convergence, nobody cornering: one car is drifting into the other on
+    a straight, and that is worth a warning even without a yaw rate to prove
+    a manoeuvre.
+    """
+    others = [dict(x=-3.4, y=0.3, heading=0.0, speed=105.0)]
+    result = run(bsw, make_own_vehicle, make_vehicle, relate_to_own, others,
+                 heading=2.5, speed=105.0)
+    assert result['left_level'] == 2

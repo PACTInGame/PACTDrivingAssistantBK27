@@ -2,6 +2,9 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from assistance.base_system import AssistanceSystem
+from assistance.path_conflict import (
+    BRAKE_DEMAND_MS2, INF, MIN_CORNERING_YAW, MIN_MANOEUVRE_YAW, Body,
+    body_from, contact_window, free_distance, stopping_deceleration)
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.helpers import calc_polygon_points
@@ -17,6 +20,12 @@ HEADING_DIVISOR = 182.05    # LFS-Heading-Einheiten pro Grad
 # Erlaubte Heading-Abweichung, damit ein Auto ueberhaupt als "faehrt in unsere
 # Richtung" gilt. 5000 Einheiten ~ 27.5 Grad - der Wert dieses Projekts.
 HEADING_THRESHOLD_UNITS = 5000
+# Fuer die Akutstufen ist derselbe Wert zu eng. Wer in fliessenden Verkehr
+# abbiegt, steht im entscheidenden Moment schraeg zur Zielspur - 27 Grad
+# schliessen genau die Situation aus, um die es geht. 12000 Einheiten ~ 66
+# Grad lassen das Abbiegen zu und halten Querverkehr (90 Grad, Sache der
+# Querverkehrswarnung) und Gegenverkehr (180 Grad) weiter draussen.
+ACUTE_HEADING_THRESHOLD_UNITS = 12000
 
 # Umriss eines fremden Autos: ein zentralsymmetrisches Viereck mit 2.3 m
 # Radius, also ~4.3 m lang und ~1.7 m breit.
@@ -35,10 +44,11 @@ _CORRIDOR_ANGLES_LEFT = (90, 177, 178, 90)
 _CORRIDOR_ANGLES_RIGHT = (270, 183, 182, 270)
 
 
-def _is_within_threshold(own_heading, other_heading):
+def _is_within_threshold(own_heading, other_heading,
+                        threshold=HEADING_THRESHOLD_UNITS):
     # Checks if the heading of another car is within a threshold
-    lower_bound = (other_heading - HEADING_THRESHOLD_UNITS) % 65536
-    upper_bound = (other_heading + HEADING_THRESHOLD_UNITS) % 65536
+    lower_bound = (other_heading - threshold) % 65536
+    upper_bound = (other_heading + threshold) % 65536
 
     if lower_bound > upper_bound:
         return own_heading > lower_bound or own_heading < upper_bound
@@ -87,13 +97,43 @@ def _create_blindspot_rectangle(x: float, y: float, angle_of_car: float,
 
 
 class BlindSpotWarning(AssistanceSystem):
-    """Toter-Winkel-Warner
+    """Toter-Winkel-Warner - drei Stufen je Seite.
 
-    Geometrie: zwei lange, schmale Korridore links und rechts, die von der
-    Fahrzeugmitte bis 85 m nach hinten reichen und seitlich etwa 1 bis 4.5 m
-    von der eigenen Achse entfernt liegen - also die Nachbarspur.
+    ===== ================================================================
+    Stufe Bedeutung
+    ===== ================================================================
+    0     nichts
+    1     **Anzeige**: da ist jemand im toten Winkel. Reine Geometrie, kein
+          Konflikt - der Fahrer soll es wissen, bevor er den Blinker setzt.
+    2     **Akutwarnung**, blinkend und akustisch: die beiden Umrisse
+          beruehren sich innerhalb von ``ACUTE_TTC_S`` - auf der Geraden oder
+          auf dem Bogen, den die Gierrate beschreibt. Das deckt beide Faelle
+          ab, die der Fahrer als gefaehrlich erlebt: "ich komme ihm zu nahe"
+          und "ich fahre in seinen Pfad".
+    3     **Bremseingriff**: Stufe 2, wir fahren langsam
+          (``BRAKE_SPEED_KMH``), das andere Auto kommt von hinten und ist
+          deutlich schneller (``MIN_APPROACH_DELTA_KMH``) - das Abbiegen in
+          fliessenden Verkehr. Die Sollverzoegerung geht als
+          ``needed_deceleration_update`` mit ``source='blind_spot'`` an
+          ``EmergencyBrake``, der allein entscheidet, ob daraus ein Eingriff
+          wird (reference/control-intervention.md).
+    ===== ================================================================
 
-    Ausloesekriterium (reference/systems.md):
+    **Stufe 1 und Stufe 2/3 beantworten verschiedene Fragen und benutzen
+    deshalb verschiedene Geometrie.** Stufe 1 fragt "steht jemand dort, wo
+    kein Spiegel hinsieht" - das ist ein fester Korridor neben *uns*, und der
+    dreht sich mit unserem Heading mit. Stufe 2/3 fragt "treffen sich die
+    beiden Umrisse" - und genau waehrend des Einlenkens dreht sich der
+    Korridor von dem Auto **weg**, auf das wir zufahren. Haetten die Akutstufen
+    am Korridortreffer gehangen, waere die Warnung in dem Moment verstummt, in
+    dem sie gebraucht wird. Die Physik dafuer steht in
+    ``assistance/path_conflict.py``.
+
+    Geometrie der Stufe 1: zwei lange, schmale Korridore links und rechts, die
+    von der Fahrzeugmitte bis 85 m nach hinten reichen und seitlich etwa 1 bis
+    4.5 m von der eigenen Achse entfernt liegen - also die Nachbarspur.
+
+    Ausloesekriterium Stufe 1 (reference/systems.md):
 
     1. **Geometrie** - der Umriss des anderen Autos schneidet den Korridor.
     2. **Bewegung** - das andere Auto faehrt (``MIN_OTHER_SPEED_KMH``) und
@@ -116,11 +156,13 @@ class BlindSpotWarning(AssistanceSystem):
     <= 0. Genau der haeufigste Fall, ein Auto das mit gleicher Geschwindigkeit
     im toten Winkel mitfaehrt, konnte damit nie warnen.
 
-    Kosten pro Zyklus: zwei Float-Vergleiche und ein Modulo-Test pro Fahrzeug
-    (~40), danach ein shapely-Polygon plus zwei ``intersects`` nur fuer die
-    Fahrzeuge, die alle Vorfilter ueberstanden haben - im Normalfall keines
-    bis zwei. Vorher war es ein Polygon pro Fahrzeug pro Zyklus, ohne jede
-    Vorauswahl (known-issues #7).
+    Kosten pro Zyklus: zwei Float-Vergleiche und ein Abstandsvergleich pro
+    Fahrzeug (~40). Fuer die wenigen, die den Naeherungsfilter ueberstehen,
+    kommt ein ``Body`` und ein Kontaktfenster dazu (vier Achsen, keine
+    Allokation ausser dem ``Body``); ein shapely-Polygon plus zwei
+    ``intersects`` kostet nur, wer zusaetzlich alle Stufe-1-Filter besteht -
+    im Normalfall keines bis zwei. Vorher war es ein Polygon pro Fahrzeug pro
+    Zyklus, ohne jede Vorauswahl (known-issues #7).
     """
 
     # ─── Erfassungsbereich ────────────────────────────────────────────
@@ -136,7 +178,7 @@ class BlindSpotWarning(AssistanceSystem):
     SIDE_GATE_MAX_DEG = 300.0
     NEAR_BYPASS_M = 5.0
 
-    # ─── Relevanz ─────────────────────────────────────────────────────
+    # ─── Relevanz (Stufe 1) ───────────────────────────────────────────
     # Toter Winkel im engeren Sinn: bis hierher sieht der Spiegel nicht,
     # gemessen ab Fahrzeugmitte (ISO 17387: Heck plus 3 m, bei ~4.5 m
     # Fahrzeuglaenge also rund 7 m ab Mitte).
@@ -159,6 +201,79 @@ class BlindSpotWarning(AssistanceSystem):
     MIN_OTHER_SPEED_KMH = 5.0
     MAX_TRAILING_SPEED_KMH = 2.0
 
+    # ─── Akutstufen (2 und 3) ─────────────────────────────────────────
+    # Vorwarnzeit bis zur Beruehrung. ISO 17387 gibt fuer den
+    # Spurwechselassistenten 3.5 s als Erfassungskriterium vor; eine Warnung,
+    # die blinkt und piept, soll aber erst kommen, wenn wirklich etwas
+    # passiert - sonst schaltet der Fahrer sie ab. 2.5 s ist eine
+    # Lenkbewegung und eine Reaktionszeit.
+    ACUTE_TTC_S = 2.5
+    # ...aber nur, solange die Vorhersage so weit traegt.
+    #
+    # Eine Beruehrung in 2.5 s bei 110 km/h liegt ueber 70 m voraus, und ueber
+    # 70 m macht ein Grad Winkelfehler 1.2 m Querversatz. Zwei Autos, die
+    # nebeneinander dieselbe Kurve fahren, haben dauerhaft ein paar Grad
+    # Headingunterschied - den Rest der Kurve, den der eine schon genommen hat
+    # und der andere noch vor sich - und *jede* Fortschreibung laesst sie
+    # daraus ineinanderlaufen. Gemessen in ``simulation_tests`` Szenario 24:
+    # 5.5 m Abstand, 2.4 Grad Unterschied, vorhergesagte Beruehrung in 1.9 s -
+    # und in Wirklichkeit fuhren sie so weiter. ``path_conflict.contact_window``
+    # sagt, warum auch ein Bogen das nicht rettet.
+    #
+    # Also wird der Horizont an das gebunden, was ihn traegt: die volle
+    # Vorwarnzeit gibt es, wenn die *relative* Gierrate ein echtes Manoever
+    # zeigt - jemand lenkt in jemanden hinein, dieselbe Schwelle, die
+    # ``path_conflict`` fuer den Bogen benutzt. Ohne das, also zwischen zwei
+    # Autos in unveraenderter Formation, wird nur bis STEADY_TTC_S
+    # vorausgeschaut, wo der Querversatzfehler unter einem halben Meter
+    # bleibt.
+    #
+    # Das kostet in genau einem Fall Vorwarnzeit: jemand faehrt mit
+    # unveraendertem Lenkrad schraeg auf uns zu. Dann kommt die Warnung bei
+    # 1.5 s statt 2.5 s - immer noch eine Sekunde vor dem Kontakt, und immer
+    # noch mit dem Bremseingriff dahinter.
+    #
+    # Und auch 1.5 s sind noch zu viel, wenn **beide** eine Kurve fahren: im
+    # zweiten von drei Durchlaeufen von Szenario 24 standen die Autos 3.4 m
+    # statt 5.5 m auseinander, und derselbe Dauerwinkel sagte dann Kontakt in
+    # 1.0 s voraus. Dort wird deshalb gar nicht mehr vorausgeschaut - siehe
+    # ``_prediction_horizon`` und ``MIN_CORNERING_YAW``. Nebeneinander durch
+    # eine Kurve zu fahren ist kein Spurwechsel, und ein Warner, der beim
+    # Nebeneinanderfahren blinkt und piept, wird abgeschaltet.
+    STEADY_TTC_S = 1.5
+    # Darueber wird nicht gebremst: ein Spurwechsel bei Tempo ist mit dem
+    # Lenkrad zu korrigieren, und eine Vollbremsung im fliessenden Verkehr
+    # schafft das naechste Problem hinter uns. Der Fall, den Stufe 3 abdeckt,
+    # ist das Abbiegen/Einfaedeln aus dem Stand heraus.
+    BRAKE_SPEED_KMH = 30.0
+    # "Deutlich schneller". Darunter reicht Lenken oder Gaswegnehmen, und ein
+    # Eingriff waere eine Bevormundung; darueber ist die Zeit dafuer weg.
+    MIN_APPROACH_DELTA_KMH = 10.0
+    # Restabstand zum Fahrschlauch des anderen und Wirkzeit des Eingriffs -
+    # dieselben Groessen und dieselbe Begruendung wie in der
+    # Querverkehrswarnung.
+    SAFETY_BUFFER_M = 1.0
+    REACTION_TIME_S = 0.2
+    # Laengenzugabe fuer den Naeherungsfilter der Akutstufen: zwei Fahrzeuge
+    # von je 5 m koennen sich schon beruehren, wenn ihre Mittelpunkte noch
+    # 10 m auseinander sind.
+    PAIR_EXTENT_M = 10.0
+    # ─── Was die Akutstufen *nicht* sind ──────────────────────────────
+    # Ein Auto, das in unserer eigenen Spur hinter uns auflaeuft, ist kein
+    # Spurwechselkonflikt, sondern ein Auffahrender - und auf welcher Seite es
+    # angezeigt wuerde, entscheidet bei einem mittig folgenden Auto das
+    # Rauschen. Solche Paare werden aussortiert: gleiche Spur *und* parallele
+    # Fahrtrichtung. Sobald einer von beiden einlenkt, ist es wieder ein Fall
+    # fuer dieses System - genau der Moment, um den es geht.
+    #
+    # Toleranz: eine halbe Fahrzeugbreite ueber die Summe der beiden halben
+    # Breiten hinaus, damit ein leicht versetzt folgendes Auto noch als
+    # "gleiche Spur" zaehlt.
+    SAME_LANE_TOLERANCE_M = 0.5
+    # 2 Grad. Deutlich ueber der Aufloesung des Headings (1/182 Grad) und
+    # deutlich unter dem Winkel, den ein beginnender Spurwechsel erzeugt.
+    MIN_CONVERGENCE_SIN = 0.035
+
     # ─── Haltezeit ────────────────────────────────────────────────────
     MEAN_VEHICLE_LENGTH_M = 4.5
     HOLD_MIN_S = 0.5
@@ -168,9 +283,17 @@ class BlindSpotWarning(AssistanceSystem):
         super().__init__("blind_spot_warning", event_bus, settings)
         self.left_warning = False
         self.right_warning = False
-        # Ablaufzeitpunkte der Haltezeit, siehe Klassendoku.
+        self.left_level = 0
+        self.right_level = 0
+        # Ablaufzeitpunkte der Haltezeit, siehe Klassendoku. Je Seite eine
+        # fuer die Anzeige (Stufe 1) und eine fuer die Akutwarnung (Stufe 2).
+        # Stufe 3 bekommt keine: sie fordert eine Bremsung an, und die darf
+        # keine Sekunde laenger stehen als die Rechnung sie traegt -
+        # ``EmergencyBrake`` bringt seine eigene Hysterese mit.
         self._left_until = 0.0
         self._right_until = 0.0
+        self._left_acute_until = 0.0
+        self._right_acute_until = 0.0
         # Zaehler fuer den Test des Vorfilters: wie viele shapely-Polygone
         # der letzte Zyklus gebaut hat.
         self.polygons_built = 0
@@ -189,7 +312,11 @@ class BlindSpotWarning(AssistanceSystem):
         self.polygons_built = 0
         rectangle_left: Optional[Polygon] = None
         rectangle_right: Optional[Polygon] = None
+        own_body: Optional[Body] = None
         hit_left = hit_right = False
+        acute_left = acute_right = False
+        brake_left = brake_right = False
+        deceleration = 0.0
 
         for vehicle in vehicles.values():
             data = vehicle.data
@@ -201,17 +328,56 @@ class BlindSpotWarning(AssistanceSystem):
             if distance > self.NEAR_BYPASS_M and not (
                     self.SIDE_GATE_MIN_DEG <= data.angle_to_player <= self.SIDE_GATE_MAX_DEG):
                 continue
-            if not _is_within_threshold(own.heading, data.heading):
-                continue
 
             if not self._is_moving_relevantly(own.speed, data.speed):
                 continue
 
             other_speed_ms = data.speed * KMH_TO_MS
+
+            # ─── Stufen 2 und 3: Kontaktvorhersage ────────────────────
+            # Naeherungsfilter zuerst: die Relativgeschwindigkeit ist nie
+            # groesser als die Summe der beiden Betraege, also kann es
+            # innerhalb von ACUTE_TTC_S nicht knallen, wenn wir weiter
+            # auseinander sind als das.
+            acute_level = 0
+            if distance <= self.ACUTE_TTC_S * (own_speed_ms + other_speed_ms) \
+                    + self.PAIR_EXTENT_M \
+                    and _is_within_threshold(own.heading, data.heading,
+                                             ACUTE_HEADING_THRESHOLD_UNITS):
+                if own_body is None:
+                    own_body = body_from(own, own_speed_ms)
+                other_body = body_from(data, other_speed_ms)
+                acute_level, demand = self._acute_state(own, own_body,
+                                                        other_body, data)
+                if demand > deceleration:
+                    deceleration = demand
+                if acute_level:
+                    on_left = self._is_on_left(own_body, other_body)
+                    hold_until = now + self._hold_time(own_speed_ms,
+                                                       other_speed_ms)
+                    if on_left:
+                        hit_left = True
+                        acute_left = True
+                        brake_left = brake_left or acute_level >= 3
+                        self._left_until = max(self._left_until, hold_until)
+                        self._left_acute_until = max(self._left_acute_until,
+                                                     hold_until)
+                    else:
+                        hit_right = True
+                        acute_right = True
+                        brake_right = brake_right or acute_level >= 3
+                        self._right_until = max(self._right_until, hold_until)
+                        self._right_acute_until = max(self._right_acute_until,
+                                                      hold_until)
+
+            # ─── Stufe 1: der Korridor ────────────────────────────────
+            if hit_left and hit_right:
+                continue
+            if not _is_within_threshold(own.heading, data.heading):
+                continue
             if not self._is_relevant(distance, own_speed_ms, other_speed_ms):
                 continue
 
-            # ─── Erst jetzt Geometrie ─────────────────────────────────
             if rectangle_left is None:
                 angle_of_car = car_angle_degrees(own.heading)
                 rectangle_left = _create_blindspot_rectangle(
@@ -230,24 +396,184 @@ class BlindSpotWarning(AssistanceSystem):
             if _polygon_intersect(other_rectangle, rectangle_right):
                 hit_right = True
                 self._right_until = max(self._right_until, hold_until)
-            if hit_left and hit_right:
-                break
 
-        blindspot_l = hit_left or now < self._left_until
-        blindspot_r = hit_right or now < self._right_until
+        left_level = self._level_for(brake_left, acute_left, hit_left,
+                                     self._left_acute_until, self._left_until,
+                                     now)
+        right_level = self._level_for(brake_right, acute_right, hit_right,
+                                      self._right_acute_until,
+                                      self._right_until, now)
 
-        if blindspot_l != self.left_warning or blindspot_r != self.right_warning:
-            self.left_warning = blindspot_l
-            self.right_warning = blindspot_r
-
-            self.event_bus.emit('blind_spot_warning_changed', {
-                'left': self.left_warning,
-                'right': self.right_warning
-            })
+        self._publish(left_level, right_level, deceleration)
         return {
             'left_warning': self.left_warning,
-            'right_warning': self.right_warning
+            'right_warning': self.right_warning,
+            'left_level': self.left_level,
+            'right_level': self.right_level,
+            'deceleration': deceleration,
         }
+
+    # ─── Ausgabe ──────────────────────────────────────────────────────
+
+    def _level_for(self, braking: bool, acute: bool, present: bool,
+                   acute_until: float, present_until: float,
+                   now: float) -> int:
+        if braking:
+            return 3
+        if acute or now < acute_until:
+            return 2
+        if present or now < present_until:
+            return 1
+        return 0
+
+    def _publish(self, left_level: int, right_level: int,
+                 deceleration: float):
+        """Warnzustand nur bei Änderung, Sollverzögerung jeden Zyklus.
+
+        ``left``/``right`` bleiben im Payload: sie sind die Frage "ist da
+        ueberhaupt jemand", die es seit jeher gibt, und ein Abonnent, der die
+        Stufen nicht kennt, soll weiter funktionieren (reference/events.md:
+        Schluessel duerfen dazukommen, nie verschwinden).
+        """
+        self.event_bus.emit('needed_deceleration_update', {
+            'deceleration': deceleration,
+            'source': 'blind_spot',
+        })
+        if left_level == self.left_level and right_level == self.right_level:
+            return
+        self.left_level = left_level
+        self.right_level = right_level
+        self.left_warning = left_level > 0
+        self.right_warning = right_level > 0
+        self.event_bus.emit('blind_spot_warning_changed', {
+            'left': self.left_warning,
+            'right': self.right_warning,
+            'left_level': left_level,
+            'right_level': right_level,
+        })
+
+    # ─── Akutstufen ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _is_on_left(own_body: Body, other_body: Body) -> bool:
+        """Liegt das andere Auto links von unserer Fahrtrichtung?
+
+        Dasselbe Kreuzprodukt wie in der Querverkehrswarnung: im
+        rechtshaendigen LFS-System (conventions.md §1) heisst positiv links.
+        Bewusst nicht ueber den Korridortreffer bestimmt - die Akutstufen
+        haengen nicht am Korridor (siehe Klassendoku).
+        """
+        return (own_body.dx * (other_body.y - own_body.y)
+                - own_body.dy * (other_body.x - own_body.x)) > 0.0
+
+    def _acute_state(self, own, own_body: Body, other_body: Body,
+                     data) -> Tuple[int, float]:
+        """(Stufe, Sollverzoegerung) fuer genau ein Fahrzeug.
+
+        Stufe ist 0, 2 oder 3 - Stufe 1 entsteht aus dem Korridor und nicht
+        hier. Die Sollverzoegerung wird auch unterhalb von Stufe 3
+        zurueckgegeben, sobald Bremsen ueberhaupt helfen wuerde: die Schwelle
+        gehoert ``EmergencyBrake``, hier wird nur gerechnet.
+        """
+        if self._is_plain_following(own_body, other_body):
+            return 0, 0.0
+        if not self._contact_is_imminent(own_body, other_body):
+            return 0, 0.0
+        free = free_distance(own_body, other_body)
+
+        # ─── Stufe 3: Einfaedeln in fliessenden Verkehr ───────────────
+        if own.speed >= self.BRAKE_SPEED_KMH:
+            return 2, 0.0
+        if data.speed - own.speed < self.MIN_APPROACH_DELTA_KMH:
+            return 2, 0.0
+        # "Von hinten": vor uns ist es kein Toter-Winkel-Fall, sondern
+        # Laengsverkehr - und der gehoert der Kollisionswarnung.
+        if (own_body.dx * (other_body.x - own_body.x)
+                + own_body.dy * (other_body.y - own_body.y)) >= 0.0:
+            return 2, 0.0
+
+        if free == INF or free <= 0.0:
+            # ``inf``: wir geraten gar nicht in seinen Fahrschlauch, er kommt
+            # zu uns - dagegen hilft Bremsen nicht.
+            # ``0``: wir stehen schon darin. Hier ist Bremsen sogar falsch -
+            # er kommt von hinten und ist schneller, also verlaengert jede
+            # Verzoegerung seine Annaeherung und haelt uns laenger in seinem
+            # Weg. Das ist der Unterschied zur Querverkehrswarnung, wo wir
+            # diejenigen sind, die auffahren.
+            return 2, 0.0
+
+        demand = stopping_deceleration(free, own_body.speed,
+                                       self.SAFETY_BUFFER_M,
+                                       self.REACTION_TIME_S)
+        return (3 if demand >= BRAKE_DEMAND_MS2 else 2), demand
+
+    def _contact_is_imminent(self, own_body: Body, other_body: Body) -> bool:
+        """Beruehren sich die beiden Umrisse innerhalb von ``ACUTE_TTC_S``?
+
+        Das ist die *ganze* Bedingung fuer Stufe 2, und es deckt beide Faelle
+        ab, die der Fahrer als gefaehrlich erlebt: "ich komme ihm zu nahe"
+        (Kontakt praktisch sofort) und "ich fahre in seinen Pfad" (Kontakt in
+        ein bis zwei Sekunden, weil *wir* uns quer bewegen). Der zweite Fall
+        haengt daran, dass :func:`contact_window` beim Lenken den Bogen
+        mitrechnet - ohne das sieht ein unveraenderliches Heading den
+        Spurwechsel erst, wenn er passiert ist.
+
+        Hier stand vorher zusaetzlich ein Kriterium aus zwei Zeiten: "wir sind
+        gleich in seinem Fahrschlauch" und "er ist uns dicht auf". Beide
+        stimmten - aber sie beschrieben **verschiedene Augenblicke** und
+        wurden trotzdem verglichen. In ``simulation_tests`` Szenario 25 (nach
+        vorbeifahrendem Verkehr langsam rechts abbiegen) waren wir in 1.4 s in
+        seinem Fahrschlauch und er 0.06 s hinter uns - und genau deshalb war
+        er laengst 27 m weiter, wenn wir dort ankamen. Die Warnung blinkte und
+        piepte fuer einen Konflikt, der nie einer war. Die Kontaktvorhersage
+        beantwortet dieselbe Frage richtig, weil sie beide zur selben Zeit
+        betrachtet.
+        """
+        window = contact_window(own_body, other_body)
+        if window is None or window[1] < 0.0:
+            # Kein Kontakt, oder er liegt hinter uns.
+            return False
+        if window[0] == -INF:
+            # Die beiden ueberlappen "seit immer und fuer immer": gleiche
+            # Geschwindigkeit, gleiche Richtung, Umrisse ineinander. Das ist
+            # kein Ereignis, sondern ein Zustand, den LFS so gar nicht liefern
+            # kann - und eine Warnung ohne Anfang koennte nie wieder aufhoeren.
+            return False
+        return window[0] <= self._prediction_horizon(own_body, other_body)
+
+    def _prediction_horizon(self, own_body: Body, other_body: Body) -> float:
+        """Wie weit voraus eine Beruehrung noch eine Warnung wert ist.
+
+        Siehe ``STEADY_TTC_S``: die volle Vorwarnzeit nur, wenn die relative
+        Gierrate ein Manoever zeigt.
+        """
+        if abs(own_body.yaw_rate - other_body.yaw_rate) >= MIN_MANOEUVRE_YAW:
+            return self.ACUTE_TTC_S
+        if min(abs(own_body.yaw_rate),
+               abs(other_body.yaw_rate)) >= MIN_CORNERING_YAW:
+            # Beide fahren eine Kurve, und keiner lenkt in den anderen. Dann
+            # *ist* der Winkel zwischen ihnen die Kurve, und vorausgeschaut
+            # wird gar nicht mehr: gewarnt wird nur noch, wenn sich die
+            # Umrisse wirklich beruehren. Siehe STEADY_TTC_S.
+            return 0.0
+        return self.STEADY_TTC_S
+
+    def _is_plain_following(self, own_body: Body, other_body: Body) -> bool:
+        """Faehrt das andere Auto schlicht in unserer Spur hinter uns her?
+
+        Gleiche Spur (Querversatz kleiner als die beiden halben Breiten plus
+        Toleranz) **und** parallele Fahrtrichtung. Siehe
+        ``SAME_LANE_TOLERANCE_M`` - beides muss zutreffen, damit ein
+        beginnendes Einlenken das Paar sofort wieder interessant macht.
+        """
+        to_other_x = other_body.x - own_body.x
+        to_other_y = other_body.y - own_body.y
+        lateral = abs(own_body.dx * to_other_y - own_body.dy * to_other_x)
+        if lateral > (own_body.width + other_body.width) / 2.0                 + self.SAME_LANE_TOLERANCE_M:
+            return False
+        converging = abs(own_body.dx * other_body.dy
+                         - own_body.dy * other_body.dx)
+        return converging <= self.MIN_CONVERGENCE_SIN
 
     # ─── Relevanz und Haltezeit ───────────────────────────────────────
 

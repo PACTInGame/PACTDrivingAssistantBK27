@@ -15,9 +15,11 @@ from lfs.lfs_state import (SCREEN_ENTRY, SCREEN_GAME, SCREEN_GARAGE,
 from vehicles.car_profiles import REDLINE_SETTLE_S, CarProfiles
 from ui import ui_manager as ui_module
 from ui.menu_system import MenuSystem
-from ui.ui_manager import (ALL_BUTTONS_RANGE, BTN_EMERGENCY_BRAKE,
+from ui.ui_manager import (ALL_BUTTONS_RANGE, BTN_BSW_LEFT, BTN_BSW_RIGHT,
+                           BTN_EMERGENCY_BRAKE,
                            BTN_HUD_GEAR, BTN_HUD_RPM, BTN_HUD_SPEED,
-                           BTN_IDLE_BANNER, BTN_NOTIFICATION,
+                           BTN_IDLE_BANNER, BTN_NOTIFICATION, BSW_ACUTE_AUDIO,
+                           BSW_ACUTE_BEEP_INTERVAL_S, BSW_TEXTS,
                            EMERGENCY_BRAKE_TEXT, HUD_BOX_BOTTOM,
                            HUD_BOX_LEFT, HUD_BOX_RIGHT, HUD_BOX_TOP,
                            MAX_QUEUED_NOTIFICATIONS, NOTIFICATION_DISPLAY_S,
@@ -786,3 +788,126 @@ def test_all_buttons_range_covers_the_whole_map():
            if name.startswith('BTN_') and isinstance(value, int)]
 
     assert all(first <= button_id <= last for button_id in ids)
+
+
+# --- Blind spot: three levels, and only level 2 blinks ----------------------
+
+
+def _bsw_styles(ui, fake_connector, clock, button=BTN_BSW_LEFT,
+                passes=8, step=0.05):
+    styles = []
+    for _ in range(passes):
+        ui.update_hud()
+        entry = fake_connector.last_button(button)
+        if entry is not None:
+            styles.append(entry[1])
+        clock.advance(step)
+    return styles
+
+
+def test_blind_spot_level_one_is_steady(bus, ui, fake_connector, clock):
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed',
+             {'left': True, 'right': False, 'left_level': 1, 'right_level': 0})
+
+    styles = _bsw_styles(ui, fake_connector, clock)
+
+    assert set(styles) == {pyinsim.ISB_DARK}
+    assert fake_connector.last_button(BTN_BSW_LEFT)[6] == BSW_TEXTS[1].encode()
+
+
+def test_blind_spot_level_two_blinks(bus, ui, fake_connector, clock):
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed',
+             {'left': True, 'right': False, 'left_level': 2, 'right_level': 0})
+
+    styles = _bsw_styles(ui, fake_connector, clock)
+
+    assert pyinsim.ISB_DARK in styles
+    assert pyinsim.ISB_LIGHT in styles
+    assert fake_connector.last_button(BTN_BSW_LEFT)[6] == BSW_TEXTS[2].encode()
+
+
+def test_blind_spot_level_three_stays_lit(bus, ui, fake_connector, clock):
+    """Same reason the intervention indicator does not blink: a field that is
+    dark half the time can be dark exactly when the driver looks at it."""
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed',
+             {'left': False, 'right': True, 'left_level': 0, 'right_level': 3})
+
+    styles = _bsw_styles(ui, fake_connector, clock, button=BTN_BSW_RIGHT)
+
+    assert set(styles) == {pyinsim.ISB_LIGHT}
+    assert fake_connector.last_button(BTN_BSW_RIGHT)[6] == BSW_TEXTS[3].encode()
+
+
+def test_the_acute_warning_sounds_and_repeats(bus, ui, recorder, clock):
+    """It has to keep sounding while it stands - one gong at the start is a
+    notification, not a warning."""
+    played = recorder('play_audio')
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed',
+             {'left': True, 'right': False, 'left_level': 2, 'right_level': 0})
+
+    assert played.last('play_audio') == {'audio_file': BSW_ACUTE_AUDIO}
+    assert played.count('play_audio') == 1
+
+    # Within the interval, no second one.
+    ui.update_hud()
+    assert played.count('play_audio') == 1
+
+    clock.advance(BSW_ACUTE_BEEP_INTERVAL_S + 0.01)
+    ui.update_hud()
+    assert played.count('play_audio') == 2
+
+
+def test_level_one_is_silent(bus, ui, recorder, clock):
+    played = recorder('play_audio')
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed',
+             {'left': True, 'right': False, 'left_level': 1, 'right_level': 0})
+    for _ in range(5):
+        ui.update_hud()
+        clock.advance(BSW_ACUTE_BEEP_INTERVAL_S + 0.01)
+
+    assert played.count('play_audio') == 0
+
+
+def test_a_payload_without_levels_is_read_as_level_one(bus, ui,
+                                                       fake_connector, clock):
+    """``left``/``right`` alone is the shape the event had before the levels,
+    and reference/events.md says keys may be added, never removed."""
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed', {'left': True, 'right': False})
+    ui.update_hud()
+
+    assert fake_connector.last_button(BTN_BSW_LEFT)[6] == BSW_TEXTS[1].encode()
+
+
+def test_no_blind_spot_button_while_buttons_are_not_allowed(bus, ui,
+                                                            fake_connector):
+    """It used to be drawn straight from the event, with no context check, so
+    a warning arriving during an LFS dialog landed on a screen we may not
+    draw on - and never came back after SHIFT+B."""
+    bus.emit('state_data', on_track_state(buttons_allowed=False, dialog=True))
+    bus.emit('blind_spot_warning_changed',
+             {'left': True, 'right': False, 'left_level': 2, 'right_level': 0})
+    ui.update_hud()
+
+    assert BTN_BSW_LEFT not in fake_connector.drawn_ids()
+
+
+def test_the_blind_spot_warning_survives_a_button_clear(bus, ui,
+                                                        fake_connector):
+    """SHIFT+B throws our buttons away; everything drawn per UI pass comes
+    back by itself (reference/ui.md §1.5)."""
+    bus.emit('state_data', on_track_state())
+    bus.emit('blind_spot_warning_changed',
+             {'left': True, 'right': False, 'left_level': 2, 'right_level': 0})
+    ui.update_hud()
+
+    fake_connector.reset()
+    bus.emit('buttons_cleared', {})
+    ui.update_hud()
+
+    assert BTN_BSW_LEFT in fake_connector.drawn_ids()

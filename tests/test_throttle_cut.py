@@ -14,10 +14,16 @@ import os
 
 import pytest
 
+import contextlib
+
 import guardian
 from Controls.handover_marker import HandoverMarker
 from Controls.throttle_axis_check import ThrottleAxisCheck
 from Controls.throttle_cut import AxisThrottleCut, KeyThrottleCut
+# The same two fakes the brake tests use: a ``PhysicalKeyState`` without a
+# global hook, and a recording stand-in for pyautogui that feeds our injected
+# events back into it, exactly as the real low-level hook does.
+from test_emergency_brake import FakeKeyboard, FakePhysicalKeys
 
 
 @pytest.fixture
@@ -102,9 +108,22 @@ def test_an_unwritable_marker_does_not_stop_anything(tmp_path):
 # ─── mouse_kb: the key path ──────────────────────────────────────────────────
 
 @pytest.fixture
-def key_cut(bus, make_settings, marker):
+def physical():
+    return FakePhysicalKeys()
+
+
+@pytest.fixture
+def keyboard(physical, monkeypatch):
+    recorder = FakeKeyboard(hook=physical)
+    monkeypatch.setattr('Controls.throttle_cut.instant_input',
+                        lambda: contextlib.nullcontext(recorder))
+    return recorder
+
+
+@pytest.fixture
+def key_cut(bus, make_settings, marker, physical, keyboard):
     settings = make_settings(user_throttle_key='up')
-    return KeyThrottleCut(bus, settings, marker)
+    return KeyThrottleCut(bus, settings, marker, physical=physical)
 
 
 def test_the_key_path_is_refused_until_the_binding_was_pushed(key_cut):
@@ -116,8 +135,10 @@ def test_the_key_path_is_refused_until_the_binding_was_pushed(key_cut):
     assert key_cut.unavailable_reason() is None
 
 
-def test_a_key_lfs_cannot_bind_is_refused(bus, make_settings, marker):
-    cut = KeyThrottleCut(bus, make_settings(user_throttle_key='f13'), marker)
+def test_a_key_lfs_cannot_bind_is_refused(bus, make_settings, marker,
+                                         physical):
+    cut = KeyThrottleCut(bus, make_settings(user_throttle_key='f13'), marker,
+                         physical=physical)
 
     assert cut.push_binding() is False
     assert cut.unavailable_reason() == 'throttle_key_not_bindable_in_lfs'
@@ -459,3 +480,125 @@ def test_the_check_never_runs_twice(bus, make_settings):
                           throttle_axis_verified=True)
 
     assert check.maybe_run(FakeOwn(60.0)) is False
+
+
+# --- Removing throttle the driver is already holding ------------------------
+#
+# known-issues #46: ``/key -1 throttle`` stops LFS reading *new* presses and
+# does nothing about an input that is already down. Measured twice, in
+# `simulation_tests` scenarios 08 and 26: the cut went out and OutGauge
+# reported full throttle for the whole braking phase.
+
+
+def test_the_cut_refuses_without_the_hooks(bus, make_settings, marker):
+    """Reporting a cut that cannot be delivered is the failure this fixes."""
+    cut = KeyThrottleCut(bus, make_settings(user_throttle_key='up'), marker)
+    cut.push_binding()
+
+    assert cut.unavailable_reason() == 'no_physical_key_tracking'
+
+
+def test_a_held_throttle_is_un_pressed(key_cut, physical, keyboard):
+    """The driver is standing on it when the intervention starts."""
+    key_cut.push_binding()
+    physical.driver_presses('up')
+    assert physical.down_for_lfs('up') is True
+
+    key_cut.engage()
+    key_cut.suppress()
+
+    assert keyboard.calls == [('keyUp', 'up')]
+    assert physical.down_for_lfs('up') is False
+    # ...and their hardware is untouched: the key is still physically held.
+    assert physical.physically_down('up') is True
+
+
+def test_the_throttle_is_only_un_pressed_once_while_it_stays_down(
+        key_cut, physical, keyboard):
+    """The suppression runs every cycle; it must not inject every cycle."""
+    key_cut.push_binding()
+    physical.driver_presses('up')
+    key_cut.engage()
+    for _ in range(5):
+        key_cut.suppress()
+
+    assert keyboard.calls == [('keyUp', 'up')]
+
+
+def test_a_fresh_press_during_the_intervention_is_cut_again(
+        key_cut, physical, keyboard):
+    """A driver who lets go and stands on it again produces a new press, and
+    LFS reads a held input whatever its binding says."""
+    key_cut.push_binding()
+    physical.driver_presses('up')
+    key_cut.engage()
+    key_cut.suppress()
+
+    physical.driver_releases('up')
+    physical.driver_presses('up')
+    key_cut.suppress()
+
+    assert keyboard.calls == [('keyUp', 'up'), ('keyUp', 'up')]
+
+
+def test_the_throttle_is_pressed_again_if_the_driver_never_let_go(
+        key_cut, physical, keyboard):
+    key_cut.push_binding()
+    physical.driver_presses('up')
+    key_cut.engage()
+    key_cut.suppress()
+
+    key_cut.release()
+
+    assert keyboard.calls == [('keyUp', 'up'), ('keyDown', 'up')]
+    assert physical.down_for_lfs('up') is True
+
+
+def test_nothing_is_pressed_back_if_the_driver_let_go(
+        key_cut, physical, keyboard):
+    """LFS already agrees with their hardware; injecting here would give them
+    throttle they are not asking for."""
+    key_cut.push_binding()
+    physical.driver_presses('up')
+    key_cut.engage()
+    key_cut.suppress()
+
+    physical.driver_releases('up')
+    key_cut.release()
+
+    assert keyboard.calls == [('keyUp', 'up')]
+
+
+def test_a_throttle_nobody_was_holding_is_left_alone(
+        key_cut, physical, keyboard):
+    key_cut.push_binding()
+    key_cut.engage()
+    key_cut.suppress()
+    key_cut.release()
+
+    assert keyboard.calls == []
+
+
+def test_suppressing_before_the_cut_does_nothing(key_cut, physical, keyboard):
+    key_cut.push_binding()
+    physical.driver_presses('up')
+
+    key_cut.suppress()
+
+    assert keyboard.calls == []
+
+
+def test_the_mouse_button_path_uses_the_mouse_calls(
+        bus, make_settings, marker, physical, keyboard):
+    """The recording scenarios drive on the mouse buttons, and that is the
+    path #46 was measured on."""
+    cut = KeyThrottleCut(bus, make_settings(user_throttle_key='mousel'),
+                         marker, physical=physical)
+    cut.push_binding()
+    physical.driver_presses('mousel')
+
+    cut.engage()
+    cut.suppress()
+    cut.release()
+
+    assert keyboard.calls == [('mouseUp', 'mousel'), ('mouseDown', 'mousel')]

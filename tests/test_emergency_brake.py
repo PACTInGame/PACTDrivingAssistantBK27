@@ -351,6 +351,10 @@ def keyboard(physical, monkeypatch) -> FakeKeyboard:
     monkeypatch.setattr('misc.platform_shim.get_keyboard', lambda: recorder)
     monkeypatch.setattr('Controls.brake_key.instant_input',
                         lambda: contextlib.nullcontext(recorder))
+    # The throttle cut un-presses the driver's input the same way
+    # (``Controls/throttle_cut.py``), so its door has to be replaced as well.
+    monkeypatch.setattr('Controls.throttle_cut.instant_input',
+                        lambda: contextlib.nullcontext(recorder))
     # Off Windows there is no pyautogui at all, and unavailable_reason() would
     # stop at the first line. The rest of the table is what these tests are about.
     monkeypatch.setattr('Controls.brake_key.is_available',
@@ -594,9 +598,17 @@ def braking_car(make_own_vehicle):
     return make_own_vehicle(speed=80, local_plid=1, plid=1, control_mode=0)
 
 
-def demand(bus, deceleration: float):
-    """What FCW publishes every cycle."""
-    bus.emit(DECELERATION_EVENT, {'deceleration': deceleration})
+def demand(bus, deceleration: float, source: str = 'forward_collision'):
+    """What a warning system publishes every cycle.
+
+    ``EmergencyBrake`` collects the demands of one assistance pass and clears
+    the collection when it consumes them, so a *missing* demand is not the
+    same as a demand of zero (reference/events.md). A test that wants the
+    brake to stay on for several passes therefore has to publish for each of
+    them, exactly as the real systems do.
+    """
+    bus.emit(DECELERATION_EVENT,
+             {'deceleration': deceleration, 'source': source})
 
 
 def test_mode_zero_does_not_arm_at_all(bus, aeb_factory, braking_car, keyboard):
@@ -845,7 +857,8 @@ def test_the_brake_engages_at_the_deceleration_threshold(
 
     assert result['active'] is True
     assert keyboard.calls == [('keyDown', 'b')]
-    assert seen.last('emergency_brake_changed') == {'active': True}
+    assert seen.last('emergency_brake_changed') == {
+        'active': True, 'source': 'forward_collision'}
 
 
 def test_a_demand_below_the_threshold_does_not_engage(
@@ -879,8 +892,8 @@ def test_a_demand_between_release_and_engage_keeps_the_brake_on(
     demand(bus, 9.0)
     system.process(braking_car, {})
 
-    demand(bus, 4.0)
     for _ in range(5):
+        demand(bus, 4.0)
         assert system.process(braking_car, {})['active'] is True
 
 
@@ -1056,7 +1069,8 @@ def test_leaving_the_track_releases_a_running_intervention(
 
     assert system._engaged is False
     assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
-    assert seen.last('emergency_brake_changed') == {'active': False}
+    assert seen.last('emergency_brake_changed') == {
+        'active': False, 'source': None}
 
 
 def test_shutdown_gives_the_brake_back(bus, aeb_factory, braking_car, keyboard):
@@ -1156,3 +1170,194 @@ def test_the_system_stays_enabled_while_a_press_of_ours_is_outstanding(
     # The manager skips a system whose is_enabled() is False, so saying False
     # here strands the pressed key.
     assert system.is_enabled() is True
+
+
+# --- Several systems ask for braking; the largest wins ----------------------
+#
+# Forward collision, cross traffic and blind spot all publish
+# ``needed_deceleration_update`` every cycle. Before they were kept apart by
+# ``source``, the last emitter of an assistance pass simply overwrote the
+# others, so which hazard got braked for was decided by the iteration order of
+# ``AssistanceManager.systems``.
+
+
+def test_the_largest_demand_of_the_pass_is_the_one_acted_on(
+        bus, aeb_factory, braking_car, keyboard):
+    system = aeb_factory()
+    demand(bus, 9.0, source='cross_traffic')
+    demand(bus, 0.0, source='forward_collision')
+
+    assert system.process(braking_car, {})['active'] is True
+    assert keyboard.calls == [('keyDown', 'b')]
+
+
+def test_a_quiet_source_cannot_overwrite_a_loud_one(
+        bus, aeb_factory, braking_car):
+    """Order within the pass must not matter - either way round."""
+    system = aeb_factory()
+    demand(bus, 0.0, source='blind_spot')
+    demand(bus, 8.0, source='forward_collision')
+    assert system.process(braking_car, {})['active'] is True
+
+
+def test_a_source_that_stops_publishing_releases_the_brake(
+        bus, aeb_factory, braking_car, keyboard):
+    """A system switched off, self-disabled after repeated failures, or simply
+    not called any more publishes nothing at all. A value left over from the
+    last time it ran would hold the brake down with nobody left to lift it.
+    """
+    system = aeb_factory()
+    for _ in range(2):
+        demand(bus, 9.0, source='cross_traffic')
+        assert system.process(braking_car, {})['active'] is True
+
+    # Cross traffic warning switched off mid-intervention: silence, not zero.
+    for _ in range(EmergencyBrake.RELEASE_DEBOUNCE_CYCLES):
+        system.process(braking_car, {})
+    assert system._engaged is False
+    assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
+
+
+def test_the_engaged_event_names_the_source(bus, aeb_factory, braking_car,
+                                            recorder):
+    """Only the bus says *why* a car braked; a trace without it reads as "the
+    car stopped" (``simulation_tests/README.md`` §13)."""
+    seen = recorder('emergency_brake_changed')
+    system = aeb_factory()
+    demand(bus, 9.0, source='blind_spot')
+    system.process(braking_car, {})
+
+    assert seen.last('emergency_brake_changed') == {
+        'active': True, 'source': 'blind_spot'}
+
+
+# --- The speed floor is about rear-ending, not about being hit --------------
+
+
+def test_a_crossing_demand_engages_below_the_forward_collision_floor(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """Creeping into a junction at 8 km/h is not a parking manoeuvre: the
+    energy belongs to the car crossing in front of us."""
+    system = aeb_factory()
+    creeping = make_own_vehicle(speed=8.0, local_plid=1, plid=1,
+                                control_mode=0)
+    demand(bus, 9.0, source='cross_traffic')
+
+    assert system.process(creeping, {})['active'] is True
+    assert keyboard.calls == [('keyDown', 'b')]
+
+
+def test_the_forward_collision_floor_is_unchanged(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    system = aeb_factory()
+    creeping = make_own_vehicle(speed=8.0, local_plid=1, plid=1,
+                                control_mode=0)
+    demand(bus, 9.0, source='forward_collision')
+
+    assert system.process(creeping, {})['active'] is False
+    assert keyboard.calls == []
+
+
+def test_even_a_crossing_demand_has_a_floor(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """Below 3 km/h the speed reading is noise and the car is parking."""
+    system = aeb_factory()
+    stopped = make_own_vehicle(speed=1.0, local_plid=1, plid=1,
+                               control_mode=0)
+    demand(bus, 9.0, source='cross_traffic')
+
+    assert system.process(stopped, {})['active'] is False
+    assert keyboard.calls == []
+
+
+# --- End to end over the bus ------------------------------------------------
+
+
+def test_cross_traffic_braking_end_to_end(bus, make_settings, physical,
+                                          keyboard, make_own_vehicle,
+                                          make_vehicle):
+    """CTW -> needed_deceleration_update -> AEB, with nothing else in between.
+
+    The two systems never see each other; the whole coupling is the event
+    (``AGENTS.md`` §5). They are called by hand in the order
+    ``AssistanceManager`` uses - every demand publisher first, the
+    intervention last.
+    """
+    from assistance.cross_traffic_warning import CrossTrafficWarning
+
+    settings = make_settings(automatic_emergency_brake=2, user_brake_key='b',
+                             language='en')
+    ctw = CrossTrafficWarning(bus, settings)
+    aeb = EmergencyBrake(bus, settings, physical_keys=physical,
+                         guard=FakeGuard(None), clock=FakeClock())
+    aeb.key_output.push_binding()
+
+    # 12 m from the junction at 36 km/h, an identical car 12 m from the other
+    # side: stopping short needs ~7.9 m/s2, which is past the engage threshold.
+    own = make_own_vehicle(plid=1, local_plid=1, x=0.0, y=-12.0, heading=0.0,
+                           speed=36.0, control_mode=0)
+    other = make_vehicle(plid=2, x=12.0, y=0.0, heading=90.0, speed=36.0)
+    other.update_distance_to_player(own.data.x, own.data.y, own.data.z)
+    other.update_angle_to_player(own.data.x, own.data.y, own.data.heading)
+
+    ctw.process(own, {2: other})
+    assert aeb.process(own, {2: other})['active'] is True
+    assert keyboard.calls == [('keyDown', 'b')]
+
+
+def test_a_junction_that_is_still_far_away_does_not_engage(
+        bus, make_settings, physical, keyboard, make_own_vehicle,
+        make_vehicle):
+    """The same geometry 30 m out: the warning is on, the brake is not."""
+    from assistance.cross_traffic_warning import CrossTrafficWarning
+
+    settings = make_settings(automatic_emergency_brake=2, user_brake_key='b',
+                             language='en')
+    ctw = CrossTrafficWarning(bus, settings)
+    aeb = EmergencyBrake(bus, settings, physical_keys=physical,
+                         guard=FakeGuard(None), clock=FakeClock())
+    aeb.key_output.push_binding()
+
+    own = make_own_vehicle(plid=1, local_plid=1, x=0.0, y=-30.0, heading=0.0,
+                           speed=36.0, control_mode=0)
+    other = make_vehicle(plid=2, x=30.0, y=0.0, heading=90.0, speed=36.0)
+    other.update_distance_to_player(own.data.x, own.data.y, own.data.z)
+    other.update_angle_to_player(own.data.x, own.data.y, own.data.heading)
+
+    ctw.process(own, {2: other})
+    assert aeb.process(own, {2: other})['active'] is False
+    assert keyboard.calls == []
+
+
+def test_an_intervention_takes_a_held_throttle_away(
+        bus, aeb_factory, braking_car, physical, keyboard):
+    """known-issues #46, end to end.
+
+    The driver is flat out when the hazard appears. ``/key -1 throttle`` alone
+    left LFS reading the held input and reporting full throttle for the whole
+    braking phase - measured twice in `simulation_tests`, scenarios 08 and 26.
+    """
+    system = aeb_factory()
+    system.key_throttle.push_binding()
+    physical.driver_presses('up')       # the configured throttle key
+    demand(bus, 9.0)
+
+    assert system.process(braking_car, {})['active'] is True
+
+    assert ('keyUp', 'up') in keyboard.calls
+    assert physical.down_for_lfs('up') is False
+    assert physical.physically_down('up') is True
+
+
+def test_the_throttle_comes_back_with_the_brake(
+        bus, aeb_factory, braking_car, physical, keyboard):
+    system = aeb_factory()
+    system.key_throttle.push_binding()
+    physical.driver_presses('up')
+    demand(bus, 9.0)
+    system.process(braking_car, {})
+
+    system._disengage()
+
+    assert keyboard.calls[-1] == ('keyDown', 'up')
+    assert physical.down_for_lfs('up') is True
