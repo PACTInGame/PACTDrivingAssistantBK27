@@ -21,6 +21,7 @@ constructor's `name` argument **must match a key the settings know** —
 | `lighta` | `LightAssists` | `adaptive_lights` |
 | `gearbox` | `Gearbox` | `automatic_gearbox` |
 | `ai_traffic` | `AIDriver` | `ai_traffic` |
+| `park_assist` | `ParkAssist` | `park_assist` |
 | — | `ChatCommandHandler` | event-driven, no `process()` |
 
 ---
@@ -305,6 +306,35 @@ Rectangle-vs-rectangle conflict prediction between our path and each other car's
   `needed_deceleration_update` every cycle.
 - **Cost, measured with 40 cars:** 14 µs spread over a track, 61 µs with all 40 packed
   around us, against a 100 ms budget.
+
+## Self-parking — `park_assist.py`
+
+Finds parking spaces while the car crawls, offers one on screen, and drives it
+**only after the driver clicks**. The only assistance system that holds all
+three inputs at once, so read `control-intervention.md` before touching it.
+
+The stack, top to bottom, and each layer knows nothing about the one above:
+
+| Layer | File | In / out |
+|---|---|---|
+| Find spaces | `parking/slot_detection.py` | obstacle boxes → `ParkingSlot` |
+| Plan a manoeuvre | `parking/trajectory.py` | pose + slot + obstacles → `Trajectory` |
+| Follow it | `parking/path_follower.py` | pose + speed → `ControlDemand` |
+| Steer/pedal/shift | `Controls/vehicle_control.py` | `ControlDemand` → commands |
+| Press the keys | `Controls/manoeuvre_outputs.py`, `Controls/pulse_modulator.py` | commands → cursor and keystrokes |
+
+`ControlDemand` — speed, direction, curvature — is the seam, and it is
+deliberately reusable: a cruise control or a lane keeper needs the same three
+numbers and none of them needs to know a parking slot exists.
+
+Two numbers decide whether it works, and both are on the one telemetry line
+`Parking: stroke …` (INFO, once a second while driving): demanded against
+measured curvature, and speed against demand.
+
+**Current state, open defects and how to test it live:
+`reference/park-assist-handover.md`.**
+
+---
 
 ## Park Distance Control — `park_distance_control.py`
 

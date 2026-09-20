@@ -218,7 +218,24 @@ assistance/
   adaptive_lights.py       Adaptive brake lights, high beam assist, cop siren/strobe
   gearbox.py               Automatic gearbox with per-car calibration (injects keypresses)
   AI_Driver.py             AI traffic controller: drives LFS AI cars along recorded routes
+  park_assist.py           Self-parking: find a space, offer it, drive it on a click (systems.md; park-assist-handover.md)
   chat_commands.py         `$`-prefixed in-game chat commands + periodic tooltips (event-driven, no process())
+  parking/
+    slot_detection.py      Obstacle boxes -> ParkingSlot: is this gap a parking space?
+    trajectory.py          Pose + slot + obstacles -> a collision-checked Trajectory (closed form, then a shuffle)
+    path_follower.py       Pose + speed -> ControlDemand (speed, direction, curvature) — the reusable seam
+    geometry.py            Pose/OrientedBox/VehicleShape, MCI conversions, swept collision
+    scene_dump.py          One-shot offline dump of a live plan failure (DEBUG only)
+
+Controls/                  Everything that actuates the car; nothing here knows what a parking slot is
+  vehicle_control.py       ControlDemand -> steering / pedals / gear; learns the steering gain, PI on speed
+  manoeuvre_outputs.py     The three devices a manoeuvre drives in mouse_kb: cursor, pulsed keys, shift keys
+  pulse_modulator.py       A 0..1 demand on a key as a duty cycle — sigma-delta, so the average is exact
+  brake_key.py             KeyBrakeOutput: digital brake on the driver's own key, with the release-trap arbitration
+  brake_axis.py            Virtual brake axis via vJoy, with the detached guardian process
+  throttle_cut.py          Throttle removal during an intervention
+  throttle_axis_check.py   Is the driver's throttle axis where we think it is?
+  handover_marker.py       Durable recovery marker written on takeover/handback
 
 ui/
   ui_manager.py            HUD, warnings, PDC display, notifications, siren buttons; owns the button ID map
@@ -229,7 +246,7 @@ misc/
   logging_setup.py         setup_logging() (console + rotating file) and the ErrorThrottle rate limiter
   helpers.py               resolve_path, is_lfs_running, geometry helpers (calc_polygon_points, point_in_rectangle, is_reversing)
   input_guard.py           InputGuard: may a key be injected right now? — every pyautogui call site asks it (ui.md §1.4)
-  key_tap.py               KeyTapper: timed key press on its own thread — the hold never runs on an assistance cycle (ui.md §1.6)
+  key_tap.py               KeyTapper: timed key press on its own thread — the hold never runs on an assistance cycle (ui.md §1.6); wired to PhysicalKeyState, so a pulse never releases a key the driver holds
   key_names.py             One key, four spellings: settings.json / VK code / LFS /key / pyautogui
   physical_keys.py         PhysicalKeyState: is the *hardware* holding this key, and what does LFS believe? (control-intervention.md §3.1)
   language.py              LanguageManager: 8-language translation table

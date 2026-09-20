@@ -246,6 +246,19 @@ self.tapper.tap(clutch, hold_s=0.30)                    # gear change:
 self.tapper.tap(shift,  hold_s=0.10, delay_s=0.10)      # gear inside the clutch
 ```
 
+**A key can also be a fractional pedal.** Hold it for part of every control
+period and the average is that fraction — which is the only way a
+mouse/keyboard driver's throttle can answer "30 %", and the parking manoeuvre
+needs exactly that (`control-intervention.md` §3.1). Do not roll that by hand:
+`Controls/pulse_modulator.py` owns the arithmetic, including the rule that a
+press under 40 ms is not sent at all because LFS may never sample it, and its
+time is carried to the next pulse instead.
+
+Because the tapper is now also *releasing* keys ten times a second, it is
+wired to the shared `PhysicalKeyState`: a release is skipped while the driver
+holds that key on the hardware. Holding a key and releasing it once was one
+chance to take the driver's input away; pulsing it is ten a second.
+
 What is load-bearing about the design:
 
 - **One thread, not a `threading.Timer` per press.** `pyautogui.PAUSE` is module-global

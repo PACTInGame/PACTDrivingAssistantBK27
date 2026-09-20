@@ -236,6 +236,37 @@ can actuate; a missing fit still invokes full-brake fallback.
 
 ### 3.1 mouse_kb — key injection, bound to the driver's own key
 
+**A fractional pedal on a key is a duty cycle, not a switch.** This was learned
+the hard way by the parking manoeuvre. LFS has auto-clutch and **the car creeps
+in gear with no throttle at all** — at the 1.1 m/s a parking manoeuvre runs at,
+the creep is most of the demand already. A control loop that can only answer
+"key down for the whole cycle" therefore overshoots every time it asks for
+anything, and its only correction is a full brake. Measured in game: `thr 1.00`
+on nearly every telemetry line, `brk 0.50` on the rest, and the speed sawing
+between 0.3 and 2.3 m/s against a 1.1 m/s demand.
+
+`Controls/pulse_modulator.py` is the answer, and it is general: a 0..1 demand
+becomes a press of that fraction of the control period, held by
+`misc/key_tap.py` on its own thread. Presses shorter than 40 ms are not sent —
+LFS may never sample them — but their time is carried in a budget and spent as
+a whole pulse later, so the *average* is exact. Anything in this project that
+has to modulate a digital actuator should use it rather than switching.
+
+Consequence for §3.1's arbitration: the shared key tapper is now wired to the
+shared `PhysicalKeyState`. Holding a key and releasing it once is one chance to
+take the driver's input away; pulsing it is ten chances a second.
+
+**Handback from a manoeuvre that was driving the car is not "drop everything".**
+Dropping all three inputs at 1 m/s in gear leaves the driver a car that is
+still moving, creeping, with nothing holding it — which is what an aborted
+parking manoeuvre did. `ParkAssist` has a `stopping` state: steering and gears
+go back at once (a held steering command is a wheel to fight; a gear request is
+a shift nobody asked for), and the **brake alone** stays on until the car is at
+rest. That is inside §1's rule, because the brake is the one input this project
+may ever add. It is bounded by a standstill, by a 4 s timeout, by the driver
+touching the throttle, and it is never entered when the input guard has already
+refused — then the keystroke is not ours to send at all.
+
 **The binding must be pushed, not guessed.** An injected `s` only brakes if `s` is what
 LFS has bound to brake. `/key <our configured key> brake` at startup makes the app's
 setting and LFS definitionally consistent and removes the "user forgot to set it"

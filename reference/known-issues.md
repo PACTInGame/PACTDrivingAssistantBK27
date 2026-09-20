@@ -94,3 +94,41 @@ contact. Two things that run did **not** exercise:
 
 Both need a recording that puts the player off-centre and resets an AI car out of
 its route. `21_ai_traffic_started_from_another_car` does neither.
+
+**#61 — Self-parking: the car ends up offset to one side of the space.**
+Third live session, 2026-09-20. The manoeuvre completes and the car ends
+correctly *aligned* — same heading as the car in front — but too far to one
+side. Not a follower defect: the telemetry through that run shows demanded
+and measured curvature matching to three decimals (`kappa -0.167/-0.167`), so
+the car drove the plan it was given. Suspect `ParkingSlot.target` for a space
+bounded on **one** side only (the run was `parallel on the right … open`),
+and `_replan_from_here` inheriting how far out from the row the driver
+stopped. Reproduce in `tests/test_parking_endtoend.py` with a one-sided scene
+before changing anything. Full context: `reference/park-assist-handover.md`.
+
+**#62 — Self-parking needs two clicks to start.**
+The first click installs the `pynput` hooks — over 100 ms, so it happens off
+the assistance thread and that click is refused with
+`no_physical_key_tracking`. Correct mechanically, bad product behaviour. Fix
+by installing the hooks when a space is first *offered* rather than when it is
+accepted: the offer has already survived `OFFER_SETTLE_S` and is a strong
+enough signal, and a second or more passes before any click arrives.
+
+**#63 — A completed self-park does not end on the brake.**
+`_finish(STATE_DONE, …)` releases every input and the car creeps on out of
+the space. The `STATE_STOPPING` machinery that fixes exactly this already
+exists and is tested, but is only wired to *aborts*. Decide whether a
+completed park should hold the brake until the driver acts, or stop once and
+release.
+
+**#64 — Do not learn the parking turn radius from `CurvatureModel.gain`.**
+Tried and reverted within one session, recorded here so it is not re-added.
+`1 / gain` looks like the car's full-lock radius, but adopting it is a
+positive feedback loop: a larger radius makes the next plan flatter, a flatter
+plan needs less steering, the gain is then only measured at part lock where it
+reads lower, and the radius grows again. Measured: two manoeuvres planned at
+6.9 m and both finished, the fit adopted 11.0 m, and every manoeuvre after
+that planned at 12.7 m, never exceeded 0.76 of lock, needed 25–38 m of path
+and ended `off_track`. A calibration *sweep* at full lock — the way
+`Controls/throttle_axis_check.py` treats the pedal — would be sound; an
+estimate taken from the manoeuvre it then changes is not.
