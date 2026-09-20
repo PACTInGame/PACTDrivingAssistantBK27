@@ -5,8 +5,7 @@ import pyinsim
 from core.settings_manager import SettingsManager
 from misc import key_binder
 from misc.language import LanguageManager
-from ui.ui_manager import (MENU_RANGE, UIManager, clamp_hud_position,
-                           hud_overlaps_reserved_area)
+from ui.ui_manager import MENU_RANGE, UIManager, clamp_hud_position
 
 logger = logging.getLogger(__name__)
 
@@ -437,12 +436,17 @@ class MenuSystem:
         hud_text = "^2" if hud_on else "^1"
         hud_w, hud_h = clamp_hud_position(self.settings.get('hud_width'),
                                           self.settings.get('hud_height'))
-        # Rot heisst: der HUD liegt im von LFS reservierten Rechteck
-        # (L 0…110, T 30…170). LFS raeumt dort seine eigene UI weg, also
-        # verschwinden Einstiegs- und Garagenmenues (reference/ui.md §1.3).
-        # Verschoben wird nichts - die ausgelieferte Standardposition liegt
-        # selbst in diesem Bereich.
-        hud_position_colour = "^1" if hud_overlaps_reserved_area(hud_w, hud_h) else "^7"
+        # Frueher stand hier eine rote Warnung, sobald der HUD im von LFS
+        # reservierten Rechteck lag (L 0…110, T 30…170). Sie war falsch
+        # (known-issues #27): LFS raeumt dort seine eigene UI nur auf den
+        # Bildschirmen weg, auf denen es selbst eine hat - Einstiegsbildschirm
+        # und Garage - und genau dort zeichnet diese App gar keinen HUD.
+        # ``UIManager`` haengt jedes HUD-Element an ``drawing`` und raeumt
+        # beim Verlassen den ganzen Button-Bereich ab. Im Rennen selbst hat
+        # LFS an dieser Stelle nichts stehen, was verdraengt werden koennte.
+        # Ergebnis: die Warnung leuchtete bei der ausgelieferten
+        # Standardposition dauerhaft rot, ohne dass ihr je etwas entsprach.
+        hud_position_colour = "^7"
 
         return [
             (21, 0, 75, 25, 5, self.translator.get("System Settings", lang),
@@ -631,9 +635,6 @@ class MenuSystem:
                                   self.settings.get('hud_height') + dy)
         self.settings.set('hud_width', x)
         self.settings.set('hud_height', y)
-        if hud_overlaps_reserved_area(x, y):
-            logger.info("HUD at (%d, %d) is inside the area LFS reserves for its "
-                        "own UI (L 0-110, T 30-170).", x, y)
         self.open_system_settings()
 
     def change_language(self):

@@ -15,6 +15,10 @@ Condition        Source
 ===============  ==========================================================
 on track         ``state_data['on_track']`` -- no control input is meaningful
                  anywhere else
+not a replay     ``state_data['replay']``. Since known-issues #55 the warning
+                 systems and the HUD *do* run during a replay, so ``on_track``
+                 alone no longer implies "nothing is happening"; a keystroke
+                 there would land in the live game, not in the recording
 no text entry    ``state_data['text_entry']`` (``ISS_TEXT_ENTRY``)
 no dialog        ``state_data['dialog']`` (``ISS_DIALOG``)
 no Shift / Ctrl  ``OutGaugePack.Flags & OG_SHIFT|OG_CTRL`` -- LFS binds many
@@ -26,9 +30,13 @@ our own car      ``own_vehicle.is_local_driver`` -- OutGauge follows the
                  (``conventions.md`` §5.2). A car LFS drives itself
                  (``data.is_ai``) is refused for the same reason.
 OutGauge alive   the stream has produced a packet within
-                 ``OUTGAUGE_STALE_AFTER_S``. Without it every gauge field and
+                 ``OUTGAUGE_STALE_AFTER_S`` **of the moment it was due to
+                 produce one**. Without it every gauge field and
                  ``viewed_plid`` stand still, so no actuator can tell whose
-                 car it would be acting on (``known-issues.md`` #51).
+                 car it would be acting on (``known-issues.md`` #51). LFS
+                 sends OutGauge while the player sits in a car, so the clock
+                 only runs while that is the case -- see
+                 :meth:`InputGuard.outgauge_stale`.
 ===============  ==========================================================
 
 The input mode is not a global guard condition: shift keys work in both modes.
@@ -43,9 +51,9 @@ its own state costs two attribute writes per ``state_data`` and per OutGauge
 packet.
 
 Not covered: the user's *keyboard* Shift while OutGauge is not streaming.
-OutGauge only streams on track in an internal view, which is exactly when
-injection may happen at all (``conventions.md`` §5.3), so the flags are fresh
-whenever the guard would allow anything; a stale reading (older than
+OutGauge streams whenever the player sits in a car, in every camera view
+(``conventions.md`` §5.3), which covers everything injection may happen in at
+all, so the flags are fresh whenever the guard would allow anything; a stale reading (older than
 ``MODIFIER_STALE_AFTER_S``) is deliberately not treated as "Shift held", or a
 single lost packet would disable the feature. ``ui.md`` §1.4 mentions a
 ``pynput`` fallback listener if a broader guarantee is ever needed.
@@ -72,6 +80,7 @@ REASON_NOT_LOCAL_DRIVER = 'not_local_driver'
 REASON_AI_CONTROLLED = 'ai_controlled'
 REASON_LFS_NOT_FOCUSED = 'lfs_not_focused'
 REASON_NO_OUTGAUGE = 'no_outgauge'
+REASON_REPLAY = 'replay'
 
 # A modifier reading older than this is treated as "unknown", not as "held".
 MODIFIER_STALE_AFTER_S = 1.0
@@ -167,6 +176,14 @@ class InputGuard:
         self.foreground_check = foreground_check or lfs_has_focus
 
         self.on_track = False
+        self.replay = False
+        # Seit wann OutGauge ueberhaupt senden *muesste*. LFS streamt, solange
+        # der Spieler in einem Auto sitzt; im Menue schweigt der Strom voellig
+        # zu Recht. Ohne diese Marke lief die Stille-Uhr im Menue mit, und der
+        # erste Zyklus nach dem Streckeneintritt meldete "kein OutGauge" --
+        # genau einen Frame lang, mit einer Notification "AEB nicht
+        # verfuegbar" daran.
+        self._streaming_expected_since = None
         self.dialog = False
         self.text_entry = False
         self._modifiers = 0
@@ -192,7 +209,14 @@ class InputGuard:
     def _on_state_data(self, data):
         if not isinstance(data, dict):
             return
+        was_expected = self.on_track or self.replay
         self.on_track = bool(data.get('on_track', False))
+        self.replay = bool(data.get('replay', False))
+        if (self.on_track or self.replay) != was_expected:
+            # Beide Richtungen: der Eintritt startet die Karenzzeit neu, das
+            # Verlassen macht die Frage bedeutungslos.
+            self._streaming_expected_since = (
+                self.clock() if not was_expected else None)
         self.dialog = bool(data.get('dialog', False))
         self.text_entry = bool(data.get('text_entry', False))
 
@@ -217,14 +241,20 @@ class InputGuard:
     def outgauge_stale(self) -> bool:
         """Is the OutGauge stream silent right now?
 
-        True means every gauge field, every pedal reading and ``viewed_plid``
-        are standing still. Three causes, all of them real
-        (``conventions.md`` §5.3 and ``known-issues.md`` #51): the socket never
-        bound because something else holds port 30000, ``OutGauge Mode`` is 0
-        in ``cfg.txt``, or the camera is not an internal view. In all three the
-        app cannot tell whose car it is looking at, so nothing may actuate --
-        and unlike :meth:`modifier_held` this one fails *closed*, because
-        acting blind is the hazard, not the safeguard.
+        True means every gauge field and every pedal reading is standing
+        still. Two causes, both of them real (``conventions.md`` §5.3 and
+        ``known-issues.md`` #51): the socket never bound because something else
+        holds port 30000, or ``OutGauge Mode`` is 0 in ``cfg.txt``. The camera
+        is **not** one of them -- OutGauge keeps streaming in chase, heli and
+        TV view (``known-issues.md`` #29, withdrawn after measuring it).
+
+        Off track the stream stops and that is correct, so the question is not
+        asked there; while it is asked, the clock runs from whichever came
+        later, the last packet or the moment the stream became due. Without
+        that, a minute in the menu came back as a minute of failure.
+
+        Unlike :meth:`modifier_held` this one fails *closed*: acting on gauges
+        that are standing still is the hazard, not the safeguard.
         """
         if self._outgauge_bound is False:
             return True
@@ -234,7 +264,19 @@ class InputGuard:
             # connector. The module's rule applies: refuse because the user
             # really is elsewhere, never because we could not ask.
             return False
+        if not (self.on_track or self.replay):
+            # LFS sends OutGauge while the player sits in a car. In the menu
+            # the silence *is* the correct behaviour, and nothing may actuate
+            # there anyway -- ``off_track`` answers that question, not this
+            # one.
+            return False
+        # The clock starts at whichever came later: the last packet, or the
+        # moment the stream became due. Measuring from the packet alone let a
+        # minute in the menu count as a minute of failure.
         since = self._modifiers_seen_at
+        expected = self._streaming_expected_since
+        if since is None or (expected is not None and expected > since):
+            since = expected
         if since is None:
             # Bound, but not one packet yet. ``OutGauge Mode = 0`` in
             # ``cfg.txt`` looks exactly like this and never recovers.
@@ -269,6 +311,12 @@ class InputGuard:
         return reason
 
     def _refusal(self, own_vehicle) -> Optional[str]:
+        # Vor ``off_track``, obwohl beides zutrifft: ein Replay ist kein
+        # "nicht auf der Strecke", sondern ein Zustand, in dem Systeme
+        # laufen (known-issues #55) und ein Tastendruck ins *laufende* Spiel
+        # ginge. Der Grund soll die Welt beschreiben, nicht die Variable.
+        if self.replay:
+            return REASON_REPLAY
         if not self.on_track:
             return REASON_OFF_TRACK
         if self.text_entry:

@@ -11,10 +11,17 @@ class OwnVehicle(Vehicle):
     * ``local_plid``  - aus IS_NPL, also die PLID des *lokalen Fahrers*.
       Kameraunabhaengig und damit die einzige Quelle, auf die man aktuieren
       darf.
-    * ``viewed_plid`` - aus OutGauge, also die PLID des *betrachteten* Autos.
-      TAB aendert sie. Frueher landete genau dieser Wert in
-      ``data.player_id`` und hat das ganze OwnVehicle-Objekt auf ein fremdes
-      Auto umgebogen.
+    * ``viewed_plid`` - die PLID des *betrachteten* Autos. TAB aendert sie.
+      Frueher landete genau dieser Wert in ``data.player_id`` und hat das
+      ganze OwnVehicle-Objekt auf ein fremdes Auto umgebogen.
+
+      Zwei Quellen speisen sie, und das ist Absicht: OutGauge (schnell, aber
+      nur in einer Innenansicht auf der Strecke) und ``IS_STA.ViewPLID``
+      (nur bei Zustandswechseln, dafuer kameraunabhaengig und auch im
+      Replay). Frueher gab es nur die erste, und in jeder Aussenkamera fror
+      der Wert auf dem letzten Stand ein - ``is_local_driver`` antwortete
+      dann ueber ein Auto, auf das die Kamera laengst nicht mehr sass
+      (known-issues #29/#51, reference/conventions.md §5.2).
 
     ``data.player_id`` folgt jetzt ``local_plid``, sobald ein IS_NPL fuer den
     lokalen Fahrer gesehen wurde. Solange das nicht der Fall ist (LFS hat noch
@@ -65,6 +72,21 @@ class OwnVehicle(Vehicle):
         target.is_ai = bool(ptype & PTYPE_AI)
         target.is_remote = bool(ptype & PTYPE_REMOTE)
 
+    def set_viewed_plid(self, plid: int):
+        """Uebernimmt die PLID des betrachteten Autos.
+
+        Aufgerufen aus beiden Quellen (OutGauge und ``IS_STA.ViewPLID``); die
+        juengste Meldung gewinnt. Solange kein IS_NPL den lokalen Fahrer
+        bestaetigt hat, ist das betrachtete Auto zugleich der beste Tipp auf
+        das eigene - im Replay schickt LFS gar kein IS_NPL, dort ist es der
+        einzige (reference/ui.md §1.1).
+        """
+        self.viewed_plid = plid
+        if self.local_plid:
+            self._target.player_id = self.local_plid
+        elif plid:
+            self._target.player_id = plid
+
     def clear_local_driver(self):
         """Der lokale Fahrer hat die Strecke verlassen (IS_PLL)"""
         self.local_plid = 0
@@ -102,12 +124,8 @@ class OwnVehicle(Vehicle):
         """
         target = self._target
 
-        self.viewed_plid = _as_int(getattr(packet, 'PLID', 0))
-        if self.local_plid:
-            target.player_id = self.local_plid
-        elif self.viewed_plid:
-            # Notbehelf, solange IS_NPL noch nicht da war.
-            target.player_id = self.viewed_plid
+        # Notbehelf auf data.player_id inklusive, solange IS_NPL fehlt.
+        self.set_viewed_plid(_as_int(getattr(packet, 'PLID', 0)))
 
         self.fuel = _as_float(getattr(packet, 'Fuel', 0.0))
         self.rpm = _as_float(getattr(packet, 'RPM', 0.0))

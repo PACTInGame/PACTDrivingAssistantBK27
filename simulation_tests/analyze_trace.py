@@ -14,8 +14,8 @@ order in a packet is not stable.
 
 The summary calls out the two failure modes that make a run look like a bug in
 the add-on when it is really a bad capture: **OutGauge stalls** (it stops dead
-outside an internal view or in the pits -- conventions.md §5.3) and **dropped
-records**.
+as soon as the car is not on track -- conventions.md §5.3; the camera view does
+*not* matter, known-issues #29) and **dropped records**.
 """
 
 from __future__ import annotations
@@ -207,7 +207,7 @@ def summarise(path: str) -> Dict[str, Any]:
         warnings.append(f"{end['dropped']} records were dropped -- the trace has holes")
     if og_interval > 0 and not counts.get("OutGauge"):
         warnings.append("OutGauge was requested but never arrived "
-                        "(camera not in an internal view, or in the pits?)")
+                        "(car not on track, or OutGauge Mode 0 in cfg.txt?)")
     og_gaps = stream_gaps(records, "OutGauge", og_interval) if og_interval > 0 else []
     if og_gaps:
         worst = max(g["gap_s"] for g in og_gaps)

@@ -60,8 +60,8 @@ redraws the menu page that is currently open. Anything new that only draws on ch
 must subscribe too.
 
 `own_vehicle_updated` fires from **both** sources. OutGauge is the frequent one, but
-it only streams from an internal camera view (`conventions.md` §5.3), so an app started
-while LFS already sits in a chase camera would otherwise never learn that an own vehicle
+it streams only while the player sits in a car (`conventions.md` §5.3), so an app started
+while LFS sits on any other screen would otherwise never learn that an own vehicle
 exists at all — and `AssistanceManager.process_all_systems()` returns immediately while
 `self.own_vehicle` is `None`, which would silently switch off every system, the AI
 traffic included, although it needs nothing from OutGauge. Every MCI frame therefore
@@ -94,14 +94,18 @@ and never hold a `Vehicle` across frames to read its distance.
 | `dialog` | bool | `ISS_DIALOG` |
 | `track` | **`str`** | `IS_STA.Track`, decoded (`SO6R`) — was raw bytes before WP4/WP5 |
 | `in_game_cam` | int | `IS_STA.InGameCam` |
+| `view_plid` | int | `IS_STA.ViewPLID` — the PLID the camera is on, 0 for none. The second source for `own_vehicle.viewed_plid` beside OutGauge, and the only one in a replay (`conventions.md` §5.2) |
+| `replay` | bool | `ISS_REPLAY` and not `ISS_GAME` — a replay is being watched. `AssistanceManager` runs `REPLAY_SYSTEMS` there, `UIManager` draws, `InputGuard` refuses with `replay` (`ui.md` §1.1) |
 | `in_game_interface` | int | `IS_CIM.Mode` — `CIM_NORMAL/OPTIONS/HOST_OPTIONS/GARAGE/CAR_SELECT/TRACK_SELECT/SHIFTU` |
 | `submode_interface` | int | `IS_CIM.SubMode` — `NRM_*` / `GRG_*` / `FVM_*` |
 | `select_type` | int | `IS_CIM.SelType` |
-| `screen` | str | derived context: `main_menu`, `entry`, `garage`, `options`, `shiftu`, `game` (constants in `lfs/lfs_state.py`) |
+| `screen` | str | derived context: `main_menu`, `entry`, `garage`, `options`, `shiftu`, `game`, `replay` (constants in `lfs/lfs_state.py`) |
 | `ui_visible` | bool | `ISS_VISIBLE` — LFS is showing InSim buttons |
 | `shift_u` | bool | `ISS_SHIFTU` |
 | `multiplayer` | bool | `ISS_MULTI` |
 | `buttons_allowed` | bool | **the one flag the UI needs**: false on `main_menu` and `options`, where LFS shows no normal buttons |
+
+`VehicleManager` subscribes too, for `view_plid` alone.
 
 `state_data` is the widest-reaching event in the app and is now emitted from two
 sources — `IS_STA` **and** `IS_CIM`. Changing its shape touches seven subscribers —

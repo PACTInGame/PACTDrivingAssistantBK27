@@ -151,7 +151,7 @@ alongside the `SMALL_SSG` request.
 
 This removes the entire class of failure in §2 and §3: no `cfg.txt` editing, no
 "LFS must be closed", no silent breakage after an LFS reinstall, and no wizard step for
-OutGauge at all. It still only streams *"if in game"* from an internal view
+OutGauge at all. It still only streams while the player is in a car
 (`conventions.md` §5.3), and it still reports the **viewed** car (`conventions.md` §5.2).
 
 The wizard's `cfg.txt` handling would remain useful only for **OutSim**, which has no

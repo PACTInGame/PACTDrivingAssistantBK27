@@ -20,39 +20,42 @@ both, and the project currently does it only crudely.**
 | Text entry (chat) | `ISS_TEXT_ENTRY` (32768) | LFS hides them | **and keyboard injection must stop — see §1.4** |
 | SHIFT+U free view | `ISS_SHIFTU` (8) | drawn | `IS_CIM.SubMode` = `FVM_PLAIN` (no buttons), `FVM_BUTTONS`, `FVM_EDIT` |
 | Options / host options / car select / track select | `IS_CIM` `Mode` 1 / 2 / 4 / 5 | normal buttons hidden | only `INST_ALWAYS_ON` buttons survive here |
-| **Watching a replay** | `ISS_REPLAY` (2), **and `ISS_GAME` is *not* set** | drawn (`ISS_VISIBLE` is set) | but `on_track` is False, so the app does nothing — see below |
+| **Watching a replay** | `ISS_REPLAY` (2), **and `ISS_GAME` is *not* set** | drawn (`ISS_VISIBLE` is set) | its own context, `SCREEN_REPLAY`; warnings and the HUD run, actuation does not — see below |
 
 Per `InSim.txt`, LFS displays normal buttons in exactly four screens: **main entry
 screen, race setup screen, in game, and SHIFT+U mode.**
 
-**A replay is its own state, and the app is inert in it.** Measured live on
-2026-09-19, loading a saved single-player replay:
+**A replay is its own state, and since known-issues #55 the app works in it.**
+Measured live on 2026-09-19, loading a saved single-player replay:
 
 ```
 main menu        0x4d80   SHOW_2D FRONT_END MPSPEEDUP WINDOWED VISIBLE
 replay running   0x4c82   REPLAY  SHOW_2D   MPSPEEDUP WINDOWED VISIBLE   ViewPLID 24
 ```
 
-`ISS_GAME` (bit 0) is **absent** throughout. `StateHandler` computes
-`on_track = ISS_GAME and not ISS_FRONT_END`, so a replay is "off track", and that
-decides three things at once:
+`ISS_GAME` (bit 0) is **absent** throughout, so `on_track`
+(`ISS_GAME and not ISS_FRONT_END`) is False in a replay and stays False — every
+actuation still hangs off that flag. What a replay is instead:
 
-- `AssistanceManager.process_all_systems()` skips every system, so no warning, no
-  PDC and no emergency brake is ever evaluated;
-- `UIManager` draws no HUD;
-- `InputGuard` refuses every injection with `off_track`.
+- `StateHandler` derives **`SCREEN_REPLAY`** and publishes `state_data['replay']`.
+  Without its own screen a replay fell into `SCREEN_MAIN_MENU`, where nothing may be
+  drawn — so reading `ISS_REPLAY` alone would not have been enough.
+- `AssistanceManager` runs **`REPLAY_SYSTEMS`** there: `fcw`, `bsw`, `ctw`, `pdc`,
+  i.e. exactly the systems that only *publish*. The actuating ones stay out, and not
+  only because a keystroke lands nowhere: `LightAssists` and `AIDriver` send InSim
+  commands, and those reach the **running game**, not the recording.
+- `UIManager` draws off `drawing` = `on_track or replay`, and the clean-up path hangs
+  off the same flag — it used to hang off `on_track`, so a finished replay left its
+  buttons in the main menu.
+- `InputGuard` refuses with **`replay`**, checked before `off_track`: both are true,
+  but only one of them describes why.
 
-The last one is right and must stay — injecting a brake key into a replay actuates
-nothing and only confuses. The first two are a product decision that has not been
-made: warnings and the HUD would be useful for reviewing an incident. `ISS_REPLAY`
-is currently read nowhere in the project.
-
-Two things that *do* work in a replay, and make it usable for offline analysis:
+Two things that make a replay usable for analysis, and one trap:
 **MCI streams normally** (10 Hz, every car, measured over 552 frames) and
 **OutGauge streams too** when `OutGauge Mode` is 2 (`driving+replay`). What is
 missing is `IS_NPL` — LFS does not re-announce the players — so `CName`, `UCID` and
-`PType` are unavailable and `IS_STA.ViewPLID` is the only pointer to the player's
-own car.
+`PType` are unavailable and **`IS_STA.ViewPLID` is the only pointer** to the car being
+watched. It is read now and feeds `own_vehicle.viewed_plid` (`conventions.md` §5.2).
 
 ### 1.2 `ISS_VISIBLE` is the authoritative answer
 
@@ -102,13 +105,20 @@ own menus unusable if our HUD happens to sit in that rectangle. Since `hud_width
 `hud_height` are user-configurable, a user can drag the HUD into the reserved area and
 break the entry screen without understanding why.
 
+**But it only matters where LFS has a UI to displace**, and there this app draws
+no HUD. Every HUD element hangs off `UIManager.drawing` (`on_track or replay`) and
+leaving that state clears the whole button range, so the entry screen and the garage
+never see one — confirmed in game on 2026-09-19 by entering the garage during a race.
+In the race itself LFS draws nothing at the shipped default position (90, 119), which
+is near the centre of the screen. The red "HUD Position" label that used to warn about
+this was therefore permanently on for the default and never corresponded to anything;
+it is gone (`known-issues.md` #27, withdrawn).
+
 Practical rules:
-- Keep persistent HUD elements **outside** `0–110 × 30–170` unless the intent really is
-  to take over the screen. `ui/ui_manager.py` exposes `hud_overlaps_reserved_area()`
-  for this; the system menu's "HUD Position" label turns `^1` red while the HUD sits
-  inside the rectangle. It is deliberately **not** clamped out of it — the shipped
-  default (90, 119) is inside, so enforcing it would relocate every existing user's
-  HUD (`known-issues.md` #27).
+- Anything drawn **outside** the track — today only the idle banner at y 180 — has to
+  stay outside `0–110 × 30–170`, or it hides LFS's own entry-screen and garage menus.
+  `ui/ui_manager.py` exposes `hud_overlaps_reserved_area()` as that rule.
+- The HUD itself is exempt, because it does not exist on those screens.
 - `clamp_hud_position()` **is** enforced: it keeps the whole block — HUD, PDC column,
   siren buttons and notification line, i.e. `x-3 … x+29` by `y-6 … y+13` — inside
   `0…200`. Every draw site goes through `UIManager.hud_origin()`, so a hand-edited
@@ -129,11 +139,12 @@ keystroke may be sent and a reason string when it may not:
 
 | Condition | Reason | Source | Why |
 |---|---|---|---|
+| a replay is running | `replay` | `state_data['replay']` | checked **before** `off_track`, because both are true and only this one explains it: the warning systems and the HUD do run in a replay (§1.1), but a keystroke there lands in the *running game* |
 | not `on_track` | `off_track` | `state_data['on_track']` | no control input is meaningful |
 | `ISS_TEXT_ENTRY` is set | `text_entry` | `state_data['text_entry']` | the keystroke is typed into the LFS chat instead of acting as a control |
 | `ISS_DIALOG` is set | `dialog` | `state_data['dialog']` | the keystroke operates the open dialog |
 | the user is holding **Shift** or **Ctrl** | `modifier_held` | `OutGaugePack.Flags & OG_SHIFT` (1) / `OG_CTRL` (2) | LFS binds many SHIFT+key shortcuts (SHIFT+B / SHIFT+I buttons, SHIFT+U free view, …). An injected key while Shift is held becomes a command |
-| OutGauge is silent | `no_outgauge` | `outgauge_status` + the age of the last packet (3 s) | no gauges, no pedals, and **no `viewed_plid`** — so the row below cannot be answered at all (`known-issues.md` #51) |
+| OutGauge is silent | `no_outgauge` | `outgauge_status` + the age of the last packet (3 s), counted only while the stream is **due** | no gauges and no pedals (`known-issues.md` #51). `viewed_plid` itself survives now — `IS_STA.ViewPLID` also fills it (`conventions.md` §5.2) — but nothing else OutGauge carries does |
 | OutGauge describes another car | `not_local_driver` | `own_vehicle.is_local_driver` | TAB moves OutGauge to a spectated car; shifting on its rpm actuates *our* car (`conventions.md` §5.2) |
 | LFS drives the car itself | `ai_controlled` | `own_vehicle.data.is_ai` | our keys would fight the AI |
 | LFS is not the foreground window | `lfs_not_focused` | Win32 `GetForegroundWindow` | otherwise we type into the user's browser |
@@ -159,15 +170,24 @@ Rules that shaped the implementation:
   tab on the LFS forum and a file manager in a folder called LFS, which are exactly the
   windows the check exists to keep keystrokes out of.
 - **`no_outgauge` fails *closed*, and it is checked before `not_local_driver`.** The
-  two rows look similar and are opposites. Without OutGauge, `viewed_plid` stays 0,
-  so `is_local_driver` is False *for a driver sitting in their own car* — and the
+  two rows look similar and are opposites. Without OutGauge, `viewed_plid` used to stay
+  0, so `is_local_driver` was False *for a driver sitting in their own car* — and the
   refusal that came out named the variable instead of the fault. The order fixes the
   message; failing closed fixes the behaviour, because acting blind is the hazard.
   The guard does **not** guess when nobody has published `outgauge_status` at all
   (a bare `InputGuard` in a test): same rule as the foreground check below.
-- **A stale Shift reading does not block.** OutGauge only streams on track in an
-  internal view (`conventions.md` §5.3) — exactly when injection is allowed at all — so
-  the flags are fresh whenever they matter; a reading older than 1 s is treated as
+- **The silence clock only runs while OutGauge is due.** LFS streams while the player
+  sits in a car, so the silence in the menu is correct and not a fault. `outgauge_stale()`
+  returns False while neither `on_track` nor `replay`, and otherwise measures from
+  whichever came later — the last packet, or the moment the stream became due. Before
+  that, any visit to the menu longer than three seconds came back as a fault: the first
+  assistance pass after entering the track reported *"no OutGauge data"* and pushed an
+  *"emergency braking unavailable"* notification, for exactly one frame, until the first
+  packet arrived. `UIManager` uses the same rule for its on-screen warning
+  (`known-issues.md` #24).
+- **A stale Shift reading does not block.** OutGauge streams whenever the player is
+  in a car, in every camera view (`conventions.md` §5.3) — which covers everything
+  injection is allowed in at all — so the flags are fresh whenever they matter; a reading older than 1 s is treated as
   unknown rather than as "held", or one lost packet would disable the feature.
   `misc/key_binder.py` already depends on `pynput` and is the natural place for a local
   fallback listener if a broader guarantee is ever wanted. (`IS_BTC.CFlags` also has

@@ -69,6 +69,7 @@ class VehicleManager:
         self.event_bus.subscribe('player_left', self._handle_player_left)
         self.event_bus.subscribe('race_restarted', self._handle_race_restarted)
         self.event_bus.subscribe('outgauge_data', self._handle_outgauge_data)
+        self.event_bus.subscribe('state_data', self._handle_state_data)
 
     # ─── Eigene PLID ──────────────────────────────────────────────────
 
@@ -435,6 +436,28 @@ class VehicleManager:
             self._local_driver_score = 0
 
     # ─── OutGauge ─────────────────────────────────────────────────────
+
+    def _handle_state_data(self, data):
+        """``IS_STA.ViewPLID`` - wer die Kamera gerade traegt.
+
+        Die zweite Quelle fuer ``own_vehicle.viewed_plid`` neben OutGauge, und
+        die einzige, die auch in einer Aussenkamera und im Replay laeuft.
+        Ohne sie fror der Wert dort auf dem letzten Stand ein und
+        ``is_local_driver`` antwortete ueber ein Auto, das die Kamera laengst
+        verlassen hatte (known-issues #29/#51).
+        """
+        if not isinstance(data, dict):
+            return
+        plid = _as_int(data.get('view_plid', 0))
+        if not plid:
+            # 0 heisst "keine Kamera auf einem Auto" - im Menue, im
+            # Einstiegsbildschirm, in der Freikamera. Das ist keine Auskunft
+            # ueber ein Auto, sondern ihre Abwesenheit, und der alte Wert
+            # bleibt stehen: ueberschreiben wuerde ``is_local_driver`` fuer
+            # einen Frame falsch beantworten, und aktuiert wird dort ohnehin
+            # nicht (``off_track`` kommt zuerst).
+            return
+        self.own_vehicle.set_viewed_plid(plid)
 
     def _handle_outgauge_data(self, outgauge_packet):
         """Verarbeitet OutGauge-Daten für eigenes Fahrzeug"""

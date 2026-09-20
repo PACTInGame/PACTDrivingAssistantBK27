@@ -132,7 +132,7 @@ for every modded car.** Two exist today:
 
 | Table | Location | Fallback | Effect on a mod |
 |---|---|---|---|
-| `get_vehicle_size(cname)` → `(length, width)` | `assistance/park_distance_control.py` | `(4.5, 1.8)` | PDC sensor geometry is wrong for anything that is not a mid-size saloon — a bus or a kart gets saloon dimensions. **FCW no longer trusts it**: `ForwardCollisionWarning._vehicle_length` checks whether the `CName` is one the table really knows and otherwise uses `FALLBACK_VEHICLE_LENGTH_M` (5.0 m, the longest standard car), because for a warning threshold "too short" means "too late" |
+| `get_vehicle_size(cname)` → `(length, width)` | `assistance/park_distance_control.py` | `FALLBACK_SIZE` = `(4.5, 1.8)` | the dimensions of a modded car remain unknown — a bus or a kart gets saloon dimensions. Two public companions decide how that is answered: `is_known_car(cname)` asks whether the table really knows it, and **`conservative_vehicle_size(cname)`** returns `CONSERVATIVE_SIZE` = `(5.0, 2.1)`, the largest standard car, for anything it does not. Everything where the error points at *too late* uses the conservative one: `path_conflict.body_from` (the contact windows of the cross-traffic and blind-spot warnings) and PDC's sensor geometry. FCW carries its own `FALLBACK_VEHICLE_LENGTH_M` (5.0 m) on the same reasoning |
 | gearbox calibration | `data/gearbox_calibrations.json` | `vehicles/car_profiles.py` (measured), then `STOCK_PROFILES` | all three tiers of the list below, in that order: the driver's own calibration wins, the built-in stock table seeds the ~20 standard cars, and everything else — every mod — is measured at runtime |
 
 The gearbox is the model to follow: **derive car-specific parameters at runtime instead
@@ -210,8 +210,18 @@ Consequences:
   spectated car while spectating, which is correct — the values belong to a car
   *model*, not to a driver.
 
-`IS_STA.ViewPLID` carries the same information over InSim and is unpacked by pyinsim,
-but is not read anywhere in this project.
+**`IS_STA.ViewPLID` is the second source, and it is read.** `StateHandler` publishes
+it as `state_data['view_plid']`, `VehicleManager` feeds it into
+`OwnVehicle.set_viewed_plid()`, and the most recent of the two writers wins — except
+that a `ViewPLID` of **0** is discarded rather than stored. Zero means "the camera is on
+no car" (menu, entry screen, free view), which is the absence of an answer, not an
+answer; storing it would make `is_local_driver` False for a frame on every screen change,
+and nothing may actuate there anyway. It arrives
+only on a state change, but it is camera-independent and it is the **only** pointer to
+the watched car in a replay, where LFS sends no `IS_NPL` at all (`ui.md` §1.1).
+Before it, `viewed_plid` came from OutGauge alone: wherever that stream is silent the
+value simply froze on its last reading, and `is_local_driver` then answered about a car
+the camera had already left (`known-issues.md` #51).
 
 **A mod's car name is a number, not a name.** For the stock cars `CName` and
 `OutGaugePack.Car` hold text — `XFG`, `RB4`. A mod puts its numeric id in the same three
@@ -235,22 +245,29 @@ Per `InSim.txt`: *"The user's car in multiplayer or the viewed car in single pla
 single player replay can output information to a dashboard system **while viewed from
 an internal view**."* And `OutGauge Mode` is `0 = off / 1 = driving / 2 = driving+replay`.
 
-So OutGauge stops streaming entirely when:
+**The "internal view" clause is not true of the running game.** Measured in game on
+2026-09-19: with the HUD up and the car moving, speed, rpm and gear keep updating in
+chase, heli and TV camera. The only thing that changes the OutGauge source is **TAB**,
+which puts the camera on a different car — `viewed_plid` changes, the stream does not
+stop. `InSim.txt` in the LFS install is now only a link to lfs.net (`AGENTS.md` §4), so
+the game is the authority here and the old wording is not. `known-issues.md` #29 was
+withdrawn on that measurement.
 
-- the camera is **not** an internal view — `IS_STA.InGameCam` other than `VIEW_DRIVER`
-  (3) or `VIEW_CUSTOM` (4); chase (`VIEW_FOLLOW` 0), heli (1) and TV (2) produce nothing;
-- you are **in the pits / garage**, not on track — which is why the own PLID cannot be
-  established there;
-- `OutGauge Mode` is 0 in `cfg.txt`.
+So OutGauge stops streaming when:
 
-`own_vehicle` is published from OutGauge **and** from every MCI frame, so a camera
-change no longer decides whether an own vehicle exists at all. What it still decides is
-how *fresh* the OutGauge half is: while OutGauge is silent, the gauge fields and the
-pedals stand still and only the MCI half (position, heading, speed) keeps moving
-(`known-issues.md` #24, #29). The existing workaround is
-`StateHandler.start_game_insim()`, which re-opens the OutGauge socket on track entry if
-more than 30 s have passed; `AIDriver` sidesteps it with the notification *"Camera needs
-to be on own vehicle."*
+- you are **off track** — in the menu, on the entry screen, in the pits / garage. This
+  is the normal case and it is why the silence clock in `misc/input_guard.py` and in
+  `UIManager` only runs while `on_track or replay`: measuring from the last packet
+  regardless turned every visit to the menu into a reported fault;
+- `OutGauge Mode` is 0 in `cfg.txt`, or is 1 while a replay is being watched;
+- the UDP socket never bound, because something else holds port 30000.
+
+All three are reported rather than silent (`known-issues.md` #24, #51).
+
+`own_vehicle` is published from OutGauge **and** from every MCI frame, so nothing about
+the camera decides whether an own vehicle exists at all. `StateHandler._start_game_insim`
+re-opens the OutGauge socket on track entry if more than 30 s have passed — a
+socket-health measure, not a camera workaround.
 
 ### 5.4 Determining your own PLID robustly
 

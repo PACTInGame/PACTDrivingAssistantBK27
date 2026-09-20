@@ -28,6 +28,7 @@ SCREEN_GARAGE = 'garage'         # Box / Garage
 SCREEN_OPTIONS = 'options'       # Optionen, Host-Optionen, Auto-/Streckenwahl
 SCREEN_SHIFTU = 'shiftu'         # SHIFT+U Freikamera
 SCREEN_GAME = 'game'             # auf der Strecke
+SCREEN_REPLAY = 'replay'         # Wiedergabe eines Replays (ISS_REPLAY)
 
 # In diesen Kontexten zeigt LFS normale Buttons ueberhaupt nicht an; nur
 # INST_ALWAYS_ON ueberlebt dort (InSim.txt, reference/ui.md §1.1).
@@ -71,6 +72,11 @@ class StateHandler:
         self.multiplayer = False    # ISS_MULTI
         self.front_end = False      # ISS_FRONT_END
         self.in_game = False        # ISS_GAME
+        self.replay = False         # ISS_REPLAY - Wiedergabe laeuft
+        # IS_STA.ViewPLID: die PLID des Autos, auf dem die *Kamera* sitzt.
+        # Kameraunabhaengig und auch dann da, wenn OutGauge schweigt
+        # (Aussenkamera, Replay) - reference/conventions.md §5.2.
+        self.view_plid = 0
         self.screen = SCREEN_MAIN_MENU
         self.time_menu_opened = time.time()
         self._seen_sta = False
@@ -99,6 +105,8 @@ class StateHandler:
         self.ui_visible = bool(flags_raw & pyinsim.ISS_VISIBLE)
         self.shift_u = bool(flags_raw & pyinsim.ISS_SHIFTU)
         self.multiplayer = bool(flags_raw & pyinsim.ISS_MULTI)
+        self.replay = bool(flags_raw & pyinsim.ISS_REPLAY)
+        self.view_plid = _as_int(getattr(sta, 'ViewPLID', 0))
         self.track = _decode_track(getattr(sta, 'Track', b''))
 
         # on_track is True when ISS_GAME is set AND ISS_FRONT_END (entry screen) is NOT set.
@@ -152,6 +160,12 @@ class StateHandler:
 
     def _derive_screen(self) -> str:
         """Ordnet Flags und Interface-Modus einem der Kontexte zu"""
+        if self.replay and not self.in_game:
+            # Ein Replay ist ein eigener Zustand: ISS_GAME fehlt, ISS_VISIBLE
+            # ist gesetzt, LFS zeigt unsere Buttons also an (ui.md §1.1).
+            # Ohne diesen Zweig faellt die Wiedergabe in SCREEN_MAIN_MENU und
+            # es duerfte nichts gezeichnet werden (known-issues #55).
+            return SCREEN_REPLAY
         if not self.in_game and not self.front_end:
             # Weder Rennen noch Einstiegsbildschirm: Hauptmenue oder
             # Serverliste. LFS zeigt hier keine Buttons an.
@@ -174,6 +188,8 @@ class StateHandler:
             'dialog': self.dialog,
             'track': self.track,
             'in_game_cam': self.in_game_cam,
+            'view_plid': self.view_plid,
+            'replay': self.replay and not self.in_game,
             'in_game_interface': self.in_game_interface,
             'submode_interface': self.submode_interface,
             # ── ab WP5 ──

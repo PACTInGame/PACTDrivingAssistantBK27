@@ -40,59 +40,102 @@ occurrence identifies itself. Note that the queue is *structurally* at its limit
 
 ## LFS integration, screen context and car data
 
-**#24 — OutGauge misconfiguration is undetectable and fatal.** If `cfg.txt` has
-OutGauge off or on the wrong port, InSim still connects, the startup connection test
-passes, and buttons still draw — but `own_vehicle_updated` never fires, so
-`AssistanceManager.own_vehicle` stays `None` and `process_all_systems()` returns
-immediately forever. Every assistance system silently does nothing, with no diagnostic.
-(`own_vehicle.data.player_id` itself now comes from `IS_NPL` and survives this,
-but without OutGauge there is no speed, rpm or pedal data at all.) An LFS update or reinstall can reset `cfg.txt`, and the setup
-wizard never re-runs because of the `.setup_done` flag. Needs a startup validation of
+**#24 — OutGauge misconfiguration is fatal; it is no longer undetectable.**
+If `cfg.txt` has OutGauge off or on the wrong port, InSim still connects, the startup
+connection test passes and buttons still draw — but there is no speed, rpm or pedal
+data at all, so every actuator is blind. (`own_vehicle.data.player_id` comes from
+`IS_NPL` and `own_vehicle` is published from MCI as well, so the app still knows the
+car; what is missing is everything OutGauge carries.) An LFS update or reinstall can
+reset `cfg.txt`, and the setup wizard never re-runs because of the `.setup_done` flag.
+
+**Both halves of the silence are now reported (2026-09-19).**
+
+* *Actuation* (#51): `InputGuard` refuses with `no_outgauge`, and the emergency brake
+  reports that as its availability reason instead of claiming to be armed.
+* *Warning-only*: FCW, blind spot and cross traffic run off MCI and kept working, so a
+  driver with a wrong `cfg.txt` saw a HUD that looked healthy while half the app did
+  nothing. `UIManager` now draws a permanent red line — `BTN_OUTGAUGE_WARNING`,
+  `OUTGAUGE_WARNING_TEXTS` — naming either the taken port or the `cfg.txt` setting.
+  Deliberately **not** a `notification`: that queue shows a message for 3 s and is
+  structurally unusable for anything permanent (`ui.md` §1.7).
+
+**The staleness clock only runs while OutGauge is due.** LFS streams while the player
+sits in a car, so the silence in the menu is correct. Measuring from the last packet
+regardless meant that any visit to the menu longer than `OUTGAUGE_STALE_AFTER_S` came
+back as a fault: entering the track produced one frame of *"no OutGauge data"* and an
+*"emergency braking unavailable"* notification, then cured itself when the first packet
+arrived. Both `InputGuard` and `UIManager` now measure from whichever came later, the
+last packet or the moment the stream became due. Reported live 2026-09-19, fixed the
+same day, `tests/test_replay_and_outgauge.py`.
+
+**What is still open** is prevention rather than diagnosis: a startup validation of
 `cfg.txt` — or, better, dropping the `cfg.txt` dependency entirely via `SMALL_SSG`
 (`lfs-setup.md` §5).
 
-**The "no OutGauge data" half of this is done** (#51): `InputGuard` refuses every
-actuation with `no_outgauge` after three silent seconds, and the emergency brake
-reports it as its availability reason instead of claiming to be armed. What is still
-missing is the *warning-only* half — FCW, blind spot and cross traffic keep working
-off MCI, so a driver whose `cfg.txt` is wrong still gets a HUD that looks healthy.
+**#27 — WITHDRAWN 2026-09-19. The HUD cannot sit in LFS's reserved area,
+because it does not exist on the screens where that area means anything.**
 
-**#27 — The HUD may still sit in the area LFS reserves for its own UI.**
-`clamp_hud_position()` (`ui/ui_manager.py`) now keeps the whole block — HUD, PDC
-column, siren buttons and notification line — inside `0…200` in both axes, so
-the arrows can no longer push anything off screen. The second half is
-deliberately *not* enforced: the shipped default (`hud_width` 90,
-`hud_height` 119) sits inside `L 0…110, T 30…170`, so clamping the HUD out of
-that rectangle would relocate every existing user's HUD. Instead the system
-menu's "HUD Position" label turns `^1` red while the block overlaps it, and the
-move is logged. Whether the default should move out of the rectangle is a
-product decision, not a bug fix. `ui.md` §1.3.
+The first half was real and is fixed: `clamp_hud_position()` (`ui/ui_manager.py`)
+keeps the whole block — HUD, PDC column, siren buttons and notification line — inside
+`0…200` in both axes, so the menu arrows can no longer push anything off screen.
 
-**#28 — Vehicle mods fall through hardcoded car tables.** `get_vehicle_size()` returns
-`(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary `CName`
-values. (`CName` is a decoded `str` since WP4 and the lookup accepts both, so the
-fall-through is now the only remaining half of this.) PDC sensor geometry is then wrong
-for every modded car, and since WP8 the cross-traffic arrival window uses the same table.
-FCW no longer relies on it — it detects the unknown name and uses
-a conservative 5.0 m length instead (WP7) — but it has to reach into the table's private
-`_CAR_SIZES` to do so; a public `is_known_car(cname)` next to `get_vehicle_size()` would
-be the cleaner home for that. `conventions.md` §4 has the preferred alternatives.
+The second half was a bad finding. Buttons inside `L 0…110, T 30…170` make LFS clear
+the area for them, which hides **LFS's own UI** — on the entry screen and in the
+garage, the two screens where LFS draws one. This app draws no HUD there: every element
+hangs off `UIManager.drawing` (`on_track or replay`), and leaving that state clears the
+whole button range. Confirmed in game on 2026-09-19: entering the garage during a race
+shows no HUD at all. In the race itself LFS has nothing at that position to displace —
+the shipped default (90, 119) is near the centre of the screen.
 
-**#29 — OutGauge stops in any external camera view, freezing the gauge half of
-`own_vehicle`.** LFS only streams OutGauge from an internal view while on track.
-Switching to chase/heli/TV camera, or entering the garage, stops the OutGauge side of
-`own_vehicle_updated`, so rpm, gear, pedals and the dash lights stand still. Same
-silent-freeze mechanism as #24, but triggered by ordinary user actions rather than
-misconfiguration. The 30-second `start_outgauge()` re-init in
-`StateHandler._start_game_insim` is a partial workaround. `conventions.md` §5.3.
+So the red "HUD Position" label lit up for the shipped default and nothing ever
+corresponded to it. It is gone. `hud_overlaps_reserved_area()` stays as the rule for
+anything drawn **outside** the track — the idle banner at y 180 is the only such button
+today, and it is outside the rectangle. `ui.md` §1.3.
 
-**Half of this is fixed (2026-09-19).** `VehicleManager` now also publishes
-`own_vehicle_updated` from every MCI frame, which arrives in every camera view. So the
-position/heading/speed half keeps moving, and — the part that actually broke things —
-`AssistanceManager.process_all_systems()` no longer returns immediately because
-`self.own_vehicle` is still `None`. Before, an app started while LFS already sat in a
-chase camera ran **no** assistance system at all, including the AI traffic, which needs
-nothing from OutGauge. What is left of #29 is genuinely OutGauge-only data.
+**#28 — Vehicle mods fall through hardcoded car tables.** `get_vehicle_size()`
+returns `(4.5, 1.8)` for any `CName` it does not know, and LFS mods produce arbitrary
+`CName` values, so the true dimensions of a modded car are still unknown.
+
+**What changed 2026-09-19** is that "unknown" is no longer silently answered with
+"mid-size saloon" wherever the error points at *too late*:
+
+* `park_distance_control.is_known_car(cname)` is the public question. FCW used to reach
+  into the private `_CAR_SIZES` to ask it.
+* `conservative_vehicle_size(cname)` answers with `CONSERVATIVE_SIZE` (5.0 × 2.1 m, the
+  largest standard car) for anything unknown. `path_conflict.body_from` uses it, so the
+  contact windows of the cross-traffic and blind-spot warnings no longer miss a modded
+  car for being assumed too small; so does PDC's sensor geometry, where a car assumed
+  too short reports the obstacle too late.
+* `get_vehicle_size()` keeps the mid-size fallback for everything where a wrong value
+  is merely wrong.
+
+The real fix is still the one `conventions.md` §4 asks for: derive the dimensions at
+runtime instead of tabulating them, the way `vehicles/car_profiles.py` derives idle
+rpm, rev limit and gear count. Nothing measures a car's length today.
+
+**#29 — WITHDRAWN 2026-09-19. OutGauge does not stop in an external camera
+view.** Measured in game: with the HUD up and the car moving, speed, rpm and gear keep
+updating in chase, heli and TV camera. The only thing that changes the OutGauge source
+is **TAB**, which moves the camera to a different car — and that is `viewed_plid`
+changing, not the stream stopping.
+
+The claim came from `InSim.txt`'s wording *"while viewed from an internal view"*.
+`InSim.txt` in the LFS install is now only a link to lfs.net (`AGENTS.md` §4), so the
+running game is the authority, and the running game contradicts it. `conventions.md`
+§5.3 has been corrected.
+
+Two things that *were* built on this finding, and what is left of them:
+
+* `VehicleManager` publishes `own_vehicle_updated` from every MCI frame as well as from
+  OutGauge. Independently correct and staying: before it, an app started while LFS sat
+  on any screen without OutGauge ran **no** assistance system at all, including the AI
+  traffic, which needs nothing from OutGauge.
+* `StateHandler`'s 30-second `start_outgauge()` re-init on track entry was described as
+  a workaround for this. It is a socket-health measure and nothing more; see #24 for
+  the failure it actually guards against.
+
+What does stop OutGauge is `OutGauge Mode = 0` in `cfg.txt`, a port that never bound,
+and being off track. All three are reported now (#24, #51).
 
 **#46 — FIXED 2026-09-19. The throttle cut did not remove a throttle the
 driver was already holding.** Kept because the measurement is the reference for
@@ -252,12 +295,24 @@ it exists. Any code that assumed a PLID stays in the dict once seen has to be
 re-read — `tests/test_vehicle_model.py` had two tests encoding exactly that
 assumption.
 
-**Still open, deliberately not changed here.** `EmergencyBrake` has no
-re-engage lockout and no minimum hold: an intervention that hands back because
-the driver is on the throttle can re-engage on the very next cycle. That is
-correct for a real hazard that persists, and a stutter for anything else.
-Decide it together with #48, and with `control-intervention.md` §3 open —
-taking the brake and giving it back repeatedly is worse than either choice.
+**The open half is closed (2026-09-19).** `EmergencyBrake` had no re-engage
+lockout, so an intervention that handed back because the driver was on the throttle
+could re-engage on the very next cycle — the eight engage/release cycles in 4.5 s above,
+seen from the other end. `THROTTLE_HANDBACK_LOCKOUT_S` (1.5 s) now blocks a fresh
+engagement after a throttle handback, under two conditions that are both necessary:
+
+* only **while the driver keeps the throttle down**. Lifting off withdraws the decision
+  that produced the handback, and a conflict that is still there may re-arm us at once;
+* and only for that time. An AEB a held throttle switches off for good is not an AEB —
+  panic throttle is the case it exists for.
+
+Worst case cost: 1.5 s without intervention while the driver accelerates away from at
+most 10 km/h, having declared the way clear. `tests/test_emergency_brake.py` holds the
+loop, both exits and the expiry.
+
+A *minimum hold* is deliberately still absent. Releasing our share is always allowed
+(`control-intervention.md` §1), and a timer that keeps the brake on against a situation
+that has resolved would be a worse failure than the stutter.
 
 **#50 — FIXED 2026-09-19. AI traffic kept talking to cars that no longer existed,
 and to the wrong car when the camera had moved.**
@@ -351,20 +406,17 @@ the run it was written for. `simulation_tests/README.md` §2 already says never
 to start a second receiver on 30000 alongside the add-on; what it did not say
 is that the add-on cannot tell you when one is there. Now it can.
 
-**One deliberate consequence, and it is the open half of this.** OutGauge also
-stops for an *external camera* (`conventions.md` §5.3), so a driver in chase
-view now loses the emergency brake, auto-hold and the automatic gearbox after
-three seconds — with a red menu line and a log warning, not silently. Before,
-they kept actuating on a `viewed_plid` frozen at whatever it last was, which is
-worse in the case that matters (spectating somebody else in an external view)
-and better in the common one (own car, chase cam). The proper fix is
-`IS_STA.ViewPLID`: it carries the viewed PLID over InSim, camera-independently,
-pyinsim already unpacks it, and nothing in this project reads it
-(`conventions.md` §5.2). Feeding `own_vehicle.viewed_plid` from it would make
-`is_local_driver` answerable without OutGauge and let the key path — which
-needs no gauges at all — keep working in chase view. Not done here: it is a
-separate change to `StateHandler`, the `state_data` payload and `OwnVehicle`,
-and this session was scoped to the silent-failure bug.
+**The half this was thought to leave open does not exist.** The paragraph here
+used to say that a driver in chase view now loses the emergency brake, auto-hold and
+the automatic gearbox after three seconds, because OutGauge stops in an external camera.
+It does not stop — see #29, withdrawn after measuring it in game. The guard's
+`no_outgauge` refusal therefore fires for a broken `cfg.txt`, a taken port or an
+unbound socket, and not for a camera angle.
+
+`IS_STA.ViewPLID` **is** read now (`lfs/lfs_state.py` → `state_data['view_plid']` →
+`VehicleManager` → `OwnVehicle.set_viewed_plid`). It is the second source for
+`viewed_plid` beside OutGauge: camera-independent, and the only one in a replay, where
+LFS sends no `IS_NPL` at all (`ui.md` §1.1). `conventions.md` §5.2.
 
 **#52 — FIXED 2026-09-19. The car you were running into raised an acute blind
 spot warning, on whichever side the noise picked — sometimes both.**
@@ -436,30 +488,41 @@ resampling) and a 1024-sample buffer instead of pygame's 512, which is ~12 ms
 and too tight next to a running LFS. A machine with no audio device logs one
 line and loses its warning tones instead of taking the app down at startup.
 
-**#55 — The add-on is completely inert during a replay, and nothing says so.**
+**#55 — FIXED 2026-09-19. The warning systems and the HUD run during a replay.**
 
-Not a regression and arguably not a bug — but it costs a whole verification
-route, so it is worth knowing before someone tries the same thing. A replay
-sets `ISS_REPLAY` and **not** `ISS_GAME` (measured, `ui.md` §1.1), so
-`on_track` is False and `AssistanceManager` skips every system. No warning, no
-PDC, no HUD. Anyone checking a fix by loading the replay of the incident gets
-silence and cannot tell it apart from the fix working.
+A replay sets `ISS_REPLAY` and **not** `ISS_GAME` (measured, `ui.md` §1.1), so
+`on_track` was False and `AssistanceManager` skipped every system: no warning, no PDC,
+no HUD. Anyone checking a fix by loading the replay of the incident got silence and
+could not tell it apart from the fix working. That cost a whole verification route.
 
-Blocking *actuation* there is correct and must stay. Whether warnings and the
-HUD should run is an open product decision; it would be a `replay` flag in
-`state_data`, with `InputGuard` refusing on it, and `AssistanceManager` gated
-on `on_track or replay`.
+Three changes:
 
-Until then, the way to check behaviour against a replay is offline: capture
-`IS_MCI` with a second InSim client (a replay streams it normally at 10 Hz) and
-feed the frames through the systems in a script. Note that `IS_NPL` does **not**
-arrive in a replay, so `CName` is unavailable and `IS_STA.ViewPLID` is the only
-pointer to the player's own car.
+* `StateHandler` derives `SCREEN_REPLAY` and publishes `state_data['replay']`. Without
+  its own screen the replay fell into `SCREEN_MAIN_MENU`, where nothing may be drawn —
+  so reading the flag alone would not have been enough.
+* `AssistanceManager` runs `REPLAY_SYSTEMS` there — `fcw`, `bsw`, `ctw`, `pdc`, i.e.
+  exactly the systems that only **publish**. Not an InputGuard question: a keystroke in
+  a replay lands nowhere, but the light and AI-traffic commands go over InSim to the
+  *running game* and would be a real side effect.
+* `InputGuard` refuses with `replay` rather than `off_track`, because the systems now
+  really are running and the reason should describe the world.
+
+`UIManager` draws off `drawing` (`on_track or replay`) and clears the button range when
+either ends — the clean-up path used to hang on `on_track`, so a finished replay left
+its buttons in the main menu.
+
+Confirmed in game on 2026-09-19: HUD and warnings run in a replay.
+
+Two properties of a replay that make it usable, and one trap: **MCI streams normally**
+(10 Hz, every car) and **OutGauge streams** with `OutGauge Mode = 2`, but `IS_NPL` does
+**not** arrive — so `CName` is unavailable and `IS_STA.ViewPLID` is the only pointer to
+the car being watched.
 
 ## Deliberately disabled — leave alone unless asked
 
 - *(nothing at present)* Automatic emergency braking is no longer inert: it lives
   in `assistance/emergency_brake.py`, is armed by `automatic_emergency_brake == 2`,
   and was measured preventing a rear-end collision end to end —
-  `simulation_tests/README.md` §13. `Controls/wheel.py` and
-  `assistance/controller_emulator.py` are still dead code; see #8.
+  `simulation_tests/README.md` §13. The dead `Controls/wheel.py` and
+  `assistance/controller_emulator.py` named here until 2026-09-19 no longer exist;
+  the vJoy path lives in `Controls/brake_axis.py` and `misc/vjoy_device.py`.

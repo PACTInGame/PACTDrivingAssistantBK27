@@ -375,10 +375,11 @@ python simulation_tests/analyze_trace.py runs/04_drive_and_stop_20260913-141207/
 
 The summary calls out the two things that make a good add-on look broken:
 
-- **OutGauge stalls.** OutGauge stops dead outside an internal camera view and
-  in the pits (`reference/conventions.md` §5.3), and every assistance system
-  freezes with it. If the summary reports a stall, the capture is at fault, not
-  the code.
+- **OutGauge stalls.** OutGauge stops dead as soon as the car is not on track
+  (`reference/conventions.md` §5.3), and every gauge-dependent system freezes
+  with it. The **camera view does not matter** -- chase, heli and TV keep it
+  running (`known-issues.md` #29, withdrawn). If the summary reports a stall,
+  the capture is at fault, not the code.
 - **dropped records**, i.e. the trace has holes.
 
 ## 7. Rules for an automated agent
@@ -513,7 +514,7 @@ drives the real tracer against a fake LFS (`tests/fake_lfs.py`).
 |---|---|
 | `could not connect to LFS on 127.0.0.1:29999` | LFS not running, or InSim not enabled (`/insim 29999`) |
 | tracer starts, trace has only `meta` | LFS is on the entry screen and the scenario traces nothing there — expected for menu scenarios |
-| summary warns "OutGauge never arrived" | the camera is not an internal view, or the car is in the pits (`conventions.md` §5.3) |
+| summary warns "OutGauge never arrived" | the car is not on track, or `OutGauge Mode` is 0 in `cfg.txt` (`conventions.md` §5.3) — not the camera view |
 | summary warns "OutGauge stalled" | same, mid-run — the capture is bad, re-run it |
 | `could not bring LFS to the foreground` | the raise itself failed — a UAC-elevated window or a full-screen exclusive app is holding it. Close that, or run with `--no-focus-check` if you accept where the input lands |
 | clicks land in the wrong place | the recording was made at another resolution; re-record |

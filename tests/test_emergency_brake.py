@@ -1001,6 +1001,72 @@ def test_the_driver_takes_the_car_back_with_the_throttle_below_the_floor(
     assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
 
 
+def _hand_back_on_the_throttle(bus, system, make_own_vehicle, clock):
+    """Drive the exact sequence that ended known-issues #49's stutter loop.
+
+    Engage at speed, let the car fall below the commit speed, then have the
+    driver press the throttle: the intervention hands the car back.
+    """
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+    assert system._engaged is True
+    demand(bus, 0.0)
+    accelerating = make_own_vehicle(speed=8.0, local_plid=1, plid=1,
+                                    throttle=0.6)
+    assert system.process(accelerating, {})['active'] is False
+    return accelerating
+
+
+def test_a_handback_on_the_throttle_blocks_the_next_engagement(
+        bus, aeb_factory, make_own_vehicle):
+    """Eight engagements in 4.5 s -- the other end of known-issues #49.
+
+    The ghost vehicle that produced the demand is gone, but the loop it ran
+    around is not: hand back because the driver is on the throttle, let the
+    car accelerate past FCW's 10 km/h floor, and the same demand re-engages on
+    the very next cycle. Nothing damped that.
+    """
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
+    _hand_back_on_the_throttle(bus, system, make_own_vehicle, clock)
+
+    # The demand comes straight back and the driver is still accelerating.
+    demand(bus, 9.0)
+    still_on_it = make_own_vehicle(speed=15.0, local_plid=1, plid=1,
+                                   throttle=0.6)
+    for _ in range(5):
+        clock.advance(0.1)
+        demand(bus, 9.0)
+        assert system.process(still_on_it, {})['active'] is False
+
+
+def test_the_lockout_ends_when_the_driver_comes_off_the_throttle(
+        bus, aeb_factory, make_own_vehicle):
+    """The handback is the driver's decision only while they keep making it."""
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
+    _hand_back_on_the_throttle(bus, system, make_own_vehicle, clock)
+
+    clock.advance(0.1)
+    demand(bus, 9.0)
+    coasting = make_own_vehicle(speed=15.0, local_plid=1, plid=1, throttle=0.0)
+    assert system.process(coasting, {})['active'] is True
+
+
+def test_the_lockout_expires_so_panic_throttle_cannot_disable_the_aeb(
+        bus, aeb_factory, make_own_vehicle):
+    """A brake that a held throttle switches off for good is not an AEB."""
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
+    _hand_back_on_the_throttle(bus, system, make_own_vehicle, clock)
+
+    clock.advance(EmergencyBrake.THROTTLE_HANDBACK_LOCKOUT_S + 0.01)
+    demand(bus, 9.0)
+    still_on_it = make_own_vehicle(speed=15.0, local_plid=1, plid=1,
+                                   throttle=0.6)
+    assert system.process(still_on_it, {})['active'] is True
+
+
 def test_throttle_does_not_abort_the_emergency_itself(
         bus, aeb_factory, make_own_vehicle):
     """Panic throttle at speed is what an AEB exists to override."""

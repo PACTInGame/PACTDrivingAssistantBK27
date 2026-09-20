@@ -9,6 +9,7 @@ from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from lfs.lfs_state import SCREEN_ENTRY
 from lfs.message_sender import MessageSender
+from misc.input_guard import OUTGAUGE_STALE_AFTER_S
 from misc.pdc_beep import PDCBeepController
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,9 @@ BTN_EMERGENCY_BRAKE = 15
 # 16-17: die Getriebekalibrierung. Eigener Slot, weil sie eine zeitkritische,
 # modale Prozedur ist - ueber die Meldungsschlange (61) gelesen hing ihre
 # Aufforderung dem gemessenen Schritt hinterher (reference/ui.md §1.7).
+# Konfigurationswarnung "OutGauge schweigt" (known-issues #24). Eigener
+# Slot, weil sie neben allem anderen stehen muss und keine Meldung ist.
+BTN_OUTGAUGE_WARNING = 18
 BTN_CALIBRATION_PROMPT = 16
 BTN_CALIBRATION_STATUS = 17
 CALIBRATION_RANGE = (16, 17)
@@ -87,6 +91,10 @@ NOTIFICATION_SLOT = (0, 8, 26, 5)
 # Kalibrierfeld: absolute Bildschirmkoordinaten, mittig ueber der Bildmitte.
 # Nicht relativ zum HUD, weil der Fahrer es waehrend der Prozedur ansehen
 # soll und der HUD-Platz frei konfigurierbar ist.
+# Konfigurationswarnung: absolut, ueber dem Kalibrierfeld. Sie meldet einen
+# Fehler in der LFS-Konfiguration, keinen Fahrzustand, und gehoert deshalb
+# nicht an das frei verschiebbare HUD.
+OUTGAUGE_WARNING_SLOT = (55, 32, 90, 6)
 CALIBRATION_SLOT_PROMPT = (55, 40, 90, 7)
 CALIBRATION_SLOT_STATUS = (55, 47, 90, 6)
 
@@ -121,6 +129,24 @@ NOTIFICATION_OVERFLOW_LOG_S = 5.0
 # So weit unter der gemessenen Hoechstdrehzahl faerbt sich die HUD-Drehzahl
 # rot. Der Wert ist der, mit dem dieses Projekt frueher gearbeitet hat.
 RED_ZONE_RPM = 1000
+
+# ─── OutGauge-Stille ──────────────────────────────────────────────────────
+# Ohne OutGauge stehen Tacho, Drehzahl, Gang und alle Pedalwerte still, und
+# jeder Aktuator ist blind (known-issues #24/#51). Die Warnsysteme laufen
+# weiter -- sie brauchen nur MCI -- weshalb das HUD *gesund aussah*, waehrend
+# die halbe Anwendung nichts tat. Genau diese Haelfte von #24 schliesst die
+# Warnung hier.
+#
+# Derselbe Schwellwert wie in ``misc/input_guard.py``: was den Bremseingriff
+# verweigern laesst, soll auch auf dem Schirm stehen. Dort ist er die
+# Wahrheit fuer die Aktuierung, hier fuer den Fahrer -- der Wert wird
+# importiert, damit die beiden nicht auseinanderlaufen koennen.
+OUTGAUGE_WARNING_TEXTS = {
+    'port_in_use': "^1No OutGauge - port 30000 is taken",
+    'open_failed': "^1No OutGauge - port 30000 is taken",
+    'no_packets': "^1No OutGauge data - check OutGauge Mode in cfg.txt",
+}
+OUTGAUGE_WARNING_DEFAULT = "^1No OutGauge data"
 
 
 def _as_int(value, default: int = 0) -> int:
@@ -158,10 +184,15 @@ def clamp_hud_position(x, y) -> Tuple[int, int]:
 def hud_overlaps_reserved_area(x, y) -> bool:
     """Liegt der HUD-Block im von LFS reservierten Rechteck?
 
-    Dort raeumt LFS seine eigene UI weg - auf dem Einstiegsbildschirm und in
-    der Garage verschwinden dann LFS-Menues. Die ausgelieferte Standard-
-    position liegt in diesem Bereich, deshalb wird hier nur gewarnt und
-    nicht verschoben (siehe reference/ui.md §1.3).
+    Dort raeumt LFS seine eigene UI weg. Das ist die Regel fuer **alles, was
+    ausserhalb der Strecke gezeichnet wird** - auf dem Einstiegsbildschirm und
+    in der Garage wuerden LFS-Menues verschwinden.
+
+    Fuer den HUD selbst ist die Frage ohne Belang, und deshalb wird sie im
+    Menue nicht mehr gestellt (known-issues #27): jedes HUD-Element haengt an
+    ``UIManager.drawing``, und das Verlassen dieses Zustands raeumt den
+    gesamten Button-Bereich ab. Der HUD existiert auf genau den Bildschirmen
+    nicht, auf denen dieses Rechteck etwas bedeutet.
     """
     x, y = clamp_hud_position(x, y)
     return (x + HUD_BOX_LEFT < RESERVED_RIGHT
@@ -184,9 +215,29 @@ class UIManager:
         self.active_elements: Dict[str, bool] = {}
         self.current_menu = None
         self.on_track = False
+        # Laeuft gerade ein Replay? Seit known-issues #55 zeichnet das HUD
+        # auch dort - LFS setzt ISS_VISIBLE, die Buttons sind also sichtbar,
+        # und die Warnsysteme laufen mit (reference/ui.md §1.1).
+        self.replay = False
+        # ``on_track or replay``: der Zustand, in dem ueberhaupt etwas
+        # Fahrzeugbezogenes gezeichnet wird. Jede Zeichenstelle fragt diesen
+        # Wert, nicht ``on_track``.
+        self.drawing = False
         self.screen = None
         self.buttons_allowed = False
         self.pdc_data = None
+        # OutGauge-Ueberwachung (siehe OUTGAUGE_WARNING_TEXTS). ``None``
+        # heisst "noch kein Paket" bzw. "noch keine Auskunft ueber den
+        # Socket"; nur ein *gebundener*, aber stummer Socket wird gemeldet,
+        # sonst warnte die App in der Sekunde vor dem ersten Paket.
+        self._outgauge_seen_at = None
+        self._outgauge_bound = None
+        self._outgauge_reason = None
+        # Seit wann der Strom faellig ist. Dieselbe Marke wie in
+        # ``misc/input_guard.py``: im Menue schweigt OutGauge zu Recht, und
+        # ohne sie stand die Warnung im ersten Frame nach dem
+        # Streckeneintritt auf dem Schirm.
+        self._drawing_since = None
         # Ob der Parkpieper toenen darf - siehe ``_update_pdc_beep``.
         self.pdc_beep_allowed = True
         self.notifications = deque(maxlen=MAX_QUEUED_NOTIFICATIONS)
@@ -223,6 +274,7 @@ class UIManager:
         self.event_bus.subscribe('blind_spot_warning_changed', self._update_blind_spot_display)
         self.event_bus.subscribe('emergency_brake_changed', self._update_emergency_brake_display)
         self.event_bus.subscribe('outgauge_data', self._get_hud_data)
+        self.event_bus.subscribe('outgauge_status', self._on_outgauge_status)
         self.event_bus.subscribe('state_data', self._state_change)
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
         self.event_bus.subscribe("pdc_beep_allowed", self._update_pdc_beep)
@@ -492,21 +544,30 @@ class UIManager:
         reference/ui.md §1.1 nichts gezeichnet werden darf.
         """
         on_track = bool(data.get('on_track', False))
+        replay = bool(data.get('replay', False))
         screen = data.get('screen')
         self.buttons_allowed = bool(data.get('buttons_allowed', True))
 
-        if on_track == self.on_track and screen == self.screen:
+        if (on_track == self.on_track and replay == self.replay
+                and screen == self.screen):
             return
-        was_on_track = self.on_track
+        # Nicht ``was_on_track``: ein beendetes Replay verlaesst keine
+        # Strecke, laesst aber genau dieselben Buttons stehen. Vorher blieben
+        # sie im Hauptmenue haengen, weil der Aufraeumpfad an on_track hing.
+        was_drawing = self.drawing
         self.on_track = on_track
+        self.replay = replay
+        self.drawing = on_track or replay
+        if self.drawing != was_drawing:
+            self._drawing_since = time.time() if self.drawing else None
         self.screen = screen
 
-        if on_track:
-            if not was_on_track:
+        if self.drawing:
+            if not was_drawing:
                 self.message_sender.remove_button(BTN_IDLE_BANNER)
             return
 
-        if was_on_track:
+        if was_drawing:
             self._reset_on_leaving_track()
         self._draw_idle_screen()
 
@@ -544,12 +605,57 @@ class UIManager:
         von selbst zurueck. Der Banner wird nur bei Zustandswechseln
         gezeichnet und braucht diesen Anstoss.
         """
-        if not self.on_track:
+        if not self.drawing:
             self._draw_idle_screen()
 
     # ─── HUD ──────────────────────────────────────────────────────────
 
+    def _on_outgauge_status(self, data):
+        """Hat der OutGauge-Socket gebunden? (``lfs/connector.py``)"""
+        if not isinstance(data, dict):
+            return
+        self._outgauge_bound = bool(data.get('bound', False))
+        self._outgauge_reason = data.get('reason')
+        self._outgauge_seen_at = None
+
+    def _outgauge_warning(self):
+        """Der Text fuer die OutGauge-Warnung, oder ``None``.
+
+        Kosten: ein Vergleich pro UI-Durchlauf.
+        """
+        if self._outgauge_bound is None:
+            return None            # niemand hat etwas gesagt - nicht raten
+        if self._outgauge_bound is False:
+            return OUTGAUGE_WARNING_TEXTS.get(self._outgauge_reason,
+                                              OUTGAUGE_WARNING_DEFAULT)
+        since = self._outgauge_seen_at
+        due = self._drawing_since
+        if since is None or (due is not None and due > since):
+            since = due
+        if since is None:
+            return None            # gebunden, erstes Paket steht noch aus
+        if time.time() - since <= OUTGAUGE_STALE_AFTER_S:
+            return None
+        return OUTGAUGE_WARNING_TEXTS['no_packets']
+
+    def _draw_outgauge_warning(self):
+        """Sagt dem Fahrer, dass die halbe Anwendung blind ist.
+
+        Bewusst keine ``notification``: die Warteschlange zeigt eine Meldung
+        3 s lang und ist fuer alles Periodische strukturell ungeeignet
+        (reference/ui.md §1.7). Das hier ist ein Dauerzustand.
+        """
+        text = self._outgauge_warning()
+        if text is None or not self.buttons_allowed:
+            self.message_sender.remove_button(BTN_OUTGAUGE_WARNING)
+            return
+        x, y, width, height = OUTGAUGE_WARNING_SLOT
+        self.message_sender.create_button(BTN_OUTGAUGE_WARNING, x, y,
+                                          width, height, text,
+                                          pyinsim.ISB_DARK)
+
     def _get_hud_data(self, data):
+        self._outgauge_seen_at = time.time()
         speed = _as_int(round(_as_float(getattr(data, 'Speed', 0.0)) * 3.6))
         self.speed = speed
         self.rpm = round(_as_float(getattr(data, 'RPM', 0.0)) / 1000, 1)
@@ -595,7 +701,7 @@ class UIManager:
 
     def update_hud(self):
         """Aktualisiert das Head-Up Display"""
-        if not self.on_track:
+        if not self.drawing:
             return
         # Der Notbrems-Anzeiger haengt nicht an hud_active: er meldet, dass
         # der Wagen gerade selbst bremst (control-intervention.md §4), und das
@@ -616,6 +722,10 @@ class UIManager:
         # 12 s misst. Jeden Durchlauf neu gezeichnet, damit sie nach SHIFT+B
         # von selbst wiederkommt (reference/ui.md §1.5).
         self._draw_calibration_panel()
+        # Ebenfalls unabhaengig von ``hud_active``: sie erklaert, warum die
+        # Anzeigen stehen, und waere ausgerechnet dann weg, wenn jemand sie
+        # abgeschaltet hat (known-issues #24).
+        self._draw_outgauge_warning()
         if not (self.settings.get('hud_active') and self.buttons_allowed):
             self.hide_hud()
             return
@@ -709,7 +819,7 @@ class UIManager:
         bremst, eine Meldung kann warten (show_notifications haelt sich
         dann zurueck).
         """
-        if not (self.emergency_brake_active and self.on_track
+        if not (self.emergency_brake_active and self.drawing
                 and self.buttons_allowed):
             self.message_sender.remove_button(BTN_EMERGENCY_BRAKE)
             return
@@ -781,7 +891,7 @@ class UIManager:
         zu suchen haben, und kam nach SHIFT+B nie von selbst zurueck.
         """
         _, hud_y = self.hud_origin()
-        allowed = self.on_track and self.buttons_allowed
+        allowed = self.drawing and self.buttons_allowed
         for button, level, x in ((BTN_BSW_LEFT, self.blind_spot_left_level, 20),
                                  (BTN_BSW_RIGHT, self.blind_spot_right_level, 180)):
             if not allowed or level <= 0:

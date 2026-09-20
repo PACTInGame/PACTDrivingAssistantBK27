@@ -165,6 +165,18 @@ road car on dry tarmac belongs. `misc/physical_keys.py` already tracks
 covered for buttons exactly as it is for keys.
 
 Two caveats that came out of the same measurement, both logged in
+**Taking the brake and giving it straight back is worse than either choice.**
+`EmergencyBrake` used to be able to re-engage on the cycle after a handback: an
+intervention that ended because the driver pressed the throttle below
+`COMMIT_TO_STOP_SPEED_KMH` let the car accelerate back over FCW's 10 km/h floor, the
+same demand returned, and the measured result was eight engage/release cycles in 4.5 s.
+`THROTTLE_HANDBACK_LOCKOUT_S` (1.5 s) now blocks a fresh engagement after a throttle
+handback — but only *while the driver keeps the throttle down*, and only for that time.
+Lifting off withdraws the decision; the expiry is what keeps this an AEB rather than
+something a held pedal switches off. There is deliberately **no minimum hold**: §1 says
+releasing our share is always allowed, and a timer holding the brake against a resolved
+situation would be the worse failure. `known-issues.md` #49.
+
 `known-issues.md`: the **throttle cut did not stay effective** (#46 — LFS went
 back to reading the held left button despite `/key -1 throttle`), and the
 **automatic gearbox upshifted into the stop** (#47, fixed 2026-09-19). Neither

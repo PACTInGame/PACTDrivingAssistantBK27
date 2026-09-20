@@ -9,13 +9,13 @@ from misc.helpers import calc_polygon_points, is_reversing, point_in_rectangle
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle, VehicleData
 
-# Die Autos, deren Laenge das Projekt wirklich kennt. ``get_vehicle_size``
-# liefert fuer jedes unbekannte CName - also fuer jeden Fahrzeug-Mod - den
-# Mittelklassewert 4.5 m (known-issues #28). Zu kurz geschaetzt heisst hier:
-# die Warnung kommt zu spaet, und genau diesen Fehler darf ein Warnsystem
-# nicht machen. Fuer unbekannte Autos wird deshalb die groesste Serienlaenge
-# angesetzt (siehe FALLBACK_VEHICLE_LENGTH_M).
-_KNOWN_CAR_NAMES = frozenset(getattr(park_distance_control, '_CAR_SIZES', {}))
+# Fahrzeuglaengen: ``park_distance_control.is_known_car`` sagt, ob die
+# Tabelle dieses CName wirklich kennt. Fuer jedes unbekannte - also fuer
+# jeden Fahrzeug-Mod - liefert ``get_vehicle_size`` den Mittelklassewert
+# 4.5 m (known-issues #28). Zu kurz geschaetzt heisst hier: die Warnung
+# kommt zu spaet, und genau diesen Fehler darf ein Warnsystem nicht machen.
+# Fuer unbekannte Autos wird deshalb die groesste Serienlaenge angesetzt
+# (siehe FALLBACK_VEHICLE_LENGTH_M).
 
 
 class ForwardCollisionWarning(AssistanceSystem):
@@ -229,7 +229,7 @@ class ForwardCollisionWarning(AssistanceSystem):
         cached = self._length_cache.get(cname)
         if cached is not None:
             return cached
-        if cname in _KNOWN_CAR_NAMES:
+        if park_distance_control.is_known_car(cname):
             length = park_distance_control.get_vehicle_size(cname)[0]
         else:
             length = self.FALLBACK_VEHICLE_LENGTH_M

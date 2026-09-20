@@ -418,20 +418,24 @@ def test_every_drawn_hud_element_stays_on_screen(bus, ui, settings,
         assert 0 <= top and top + height <= SCREEN_MAX, click_id
 
 
-def test_the_menu_marks_a_hud_inside_the_reserved_area(menu, settings,
-                                                       fake_connector):
-    settings.set('hud_width', 90)
-    settings.set('hud_height', 119)
-    menu.open_system_settings()
-    label = fake_connector.last_button(25)
-    assert label is not None and label[6].startswith(b'^1')
+def test_the_menu_no_longer_marks_a_hud_inside_the_reserved_area(
+        menu, settings, fake_connector):
+    """known-issues #27, and it was the finding that was wrong, not the HUD.
 
-    fake_connector.reset()
-    settings.set('hud_width', 150)
-    menu.open_system_settings()
-
-    label = fake_connector.last_button(25)
-    assert label is not None and label[6].startswith(b'^7')
+    The reserved rectangle makes LFS clear space for InSim buttons -- on the
+    screens where LFS draws a UI of its own, i.e. the entry screen and the
+    garage. This app draws **no HUD there**: every element hangs off
+    ``UIManager.drawing`` and leaving that state clears the whole button
+    range. So the label lit up red for the shipped default position and
+    nothing ever corresponded to it.
+    """
+    for width in (90, 150):
+        fake_connector.reset()
+        settings.set('hud_width', width)
+        settings.set('hud_height', 119)
+        menu.open_system_settings()
+        label = fake_connector.last_button(25)
+        assert label is not None and label[6].startswith(b'^7'), width
 
 
 # ─── Warning flashing (WP5 scope 6/7) ────────────────────────────────────────

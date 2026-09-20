@@ -37,10 +37,53 @@ _CAR_SIZES = {
 }
 
 
-def get_vehicle_size(cname) -> tuple:
+# Was ein unbekanntes CName - also jeder Fahrzeug-Mod - bekommt.
+#
+# Zwei Rueckfallwerte, und der Unterschied ist der ganze Punkt von
+# known-issues #28: ``FALLBACK_SIZE`` ist die Mittelklasse und taugt fuer
+# alles, wo ein falscher Wert nur unschoen ist. Sobald die Groesse in eine
+# Warn- oder Bremsrechnung eingeht, ist "zu klein" gleichbedeutend mit "zu
+# spaet", und dann gilt ``CONSERVATIVE_SIZE`` - die Masse des laengsten und
+# breitesten Serienautos (FXR/XRR/FZR). Ein Mod, der groesser ist als das,
+# gibt es sicher; ein Fahrzeugmass laesst sich aber ohne Messung nicht
+# ermitteln, und die Serien-Obergrenze ist die groesste Zahl, die noch
+# begruendbar ist (reference/conventions.md §4).
+FALLBACK_SIZE = (4.5, 1.8)
+CONSERVATIVE_SIZE = (5.0, 2.1)
+
+
+def _normalise_cname(cname) -> str:
+    """CName als str - seit WP4 kommt es so an, bytes bleiben erlaubt."""
     if isinstance(cname, (bytes, bytearray)):
-        cname = bytes(cname).split(b'\x00', 1)[0].decode('latin-1', errors='replace')
-    return _CAR_SIZES.get(cname, (4.5, 1.8))  # Standardgröße falls Index nicht gefunden wird
+        return bytes(cname).split(b'\x00', 1)[0].decode('latin-1', errors='replace')
+    return cname
+
+
+def is_known_car(cname) -> bool:
+    """Kennt die Tabelle dieses Auto wirklich, oder faellt sie nur zurueck?
+
+    Der oeffentliche Ersatz fuer den Griff in ``_CAR_SIZES``, den
+    ``ForwardCollisionWarning`` frueher gebraucht hat (known-issues #28).
+    """
+    return _normalise_cname(cname) in _CAR_SIZES
+
+
+def get_vehicle_size(cname) -> tuple:
+    """(Laenge, Breite) in Metern; Mittelklasse fuer alles Unbekannte."""
+    return _CAR_SIZES.get(_normalise_cname(cname), FALLBACK_SIZE)
+
+
+def conservative_vehicle_size(cname) -> tuple:
+    """Wie ``get_vehicle_size``, aber unbekannt heisst "so gross wie moeglich".
+
+    Fuer jede Geometrie, deren Fehler in Richtung "zu spaet" zeigt: die
+    Kontaktfenster von Quer- und Toter-Winkel-Warnung und die Sensorlage des
+    PDC. Ein zu gross angenommenes Auto warnt frueher, ein zu klein
+    angenommenes gar nicht.
+    """
+    return _CAR_SIZES.get(_normalise_cname(cname), CONSERVATIVE_SIZE)
+
+
 def get_object_size(index: int) -> tuple:
     """Gibt die Größe des Objekts basierend auf dem Index zurück"""
     object_sizes = {
@@ -113,7 +156,9 @@ def get_object_size(index: int) -> tuple:
     return object_sizes.get(index, (0.5, 0.5))  # Standardgröße falls Index nicht gefunden wird
 
 def create_bboxes_for_own_vehicle(own_vehicle: OwnVehicle):
-    vehicle_size_def = get_vehicle_size(own_vehicle.data.cname)
+    # Konservativ: die Sensorlage haengt an der Fahrzeugkontur, und ein zu
+    # klein angenommener Mod meldet das Hindernis zu spaet (#28).
+    vehicle_size_def = conservative_vehicle_size(own_vehicle.data.cname)
     vehicle_size = (vehicle_size_def[1], vehicle_size_def[0])  # switch
     angle_of_car = (own_vehicle.data.heading + 16384) / 182.05
 
@@ -221,7 +266,7 @@ def axm_object_id(info) -> tuple:
 
 
 def create_rectangle_for_vehicle(x: float, y: float, type: str, heading: float) -> list:
-    height, width = get_vehicle_size(type)
+    height, width = conservative_vehicle_size(type)
     # cars use a different heading system than objects, so we need to convert it
     angle_of_obj = (heading * 360 / 65536 + 90) % 360
 

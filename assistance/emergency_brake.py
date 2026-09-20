@@ -174,6 +174,27 @@ class EmergencyBrake(AssistanceSystem):
     # Schwellwert gegen Rauschen allein: ein Pedal in Ruhelage meldet je nach
     # Kalibrierung ein paar Prozent, ein Tastatur-Gas meldet 0 oder 1.
     THROTTLE_OVERRIDE = 0.15
+    # Wie lange nach einer Gas-Uebergabe kein neuer Eingriff beginnt
+    # (known-issues #49). Der gemessene Fall: der Eingriff bremst unter
+    # COMMIT_TO_STOP_SPEED_KMH, der Fahrer gibt Gas, wir uebergeben, das Auto
+    # beschleunigt ueber FCWs 10-km/h-Schwelle, dieselbe Anforderung kommt
+    # zurueck -- **acht Eingriffe in 4.5 s**. Die Bremse nehmen und sofort
+    # wieder zurueckgeben ist schlechter als beides einzeln
+    # (control-intervention.md section 3).
+    #
+    # Die Sperre haengt an zwei Bedingungen, und beide sind noetig:
+    #
+    # * Sie gilt nur, solange der Fahrer **weiter Gas gibt**. Nimmt er den
+    #   Fuss herunter, ist die Uebergabe nicht mehr sein Wille, und ein
+    #   bestehender Konflikt darf uns sofort wieder scharf machen.
+    # * Sie laeuft nach dieser Zeit in jedem Fall ab. Ein AEB, das sich durch
+    #   getretenes Gas dauerhaft abschalten laesst, ist keines -- Panikgas ist
+    #   genau der Fall, fuer den es existiert.
+    #
+    # Was die Sperre im schlechtesten Fall kostet: 1.5 s ohne Eingriff. Der
+    # Fahrer beschleunigt dabei aus hoechstens 10 km/h und hat den Weg
+    # ausdruecklich fuer frei erklaert.
+    THROTTLE_HANDBACK_LOCKOUT_S = 1.5
     # Runaway guard. Nothing legitimate needs a ten-second emergency stop; if
     # we are still asking after that, the demand is wrong, not the situation.
     MAX_ENGAGE_S = 10.0
@@ -233,6 +254,11 @@ class EmergencyBrake(AssistanceSystem):
         # COMMIT_TO_STOP_SPEED_KMH), und seit wann das Auto steht.
         self._stopping = False
         self._standstill_since: Optional[float] = None
+        # Wann zuletzt wegen Fahrergas uebergeben wurde. Ueberlebt
+        # ``_disengage`` absichtlich -- die Uebergabe *ist* das Ereignis, das
+        # die Sperre setzt (THROTTLE_HANDBACK_LOCKOUT_S).
+        self._throttle_handback_at: Optional[float] = None
+        self._lockout_logged = False
         # Groesste Sollverzoegerung dieses Eingriffs. Sie traegt die
         # committed-Phase, in der es keine mehr zu lesen gibt.
         self._peak_deceleration = 0.0
@@ -678,7 +704,9 @@ class EmergencyBrake(AssistanceSystem):
             self._below_release_cycles = 0
             if own.speed < self._speed_floor():
                 return False
-            return self._wanted_deceleration >= self.ENGAGE_DECELERATION_MS2
+            if self._wanted_deceleration < self.ENGAGE_DECELERATION_MS2:
+                return False
+            return not self._locked_out(own_vehicle)
 
         if self._wanted_deceleration > self._peak_deceleration:
             self._peak_deceleration = self._wanted_deceleration
@@ -700,6 +728,34 @@ class EmergencyBrake(AssistanceSystem):
             return self._below_release_cycles < self.RELEASE_DEBOUNCE_CYCLES
 
         self._below_release_cycles = 0
+        return True
+
+    def _locked_out(self, own_vehicle) -> bool:
+        """Sperrt eine Gas-Uebergabe den naechsten Eingriff noch?
+
+        Siehe ``THROTTLE_HANDBACK_LOCKOUT_S``. Die Sperre loescht sich
+        selbst, sobald eine ihrer beiden Bedingungen faellt.
+        """
+        since = self._throttle_handback_at
+        if since is None:
+            return False
+        if self.clock() - since >= self.THROTTLE_HANDBACK_LOCKOUT_S:
+            self._throttle_handback_at = None
+            return False
+        # Das Gas ist OutGauges, beschreibt also das Kamera-Auto
+        # (conventions.md section 5). Ist das nicht unseres, ist es kein
+        # Fahrerwille und die Sperre endet.
+        if not (getattr(own_vehicle, 'is_local_driver', True)
+                and getattr(own_vehicle, 'throttle', 0.0)
+                > self.THROTTLE_OVERRIDE):
+            self._throttle_handback_at = None
+            return False
+        if not self._lockout_logged:
+            self._lockout_logged = True
+            logger.info("Emergency brake: demand of %.1f m/s2 held back for up "
+                        "to %.1f s - the driver took over on the throttle.",
+                        self._wanted_deceleration,
+                        self.THROTTLE_HANDBACK_LOCKOUT_S)
         return True
 
     def _speed_floor(self) -> float:
@@ -737,6 +793,8 @@ class EmergencyBrake(AssistanceSystem):
                 own_vehicle.throttle > self.THROTTLE_OVERRIDE:
             logger.info("Emergency brake: driver applied throttle at %.1f km/h "
                         "- handing back.", own.speed)
+            self._throttle_handback_at = self.clock()
+            self._lockout_logged = False
             return False
         if own.speed > self.STANDSTILL_KMH:
             self._standstill_since = None

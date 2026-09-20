@@ -37,6 +37,19 @@ SLOW_PASS_LOG_INTERVAL_S = 10.0
 # So viele der teuersten Systeme werden genannt.
 SLOW_PASS_TOP_N = 3
 
+# ─── Replay ───────────────────────────────────────────────────────────────
+# Ein Replay setzt ISS_REPLAY und *nicht* ISS_GAME, ``on_track`` ist dort also
+# False (reference/ui.md §1.1). Frueher lief deshalb kein einziges System und
+# das Nachfahren eines Vorfalls war als Pruefweg wertlos (known-issues #55).
+#
+# Es laufen dort genau die Systeme, die **nur veroeffentlichen**: Warnungen
+# und PDC. Alles, was in das Spiel hineinschreibt - Bremseingriff, Auto-Hold,
+# Getriebe, Lichter, KI-Verkehr - bleibt aus. Nicht nur, weil ein Tastendruck
+# in einer Wiedergabe nichts bewirkt: ``/light``- und KI-Befehle gehen ueber
+# InSim an das *laufende* Spiel und waeren dort eine echte Nebenwirkung.
+# ``InputGuard`` verweigert zusaetzlich jede Injektion mit ``replay``.
+REPLAY_SYSTEMS = frozenset(('fcw', 'bsw', 'ctw', 'pdc'))
+
 
 class AssistanceManager:
     """Verwaltet alle Fahrerassistenzsysteme"""
@@ -59,6 +72,7 @@ class AssistanceManager:
         self.own_vehicle: Optional[OwnVehicle] = None
         self.vehicles: Dict[int, Vehicle] = {}
         self.on_track = False
+        self.replay = False
         # Laufzeit des letzten Durchlaufs je System, fuer _report_slow_pass.
         self._durations: Dict[str, float] = {}
         self._last_slow_log: Optional[float] = None
@@ -112,6 +126,7 @@ class AssistanceManager:
 
     def _update_state_data(self, data):
         self.on_track = data.get('on_track', False)
+        self.replay = bool(data.get('replay', False))
 
     def _on_own_vehicle_updated(self, own_vehicle: OwnVehicle):
         """Updates own vehicle data"""
@@ -129,7 +144,9 @@ class AssistanceManager:
         results = {}
         # Einen veroeffentlichten Stand fuer den ganzen Durchlauf festhalten.
         own_vehicle, vehicles = self.own_vehicle, self.vehicles
-        if self.on_track:
+        allowed = None if self.on_track else (
+            REPLAY_SYSTEMS if self.replay else frozenset())
+        if allowed is None or allowed:
             # Ein perf_counter-Paar pro System, ~100 ns - unter dem Rauschen
             # eines 100-ms-Budgets, und die einzige Moeglichkeit, einen
             # Overrun einem Verursacher zuzuordnen.
@@ -139,6 +156,8 @@ class AssistanceManager:
                 if name in self.failed_systems:
                     continue
                 if not system.is_enabled():
+                    continue
+                if allowed is not None and name not in allowed:
                     continue
                 # Fehler-Isolation pro System: ein defektes System deaktiviert
                 # sich selbst, statt den gemeinsamen 100-ms-Thread zu killen.

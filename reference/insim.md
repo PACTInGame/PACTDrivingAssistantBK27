@@ -22,8 +22,11 @@ a future physics consumer; the standalone tracer manages its own connection.
 - **`OutGaugePack.PLID` is the *viewed* player, not necessarily the local driver.**
   TAB changes it. Full semantics and the robust way to find your own PLID:
   `conventions.md` §5.
-- **It only streams from an internal view, on track.** Chase/heli/TV camera, or being
-  in the garage, stops it dead — and with it every assistance system, silently.
+- **It streams while the player sits in a car, in every camera view.** Measured in
+  game 2026-09-19: chase, heli and TV keep it running; only leaving the track stops it.
+  `InSim.txt`'s *"from an internal view"* does not describe the current game
+  (`conventions.md` §5.3, `known-issues.md` #29, withdrawn). Off track it stops dead,
+  and so does everything that needs gauges or pedals — but not silently any more (#24).
 - **`Flags` carries live modifier-key state**: `OG_SHIFT` (1) and `OG_CTRL` (2). This is
   the cheapest source for "is the user holding Shift", which matters before injecting
   keys (`ui.md` §1.4). It is only valid while OutGauge is streaming.
