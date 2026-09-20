@@ -16,6 +16,7 @@ Start here when the symptom is "nothing happens", "no HUD", "no warnings", or
 | **InSim** (TCP 29999) | `/insim 29999` typed in game, or a line in `autoexec.lfs` | everything — connection, buttons, all car positions, commands |
 | **OutGauge** (UDP 30000) | `cfg.txt` in the LFS root folder | **own-car data: speed, rpm, gear, pedals, dashboard lights** |
 | **OutSim** (UDP 29998) | `cfg.txt` in the LFS root folder | currently connected but unused (G-forces, per-wheel data) |
+| *(TCP 29997)* | nothing — the add-on binds it itself | the single-instance lock, §2.1. LFS is not involved |
 
 ### `cfg.txt` (LFS root folder, e.g. `C:\LFS\cfg.txt`)
 
@@ -60,20 +61,11 @@ the assistant itself.
 and retries with exponential backoff, exiting after ~60 s. The user sees console output.
 This path is fine.
 
-**OutGauge off → total, silent failure.** This is the dangerous one:
-
-```
-no OutGauge packets
-  → VehicleManager._handle_outgauge_data never runs
-  → 'own_vehicle_updated' is never emitted
-  → AssistanceManager.own_vehicle stays None
-  → process_all_systems() returns immediately, every cycle, forever
-```
-
-(`own_vehicle` itself survives — it is published from every MCI frame too — but the
-OutGauge half of it stands still, and that half includes `viewed_plid`.)
-
-Treat "InSim connected but no assistance" as "check OutGauge first".
+**OutGauge off → missing gauge telemetry.** MCI still publishes the car and
+warning-only systems can run. The startup validator reports saved configuration
+differences; the live HUD warns when expected gauge packets are missing, and
+`InputGuard` refuses actuation with `no_outgauge`. A working InSim connection
+alone does not prove that OutGauge works.
 
 ### 2.1 The third way to lose OutGauge: something else already has port 30000
 
@@ -89,6 +81,17 @@ being refused while the log says the emergency brake is armed.
 
 What the app does about it now:
 
+* **A second copy of the add-on does not start at all** (`core/single_instance.py`).
+  It takes a listening TCP socket on `127.0.0.1:29997` before anything else — a
+  socket rather than a PID file, because the OS releases it however the process
+  dies, and the bind is atomic. A second start logs one line naming the cause and
+  exits 1. Measured on 2026-09-20, which is what forced this: two copies ran for
+  16 minutes, the second blind on `WinError 10048` but still drawing buttons over
+  the first one's and arming the same actuators — two `EmergencyBrake` instances
+  pressing and releasing the same brake key, where instance 2 releasing takes
+  instance 1's brake away mid-intervention. Both also wrote to the same log file,
+  which then read as one process alternating between "armed" and "cannot be
+  armed". `PACT_ALLOW_MULTIPLE=1` skips the lock for a developer who means it.
 * `start_outgauge()` closes the previous socket before binding a new one. Half the
   10048s in that log were self-inflicted, because `StateHandler` re-opens OutGauge on
   track entry and the old socket was still on the port.
@@ -120,10 +123,19 @@ otherwise a file dialog) → confirm and patch `cfg.txt` → optionally append `
 to `autoexec.lfs` → optionally copy `layouts/*.lyt` into `<LFS>/data/layout/` → write
 `.setup_done`.
 
-**Gap:** because the flag is never re-checked, an LFS reinstall or update that resets
-`cfg.txt` leaves the app permanently broken with no diagnostic. A startup validation
-pass — re-read `cfg.txt`, verify the OutGauge/OutSim keys, and offer to re-run the
-wizard — is the obvious hardening step. See `known-issues.md` #24.
+**Startup validation runs independently of `.setup_done`.**
+`core/outgauge_config.py` checks saved OutGauge settings before the main InSim
+connection opens. It prefers the running LFS executable's directory over
+`lfs_directory`; multiple or inaccessible installations are reported as
+inconclusive. Missing/unreadable files, missing/duplicate keys and differences
+from the wizard's recommended OutGauge values are logged with the exact path
+and expected values. Close LFS before correcting the file, then restart it.
+
+The check is read-only and does not abort startup: disk contents can differ
+from the currently running configuration, and a relay can be intentional.
+Live socket/telemetry checks remain authoritative for availability. No disk or
+process scanning is added to an assistance cycle. OutSim is unused and is not
+required by this check.
 
 `.setup_done` and `settings.json` are machine-specific and are git-ignored.
 
@@ -149,10 +161,9 @@ Packets go to the UDP port given as **`UDPPort` in the `IS_ISI` handshake**.
 `LFSConnector.connect()` does not currently pass `UDPPort`, so this would need adding
 alongside the `SMALL_SSG` request.
 
-This removes the entire class of failure in §2 and §3: no `cfg.txt` editing, no
-"LFS must be closed", no silent breakage after an LFS reinstall, and no wizard step for
-OutGauge at all. It still only streams while the player is in a car
-(`conventions.md` §5.3), and it still reports the **viewed** car (`conventions.md` §5.2).
-
-The wizard's `cfg.txt` handling would remain useful only for **OutSim**, which has no
-equivalent InSim-side initialiser.
+This is a potential replacement, not a verified way to override an existing
+cfg.txt stream. The live tracer received no independent stream in that setup;
+see `testing.md`, "If a driving trace has no OutGauge". Keep the validated cfg.txt
+path until the replacement has been exercised against the running game.
+OutSim has an InSim-side request too (`SMALL_SSP`); the add-on does not currently
+need OutSim.

@@ -27,34 +27,52 @@ constructor's `name` argument **must match a key the settings know** —
 
 ## Forward Collision Warning — `collision_warning.py`
 
-Detects cars in a forward wedge and computes the deceleration required to avoid them.
+Detects cars in a forward corridor and computes the deceleration required to avoid them.
 
-- **Detection:** builds a rotated quad ~85 m long, ±20° wide near the car and ±1° at
-  its far end, from the car's heading (`calc_polygon_points` + `point_in_rectangle`).
-  Corners must follow the perimeter: far-left, near-left, near-right, far-right.
-  Crossing the near corners makes the triangle-union test asymmetric and misses
-  targets on the right. At 50 m the intended half-width is about 1.29 m; the
-  endpoint angles are not a constant angular aperture along the whole quad.
-  Two cheap gates run first, both on values `VehicleManager` already computed per
-  frame, so nothing pays for a polygon test it cannot pass: `distance_to_player` beyond
-  the wedge length, and `angle_to_player` outside ±21°.
+- **Detection:** a straight corridor `CORRIDOR_LENGTH_M` (85 m) long along the car's
+  heading. Its half-width is **not a tuned number**: it is the lateral-overlap
+  condition, `(own_width + other_width) / 2`, because that is exactly when the two
+  bodies claim the same lane width. One cheap gate runs first, on a value
+  `VehicleManager` already computes per frame (`distance_to_player`); what passes it
+  gets two dot products — forward and lateral offset in the ego frame.
+  Only cars *ahead* count: a centre behind ours is a blind-spot case, not a rear-end one.
   Suppressed below 10 km/h and while reversing — reverse detection is
   `misc.helpers.is_reversing`, a **signed modular** heading/direction difference.
   A plain subtraction disabled the system in one heading sector.
+
+  This replaced a wedge built from angles (±20° near, ±1° at 85 m), whose half-width
+  was 1.03–1.48 m over its whole length — narrower than a car. Measured in game on
+  2026-09-20: the targets that were hit sat up to **1.68 m and 1.77 m** off the ego
+  axis and dropped out of the wedge in the very second the intervention had to start
+  (level and demand fell to 0); the close overtake that must *not* fire passed at
+  **2.74 m**. The overlap condition (≈1.9 m for an FZ5 beside an RB4) separates the
+  two cleanly. Widths come from the same table as the lengths, with the conservative
+  fallback for mods.
 - **Physics:** `_calculate_needed_braking` returns the required deceleration in m/s²
-  using closed-form constant-acceleration kinematics, accounting for the lead car's own
-  acceleration. It picks between two cases:
+  using closed-form constant-acceleration kinematics. **Only the lead car's braking is
+  extrapolated**: `a_lead` is clamped to ≤ 0. Its speed is a measurement and is used in
+  full, but the speed it has not gained yet is a claim about the future, and a car
+  cannot accelerate for ever — the one pulling away now is the one standing still a
+  second later. Measured (scenario 32, sub-case 4, 2026-09-20): a lead accelerating
+  away at 5 m/s² made `a_req` positive, so the demand was **0.0 for 1.8 s** while the
+  gap closed from 55 m to 44 m at 82 km/h; the warning then arrived 1.15 s before
+  contact. Same one-sided rule as the yaw extrapolation in `path_conflict.py`: a model
+  may bring an answer forward, never postpone it.
+  It picks between two cases:
   - *dynamic* — we catch them while they still move: `a_req = a_lead − Δv²/(2d)`
   - *static* — they stop first: treat the stopping point as a wall,
     `a_req = −v² / (2·(d + d_lead_stop))`
   `d` subtracts the mean car length, a 0.5 m `SAFETY_BUFFER`, and a 0.2 s reaction-time
-  term (the last one only while actually closing). `d ≤ 0.01` returns 20 m/s² (panic).
+  term (the last one only while actually closing). `d ≤ 0.01` returns 20 m/s² (panic),
+  and the computed value is **capped at the same 20 m/s²** — beyond it the division is
+  rounding error, not information (traces of 2026-09-20 carried 198, 1354 and
+  4758 m/s² into the logs, which makes any average over the demand useless).
   The result is a **non-negative required deceleration**: 0 means "no braking needed".
   It used to be `abs(req_accel)`, so a situation that allowed us to accelerate came back
   as a large braking demand.
-  Car lengths come from `park_distance_control.get_vehicle_size`, but only for the ~15
+  Car sizes come from `park_distance_control.get_vehicle_size`, but only for the ~15
   car codes that table really knows; an unknown `CName` (every vehicle mod) gets the
-  longest standard car, 5.0 m, so the warning is early rather than late
+  largest standard car, 5.0 × 2.1 m, so the warning is early rather than late
   (`conventions.md` §4).
 - **Levels:** required deceleration is compared against a three-element threshold list
   selected by `collision_warning_distance` (0 early / 1 normal / 2 late) —
@@ -64,9 +82,34 @@ Detects cars in a forward wedge and computes the deceleration required to avoid 
   demand drops below `HYSTERESIS_RELEASE` (0.8) × that threshold, one step at a time.
   Before WP7 any demand above 0 held level 3 indefinitely.
 - **Output:** `collision_warning_changed` on change; `needed_deceleration_update` every
-  cycle (0 unless level 3).
-- **Automatic braking is deliberately disabled** (`# TODO no automatic braking for now`)
-  and must not be re-enabled unasked.
+  cycle, carrying the demand **from level 3 upwards** and 0 below it. The gate is on the
+  *level*, not on a number, which also keeps the order display → sound → brake true in
+  every distance setting: `EmergencyBrake` can never see a demand the driver has not
+  already been told about.
+
+  **This gate, not `ENGAGE_DECELERATION_MS2`, is what decides when the car brakes.**
+  Level 3 starts above 7.5 m/s² in every setting, so the brake's own 6.0 m/s² floor is
+  never the binding constraint. Publishing from level 2 instead was tried and measured
+  in game on 2026-09-20: every remaining rear-end collision disappeared (scenario 32
+  went from two impacts to none), **and the car came to rest 4 m, 6 m and 11 m short**
+  in scenarios 06, 07 and 12. That is not an emergency stop, and a driver reads it as
+  the assistant panicking.
+
+  The cause is the actuator, not the threshold: the key output is digital, so an
+  intervention that starts at a demand of 6 m/s² still brakes with the ~9.7 m/s² the
+  tyres give and overshoots by roughly a quarter of the braking distance. With the gate
+  back at level 3 the same scenarios stop **0.7–1.6 m** behind the lead car.
+  **The right way to have both is modulation** — duty-cycling the key, or the analog
+  path, which already runs feed-forward plus a correction on the achieved deceleration
+  (`control-intervention.md` §3). Until the digital path modulates, the later gate is
+  the honest setting. What it still costs is measured: scenario 13 taps at 18 km/h
+  instead of 8, and scenario 32's sub-case 4 — a lead that accelerates away and then
+  brakes at 10 m/s² — hits at 44 km/h instead of not at all (baseline 85 km/h).
+- **This system never actuates anything.** It warns and it publishes a demand; whether
+  that becomes braking is `EmergencyBrake`'s decision alone, and only at
+  `automatic_emergency_brake == 2` (default 1, warn only). The trailing
+  `# TODO no automatic braking for now` that used to sit at the end of the module was
+  left over from before that split and described the opposite of what ships.
 
 ## Blind Spot Warning — `blind_spot_warning.py`
 
@@ -429,18 +472,42 @@ read from the settings at press time, so a rebind in the menu works without a re
 - **It stands down when LFS shifts by itself.** `PIF_AUTOGEARS` in the driver's help
   flags (`insim.md` §7, reached as `own_vehicle.data.lfs_auto_gears`) means LFS's own
   automatic gearbox is on, and two automatics on one crankshaft shift against each
-  other. Checked before anything else, so no shift and no calibration can start; the
+  other. It blocks automatic shifts only; passive calibration remains available,
+  including when the add-on toggle is off. The system stays scheduled to update
+  availability and service calibration requests; the
   reason goes to the menu as `gearbox_availability` = `lfs_auto_gears` and the driver
-  gets one notification. It follows the flag in both directions — SHIFT+G on track
+  gets one notification if the add-on toggle is on. It follows the flag in both directions — SHIFT+G on track
   hands control back within a cycle. This is not an exotic case: SHIFT+G is a two-key
   shortcut and the recorded test scenarios were all driven with it on.
+- **Every executed shift logs one line**, like every other actuator in this project:
+
+  ```
+  Gearbox shift up: gear 4, 6800 min-1, 90.0 km/h, throttle 1.00, brake 0.00.
+  ```
+
+  The gear is the one being left. It is not logging on `process()`'s success path
+  (`AGENTS.md` §3) — a shift is a discrete intervention that takes the car out of
+  the driver's hands, and AEB engage/release, the throttle cut and the brake-axis
+  handover all log theirs. Without it the system was unverifiable in game: the
+  `simulation_tests` tracer gets no OutGauge while the add-on holds port 30000,
+  and MCI carries no gear, so a full live run on 2026-09-20 produced no evidence
+  at all. The fields are the ones the two suspected faults are recognised by —
+  several gears at constant speed, and an upshift under braking.
+
+  **Verified live 2026-09-20** (FZ5, LA1, mouse/keyboard with SHIFT+G on manual,
+  three stints, `15_gearbox_tests`): 26 shifts, no stand-down. 0 of 14 upshifts
+  had any brake applied; no same-direction pair at near-constant speed; smallest
+  gap between any two shifts 2 s, so the drivetrain gate held. Upshifts at
+  6144–7502 min⁻¹ against a calibrated redline of 7478, downshifts at
+  1848–3407 min⁻¹ of which 6 were under hard braking, which is the right way
+  round.
+
 - **The shift decision needs a closed, settled drivetrain.** `omega_engine =
   omega_wheel · i_gear · i_final` only holds with the clutch engaged; with it open the
   engine revs free against the throttle and sits on the limiter no matter which gear is
   in. So `_drivetrain_is_settled()` refuses to decide while `clutch > 0.05` and for
   `RPM_SETTLE_S` (0.25 s) after it closes. Without this the gearbox read *its own*
-  clutch as "still too high a gear" and walked up the whole box — `known-issues.md` #47
-  has the measurement. The clutch value comes from OutGauge, so it covers the driver's
+  clutch as "still too high a gear" and walked up the whole box. The clutch value comes from OutGauge, so it covers the driver's
   clutch and LFS's autoclutch as well as our own.
 - **No upshift while braking** (`MAX_BRAKE_FOR_UPSHIFT`, 0.20). Upshifting under braking
   removes the engine braking and leaves the car in the wrong gear for the handback;
@@ -536,6 +603,16 @@ warning systems; everything that takes control away from the driver lives here, 
   releases, plus floors at 10 km/h (do not engage) and 3 km/h (release), and a 10 s
   runaway cap. The key output is digital, so this is full braking or none; modulation
   waits for the analog path.
+  **6.0 is this system's own floor, but a publisher can raise it, and FCW does:** it
+  withholds its demand below level 3, so the rear-end engage point is really 7.5 m/s².
+  That is deliberate and measured — see the FCW section — and it means the effective
+  trigger is `max(6.0, the publisher's own announce threshold)`. Do not read the 6.0
+  here as "the car brakes at 6.0".
+  **The digital output is why that matters.** It brakes fully or not at all, so an
+  intervention overshoots by about `1 − demand/achieved` of its braking distance —
+  a quarter of it when a 7.5 m/s² demand is answered with ~9.7 m/s². Modulation
+  (duty cycling, or the analog path) is what would let the engage point move earlier
+  without the car stopping metres short.
 - **Release paths:** every one of them, because a stranded press is the worst failure
   here — demand gone, guard refusal, control mode change, feature switched off
   mid-intervention (`is_enabled()` deliberately stays True while a press is

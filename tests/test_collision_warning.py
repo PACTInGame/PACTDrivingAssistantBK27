@@ -16,6 +16,7 @@ import pytest
 
 from assistance.collision_warning import ForwardCollisionWarning
 from assistance import park_distance_control
+from assistance.path_conflict import direction_vector
 from misc.helpers import heading_difference, is_reversing
 from vehicles.vehicle import (ACCEL_SMOOTHING_TAU_S, MAX_SAMPLE_DT_S, Vehicle)
 
@@ -106,20 +107,70 @@ def test_being_slower_than_a_lead_that_is_not_braking_needs_nothing(
     assert fcw._calculate_needed_braking(own.data, lead.data) == 0.0
 
 
-def test_a_lead_accelerating_away_never_reports_braking_demand(
+def test_a_faster_lead_that_is_not_braking_reports_no_demand(
         fcw, make_own_vehicle, make_vehicle, relate_to_own):
     """WP7 defect 2: ``abs(req_accel)`` turned "you may accelerate" into a
     large braking demand and could raise a warning level."""
-    own = make_own_vehicle(speed=100.0)
-    lead = make_vehicle(plid=2, y=50.0, speed=95.0, acceleration=+5.0)
+    own = make_own_vehicle(speed=95.0)
+    lead = make_vehicle(plid=2, y=50.0, speed=100.0, acceleration=0.0)
     relate_to_own(own, lead)
 
-    # a_req = a_lead − Δv²/(2d) is clearly positive here: we may accelerate.
-    d = effective_distance(50.0, 100.0, 95.0)
-    raw = 5.0 - ((100.0 - 95.0) * KMH_TO_MS) ** 2 / (2 * d)
-    assert raw > 0
-
     assert fcw._calculate_needed_braking(own.data, lead.data) == 0.0
+
+
+def test_a_lead_pulling_away_gets_no_credit_for_its_acceleration(
+        fcw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Its speed is measured; the speed it has not gained yet is a guess.
+
+    Measured in ``simulation_tests`` 32, sub-case 4 (2026-09-20): a lead that
+    accelerated away at 5 m/s² and then braked at 10 m/s² kept the demand at
+    **exactly 0.0 for 1.8 s** while the gap fell from 55 m to 44 m at 82 km/h.
+    The warning arrived 1.15 s before contact and the car hit at 54 km/h.
+
+    With the acceleration clamped away the same geometry asks for what closing
+    on a car at its *current* speed costs -- which is what the driver is
+    actually doing.
+    """
+    own = make_own_vehicle(speed=100.0)
+    lead = make_vehicle(plid=2, y=50.0, speed=20.0, acceleration=+5.0)
+    relate_to_own(own, lead)
+
+    d = effective_distance(50.0, 100.0, 20.0)
+    closing = (100.0 - 20.0) * KMH_TO_MS
+    expected = closing ** 2 / (2 * d)          # a_lead treated as 0
+
+    assert expected > ForwardCollisionWarning.WARNING_THRESHOLDS[1][1]
+    assert fcw._calculate_needed_braking(own.data, lead.data) == \
+        pytest.approx(expected)
+
+
+def test_a_braking_lead_is_still_extrapolated(
+        fcw, make_own_vehicle, make_vehicle, relate_to_own):
+    """The clamp is one-sided: braking only ever raises the demand."""
+    own = make_own_vehicle(speed=80.0)
+    coasting = make_vehicle(plid=2, y=60.0, speed=40.0, acceleration=0.0)
+    braking = make_vehicle(plid=3, y=60.0, speed=40.0, acceleration=-8.0)
+    relate_to_own(own, coasting, braking)
+
+    assert fcw._calculate_needed_braking(own.data, braking.data) > \
+        fcw._calculate_needed_braking(own.data, coasting.data)
+
+
+def test_the_demand_never_exceeds_the_panic_value(
+        fcw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Beyond it the division is rounding error, not information.
+
+    Traces of 2026-09-20 carried 198, 1354 and 4758 m/s² into the logs and
+    into every average taken over the demand.
+    """
+    own = make_own_vehicle(speed=120.0)
+    # Just outside the safety buffer, so the panic shortcut does not apply and
+    # the closed form runs with a very small ``d``.
+    lead = make_vehicle(plid=2, y=11.5, speed=0.0)
+    relate_to_own(own, lead)
+
+    need = fcw._calculate_needed_braking(own.data, lead.data)
+    assert need == ForwardCollisionWarning.PANIC_DECELERATION_MS2
 
 
 def test_inside_the_safety_buffer_returns_the_panic_value(
@@ -154,18 +205,33 @@ def test_a_braking_lead_car_is_treated_as_a_wall_at_its_stopping_point(
 
 # ─── Detection geometry ──────────────────────────────────────────────────────
 
+# The corridor's half-width is the lateral-overlap condition, so for two XFGs
+# (1.7 m wide) it is 1.7 m. These are the numbers the in-game misses of
+# 2026-09-20 were measured against: 1.68 m and 1.77 m lateral on the two cars
+# that were hit, 2.74 m on the one that was passed safely.
+XFG_WIDTH_M = 1.7
+# The forward vector ``process`` hands to the corridor test: heading 0 is +Y
+# in LFS's frame (``reference/conventions.md`` §2).
+NORTH = (0.0, 1.0)
+EAST = (1.0, 0.0)
+
+
 @pytest.mark.parametrize('heading', [0, 45, 90, 180, 270, 359])
 @pytest.mark.parametrize('ahead', [5.0, 50.0, 80.0])
 @pytest.mark.parametrize('side', [-1.0, 1.0])
-def test_wedge_detects_both_sides_without_extending_into_adjacent_lane(
+def test_the_corridor_holds_its_width_over_its_whole_length(
         fcw, make_own_vehicle, make_vehicle, relate_to_own, heading, ahead, side):
+    """A car within the overlap width is seen at 5 m and at 80 m alike.
+
+    The wedge this replaced narrowed to 1.03-1.48 m half-width, so a lead car
+    1.6 m off our axis - ordinary lane keeping at 90 km/h - dropped out of it
+    exactly while the demand was crossing the intervention threshold.
+    """
     own = make_own_vehicle(x=123.0, y=-456.0, speed=150.0,
                            heading=heading, direction=heading)
     bearing = math.radians(heading)
     # Independent local-to-world transform: forward is north at heading 0.
-    # The trapezoid half-width grows from 1.026 m near to 1.483 m far.
-    # +/-1 m must be inside throughout; +/-2 m must remain outside.
-    for lateral, expected in [(side, 3), (2.0 * side, 0)]:
+    for lateral, expected in [(1.6 * side, 3), (2.5 * side, 0)]:
         lead = make_vehicle(
             plid=2, speed=0.0,
             x=123.0 - ahead * math.sin(bearing) + lateral * math.cos(bearing),
@@ -174,15 +240,44 @@ def test_wedge_detects_both_sides_without_extending_into_adjacent_lane(
         assert fcw.process(own, {2: lead})['level'] == expected
 
 
+def test_the_corridor_is_the_two_half_widths_added(
+        fcw, make_own_vehicle, make_vehicle, relate_to_own):
+    """Not a tuned constant: it is when the two bodies share lane width."""
+    own = make_own_vehicle(speed=50.0)
+    inside = make_vehicle(plid=2, x=XFG_WIDTH_M - 0.01, y=40.0)
+    outside = make_vehicle(plid=3, x=XFG_WIDTH_M + 0.01, y=40.0)
+    relate_to_own(own, inside, outside)
+
+    assert fcw._is_vehicle_ahead(own.data, inside.data, NORTH) is True
+    assert fcw._is_vehicle_ahead(own.data, outside.data, NORTH) is False
+
+
+def test_a_wider_car_is_seen_further_off_the_axis(
+        fcw, make_own_vehicle, make_vehicle, relate_to_own):
+    """An FZ5 is 2.0 m wide, an XFG 1.7 m - the corridor follows the pair."""
+    own = make_own_vehicle(speed=50.0)
+    lateral = (XFG_WIDTH_M + 2.0) / 2 - 0.01
+    narrow = make_vehicle(plid=2, x=lateral, y=40.0)
+    wide = make_vehicle(plid=3, x=lateral, y=40.0, cname=b"FZ5")
+    relate_to_own(own, narrow, wide)
+
+    assert fcw._is_vehicle_ahead(own.data, narrow.data, NORTH) is False
+    assert fcw._is_vehicle_ahead(own.data, wide.data, NORTH) is True
+
+
+def test_an_unknown_mod_gets_the_conservative_width(fcw):
+    """A mod must never be assumed narrow - that only delays the warning."""
+    assert fcw._vehicle_width(b"NOSUCHCAR") == \
+        ForwardCollisionWarning.FALLBACK_VEHICLE_WIDTH_M
+    assert fcw._vehicle_width(b"XFG") == XFG_WIDTH_M
+
+
 def test_a_car_three_metres_to_the_side_is_not_ahead(
         fcw, make_own_vehicle, make_vehicle, relate_to_own):
     own = make_own_vehicle(speed=50.0)
     beside = make_vehicle(plid=2, x=3.0, y=0.0)
     relate_to_own(own, beside)
-    fcw.own_rectangle = fcw._build_wedge(own.data)
-
-    assert beside.data.angle_to_player == pytest.approx(90.0)
-    assert fcw._is_vehicle_ahead(beside.data) is False
+    assert fcw._is_vehicle_ahead(own.data, beside.data, NORTH) is False
 
 
 def test_a_car_straight_ahead_is_ahead(fcw, make_own_vehicle, make_vehicle,
@@ -190,43 +285,41 @@ def test_a_car_straight_ahead_is_ahead(fcw, make_own_vehicle, make_vehicle,
     own = make_own_vehicle(speed=50.0)
     lead = make_vehicle(plid=2, y=40.0)
     relate_to_own(own, lead)
-    fcw.own_rectangle = fcw._build_wedge(own.data)
-
-    assert fcw._is_vehicle_ahead(lead.data) is True
+    assert fcw._is_vehicle_ahead(own.data, lead.data, NORTH) is True
 
 
-def test_the_range_gate_rejects_a_far_car_without_a_polygon_test(
+def test_the_range_gate_rejects_a_far_car_before_any_geometry(
         fcw, make_own_vehicle, make_vehicle, relate_to_own):
     own = make_own_vehicle(speed=100.0)
     far = make_vehicle(plid=2, y=200.0)
     relate_to_own(own, far)
-    fcw.own_rectangle = None            # a polygon test would raise
+    assert far.data.distance_to_player > ForwardCollisionWarning.RANGE_GATE_M
+    assert fcw._is_vehicle_ahead(own.data, far.data, NORTH) is False
 
-    assert fcw._is_vehicle_ahead(far.data) is False
 
-
-def test_the_angle_gate_rejects_a_car_behind_without_a_polygon_test(
+def test_a_car_behind_us_is_not_a_rear_end_case(
         fcw, make_own_vehicle, make_vehicle, relate_to_own):
+    """It belongs to the blind spot warning, whatever the lateral offset."""
     own = make_own_vehicle(speed=100.0)
     behind = make_vehicle(plid=2, y=-30.0)
     relate_to_own(own, behind)
-    fcw.own_rectangle = None
-
-    assert behind.data.angle_to_player == pytest.approx(180.0)
-    assert fcw._is_vehicle_ahead(behind.data) is False
+    assert fcw._is_vehicle_ahead(own.data, behind.data, NORTH) is False
 
 
-def test_the_wedge_follows_the_car_heading(fcw, make_own_vehicle, make_vehicle,
-                                           relate_to_own):
+def test_the_corridor_follows_the_car_heading(fcw, make_own_vehicle,
+                                              make_vehicle, relate_to_own):
     """Pointing east, the car 40 m east is ahead and the one 40 m north is not."""
     own = make_own_vehicle(speed=50.0, heading=270.0)   # LFS: 270 = +X (east)
     east = make_vehicle(plid=2, x=40.0)
     north = make_vehicle(plid=3, y=40.0)
     relate_to_own(own, east, north)
-    fcw.own_rectangle = fcw._build_wedge(own.data)
 
-    assert fcw._is_vehicle_ahead(east.data) is True
-    assert fcw._is_vehicle_ahead(north.data) is False
+    # The vector really is the one ``process`` derives from the heading.
+    # 1e-3, not exact: the conversion goes through 182.05 units per degree,
+    # so a cardinal heading is a cardinal direction only to within rounding.
+    assert direction_vector(own.data.heading) == pytest.approx(EAST, abs=1e-3)
+    assert fcw._is_vehicle_ahead(own.data, east.data, EAST) is True
+    assert fcw._is_vehicle_ahead(own.data, north.data, EAST) is False
 
 
 # ─── Warning levels ──────────────────────────────────────────────────────────
@@ -301,13 +394,53 @@ def test_identical_inputs_emit_the_level_only_once(
 
 def test_the_deceleration_event_is_zero_below_level_three(
         fcw, recorder, make_own_vehicle, make_vehicle, relate_to_own):
+    """The intervention waits for the top warning level, not for 6.0 m/s².
+
+    ``EmergencyBrake.ENGAGE_DECELERATION_MS2`` is 6.0, level 3 starts above
+    7.5, and this gate is what makes 7.5 the number that actually decides.
+    That is deliberate while the actuator is digital: engaging at a demand of
+    6 m/s² and then braking with the ~9.7 m/s² a tyre gives stops the car about
+    a quarter of the braking distance early. Measured in game on 2026-09-20,
+    publishing from level 2 left the car standing 6 m, 11 m and 11 m short in
+    scenarios 07, 12 and 26.
+    """
     seen = recorder('needed_deceleration_update')
     own = make_own_vehicle(speed=100.0)
     lead = make_vehicle(plid=2, y=80.0, speed=0.0)
     relate_to_own(own, lead)
 
     assert fcw.process(own, {2: lead})['level'] == 2
+    assert fcw._calculate_needed_braking(own.data, lead.data) > 0.0
     assert seen.last('needed_deceleration_update')['deceleration'] == 0.0
+
+
+@pytest.mark.parametrize('distance_setting',
+                         sorted(ForwardCollisionWarning.WARNING_THRESHOLDS))
+def test_nothing_is_published_before_the_driver_is_warned(
+        fcw, settings, recorder, make_own_vehicle, make_vehicle, relate_to_own,
+        distance_setting):
+    """Display, then sound, then brake -- by construction, not by luck.
+
+    Tying the demand to the *level* rather than to a number is what makes this
+    hold in every distance setting. It is not automatic: on "late" the audible
+    level begins at 6.5 m/s², above ``EmergencyBrake.ENGAGE_DECELERATION_MS2``,
+    so a demand published on a numeric rule could brake before it ever beeped.
+    """
+    from assistance.emergency_brake import EmergencyBrake
+
+    settings.set('collision_warning_distance', distance_setting)
+    seen = recorder('needed_deceleration_update')
+    own = make_own_vehicle(speed=60.0)
+
+    warned = False
+    for gap in [80.0, 60.0, 45.0, 35.0, 28.0, 22.0, 18.0, 15.0]:
+        lead = make_vehicle(plid=2, y=gap, speed=0.0)
+        relate_to_own(own, lead)
+        level = fcw.process(own, {2: lead})['level']
+        warned = warned or level >= 2
+        published = seen.last('needed_deceleration_update')['deceleration']
+        if published >= EmergencyBrake.ENGAGE_DECELERATION_MS2:
+            assert warned, 'braking demand delivered before any audible warning'
 
 
 # ─── Suppression ─────────────────────────────────────────────────────────────

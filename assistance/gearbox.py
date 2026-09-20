@@ -681,6 +681,25 @@ class Gearbox(AssistanceSystem):
             return False
         self.time_since_last_gear_change = self.clock()
         self.last_shift_direction = direction
+        # Eine Zeile pro tatsaechlich ausgefuehrtem Schaltvorgang. Das ist
+        # kein Logging auf dem Erfolgspfad von ``process()`` (AGENTS.md §3):
+        # es ist ein Eingriff, der dem Fahrer das Auto aus der Hand nimmt,
+        # genau wie AEB-Engage, Throttle-Cut und die Bremsachsen-Uebergabe -
+        # und die protokollieren alle.
+        #
+        # Ohne sie war known-issues #47 ueberhaupt nicht pruefbar: der Tracer
+        # bekommt kein OutGauge, solange das Add-on Port 30000 haelt, und MCI
+        # traegt keinen Gang. Ein kompletter Live-Lauf am 2026-09-20 hinterliess
+        # null Evidenz. Die Felder sind genau die, an denen die beiden
+        # gesuchten Fehlerbilder zu erkennen sind: mehrere Gaenge bei
+        # konstantem Tempo (gleicher Gang, steigende Zaehlung, Tempo flach)
+        # und Hochschalten beim harten Bremsen (direction 'up' bei fallendem
+        # Tempo).
+        logger.info("Gearbox shift %s: gear %s, %.0f min-1, %.1f km/h, "
+                    "throttle %.2f, brake %.2f.", direction,
+                    own_vehicle.gear, own_vehicle.rpm,
+                    own_vehicle.data.speed, own_vehicle.throttle,
+                    own_vehicle.brake)
         return True
 
     def _drivetrain_is_settled(self, own_vehicle: OwnVehicle) -> bool:
@@ -802,7 +821,7 @@ class Gearbox(AssistanceSystem):
         return bool(getattr(own_vehicle.data, 'lfs_auto_gears', False))
 
     def _publish_availability(self, reason):
-        """Sagt, ob die Automatik wirklich schaltet - und wenn nicht, warum
+        """Sagt, ob die Schaltfunktion verfuegbar ist - auch ausgeschaltet
 
         Ein Event je *Wechsel*. ``None`` geht mit raus, sonst bliebe ein
         behobener Grund fuer immer im Menue stehen.
@@ -814,9 +833,9 @@ class Gearbox(AssistanceSystem):
         self.event_bus.emit('gearbox_availability', {'reason': reason})
         if reason is None:
             if previous is not None:
-                logger.info("Automatic gearbox is shifting again.")
+                logger.info("Automatic gearbox is available again.")
             return
-        if reason == self.REASON_LFS_AUTO_GEARS:
+        if reason == self.REASON_LFS_AUTO_GEARS and self.settings.get('automatic_gearbox'):
             logger.info("Automatic gearbox switched itself off: LFS' own "
                         "automatic gearbox is active (PIF_AUTOGEARS). Two "
                         "gearboxes on one car shift against each other.")
@@ -831,7 +850,7 @@ class Gearbox(AssistanceSystem):
         InputGuard wird nur befragt, wenn wirklich geschaltet wuerde; der
         Kalibrier-Countdown laeuft nur waehrend der Kalibrierung.
         """
-        if not self.is_enabled():
+        if not self.enabled:
             # Abgeschaltet heisst abgeschaltet - kein Grund, den das Menue
             # als Stoerung anzeigen muesste.
             self._publish_availability(None)
@@ -848,21 +867,6 @@ class Gearbox(AssistanceSystem):
                 self._abort_calibration()
             self._publish_availability(self.REASON_CAR_NOT_SUPPORTED)
             return {'auto_gearbox_active': False}
-
-        # LFS schaltet selbst. Dann haelt sich diese Automatik heraus - noch
-        # vor allem Weiteren, damit weder eine Kalibrierung noch ein
-        # Schaltvorgang beginnt. Gemessen (known-issues #47, Szenario
-        # 15_gearbox_tests): zwei Automatiken auf einem Auto ergeben
-        # Schaltsalven, eine dauernd offene Kupplung und weniger
-        # Beschleunigung als jede der beiden allein.
-        if self.lfs_shifts_by_itself(own_vehicle):
-            if self.calibration_requested:
-                self.calibration_requested = False
-            if self.calibrating:
-                self._abort_calibration('LFS shifts by itself')
-            self._publish_availability(self.REASON_LFS_AUTO_GEARS)
-            return {'auto_gearbox_active': False,
-                    'suppressed_by': self.REASON_LFS_AUTO_GEARS}
 
         # Kalibrierung laden wenn das Fahrzeug wechselt
         if self.car != own_vehicle.data.cname:
@@ -884,21 +888,25 @@ class Gearbox(AssistanceSystem):
             else:
                 self._start_calibration()
 
+        # Kalibrierung liest nur Telemetrie; die LFS-Automatik sperrt allein
+        # unsere Schaltfunktion. Verfuegbarkeit bleibt auch ausgeschaltet aktuell.
+        reason = (self.REASON_LFS_AUTO_GEARS if self.lfs_shifts_by_itself(own_vehicle)
+                  else None if self.is_calibrated else self.REASON_NOT_CALIBRATED)
+        self._publish_availability(reason)
         if self.calibrating:
             self._process_calibration(own_vehicle)
-            self._publish_availability(None)
-        elif self.is_calibrated:
-            self._process_shifting(own_vehicle)
-            self._publish_availability(None)
-        else:
-            # Eingeschaltet, erlaubtes Auto - aber ohne Leerlauf, Redline und
-            # Gangzahl gibt es keine Schaltpunkte. Bisher schwieg die
-            # Automatik hier einfach.
-            self._publish_availability(self.REASON_NOT_CALIBRATED)
-            return {'auto_gearbox_active': False,
-                    'suppressed_by': self.REASON_NOT_CALIBRATED}
-
+            return {'auto_gearbox_active': False}
+        if reason is not None:
+            return {'auto_gearbox_active': False, 'suppressed_by': reason}
+        if not self.settings.get('automatic_gearbox'):
+            return {'auto_gearbox_active': False}
+        self._process_shifting(own_vehicle)
         return {'auto_gearbox_active': True}
+
+    def is_enabled(self) -> bool:
+        # Auch ausgeschaltet Verfuegbarkeit pruefen und Kalibrierung bedienen.
+        # Pro Zyklus nur konstante Vergleiche und vorhandene Profilabfragen.
+        return self.enabled
 
     def shutdown(self):
         """Kupplung oder Gangtaste duerfen den Prozess nicht ueberleben

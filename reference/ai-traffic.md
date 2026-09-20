@@ -191,6 +191,37 @@ no longer a following manoeuvre: full brake, no throttle, **and the brake filter
 bypassed** (`_smoothed[plid]['brake'] = 100`). Ramping the brake in over four cycles is
 0.4 s, which at 50 km/h is 5.5 m — more than the gap this fires at.
 
+**Measured live, 2026-09-20** (`21_ai_traffic_started_from_another_car`, SO7 with
+the AI-traffic layout, 23 AI cars, camera moved to another car by TAB *before* the
+traffic was started):
+
+* all 23 AI cars on track were adopted — 23 `assigned to route` lines against 23
+  `ptype_flags: ['AI']` entries in `IS_NPL`. The start does **not** depend on which
+  car OutGauge is describing;
+* the local driver (`PLID 26`) was not among them, through the TAB and the
+  `/restart` that starting the traffic issues;
+* zero `no driver to control` in `IS_MSO`, for the whole run, including the 21
+  consecutive TAB presses that walk the camera across the field and the exit at the
+  end, where the app logged `AI traffic dropped - the race was left`;
+* nothing was dropped or re-assigned because of the camera walk;
+* and the following law above did what it says. An AI closing on the standing
+  player, computed from `IS_MCI`:
+
+  | t [s] | gap | its speed |
+  |---:|---:|---:|
+  | 67.0 | 38.6 m | 59.8 km/h |
+  | 68.0 | 24.6 m | 42.7 km/h |
+  | 69.0 | 14.6 m | 29.9 km/h |
+  | 70.0 |  8.6 m | 15.7 km/h |
+  | 71.0 |  6.1 m |  1.1 km/h |
+
+  It stopped 6.1 m behind — `CA_STANDSTILL_GAP` is 6 m — having shed 59.8 km/h in
+  4 s, about 4.2 m/s², which is `CA_COMFORT_DECEL` and not the emergency branch.
+  Zero `IS_CON` and zero `IS_OBH` in the trace.
+
+  Lateral offset in that measurement was 0.1 m, i.e. the player sat dead in the
+  AI's path. The off-centre case is *not* covered by this recording.
+
 **Gear shifting and stalls** happen in `monitor_ai(aii)`, driven by `IS_AII`, not by
 `process()`. It shifts up above 3600 rpm (below 6th) and down below 1700 rpm (above
 2nd), and turns the ignition on below 300 rpm. A shift command must be released before

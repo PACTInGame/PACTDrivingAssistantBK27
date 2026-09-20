@@ -410,6 +410,21 @@ flag is the only way to know, and reading it is the only way to stay out of LFS'
 `VehicleManager` keeps the raw field in `Vehicle.data.player_flags` and the one derived
 answer in `Vehicle.data.lfs_auto_gears`. `_get_control_mode()` reads the same field.
 
+**What SHIFT+G cycles through depends on the control mode** (reported by the
+driver, 2026-09-20):
+
+| Control mode | Gearbox choices |
+|---|---|
+| mouse / keyboard | manual, automatic |
+| wheel / joystick | automatic, **sequential**, H-pattern |
+
+The add-on's automatic gearbox therefore only has a job in **sequential** on a
+wheel, or **manual** on mouse/keyboard. In every other setting either LFS is
+shifting (`PIF_AUTOGEARS`, and the add-on stands down — `systems.md`, Gearbox) or
+the driver is working an H-pattern, which this add-on does not drive. A live
+gearbox test that does not first put the driver in one of those two settings
+tests nothing: the add-on will simply log that it switched itself off.
+
 **One correction this measurement forces on `control-intervention.md` §2.1:** the
 `Flags=0x0649` recorded there for "mouse+keyboard" is the *help level*, not the control
 mode. Switching control mode did not turn `AUTOGEARS`/`HELP_B` on by itself; those bits

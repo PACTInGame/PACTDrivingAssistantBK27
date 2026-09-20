@@ -749,6 +749,13 @@ class _AlwaysThereDevice:
     def __init__(self):
         self.raw = None
 
+    def prepare(self):
+        # Nothing to load: the real device warms its DLL on a thread.
+        return True
+
+    def loading(self):
+        return False
+
     def unavailable_reason(self):
         return None
 
@@ -977,6 +984,61 @@ def test_the_brake_is_held_briefly_after_standstill_then_given_back(
     clock.advance(EmergencyBrake.STANDSTILL_HOLD_S + 0.1)
     assert system.process(stopped, {})['active'] is False
     assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
+
+
+def test_a_car_settling_on_its_suspension_does_not_restart_the_hold(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """Measured live on 2026-09-20: "standstill reached" was logged twice in the
+    same second. The body rocking after a full stop crossed STANDSTILL_KMH
+    again, which cleared ``_standstill_since`` and started the 1 s handover
+    hold from the beginning -- so the brake stayed in longer than
+    STANDSTILL_HOLD_S, in the limit indefinitely.
+    """
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+    demand(bus, 0.0)
+
+    stopped = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+    assert system.process(stopped, {})['active'] is True
+    started_at = system._standstill_since
+
+    # Rebound: above the entry threshold, far below the exit one.
+    clock.advance(0.3)
+    rocking = make_own_vehicle(speed=EmergencyBrake.STANDSTILL_KMH + 0.4,
+                               local_plid=1, plid=1)
+    assert system.process(rocking, {})['active'] is True
+    assert system._standstill_since == started_at      # clock not restarted
+
+    clock.advance(EmergencyBrake.STANDSTILL_HOLD_S - 0.2)
+    assert system.process(stopped, {})['active'] is False
+    assert keyboard.calls == [('keyDown', 'b'), ('keyUp', 'b')]
+
+
+def test_a_car_that_really_rolls_away_is_braked_again(
+        bus, aeb_factory, make_own_vehicle, keyboard):
+    """The other half of the hysteresis: standstill is not latched for good.
+    A car rolling off a slope passes STANDSTILL_EXIT_KMH within the hold and
+    must get the brake back, not a handover."""
+    clock = FakeClock()
+    system = aeb_factory(clock=clock)
+    demand(bus, 9.0)
+    system.process(make_own_vehicle(speed=80, local_plid=1, plid=1), {})
+    demand(bus, 0.0)
+
+    stopped = make_own_vehicle(speed=0.0, local_plid=1, plid=1)
+    assert system.process(stopped, {})['active'] is True
+
+    clock.advance(0.5)
+    rolling = make_own_vehicle(speed=EmergencyBrake.STANDSTILL_EXIT_KMH + 0.5,
+                               local_plid=1, plid=1)
+    assert system.process(rolling, {})['active'] is True
+    assert system._standstill_since is None
+
+    # And the hold starts afresh from the next standstill, not from the old one.
+    clock.advance(EmergencyBrake.STANDSTILL_HOLD_S + 0.1)
+    assert system.process(stopped, {})['active'] is True
 
 
 def test_the_driver_takes_the_car_back_with_the_throttle_below_the_floor(
@@ -1441,7 +1503,7 @@ def test_an_intervention_takes_a_held_throttle_away(
         bus, aeb_factory, braking_car, physical, keyboard):
     """known-issues #46, end to end.
 
-    The driver is flat out when the hazard appears. ``/key -1 throttle`` alone
+    The driver is flat out when the hazard appears. The invalid ``/key -1 throttle``
     left LFS reading the held input and reporting full throttle for the whole
     braking phase - measured twice in `simulation_tests`, scenarios 08 and 26.
     """
@@ -1469,3 +1531,16 @@ def test_the_throttle_comes_back_with_the_brake(
 
     assert keyboard.calls[-1] == ('keyDown', 'up')
     assert physical.down_for_lfs('up') is True
+
+
+def test_first_idle_cycle_clears_startup_throttle_binding_warning(aeb_factory, braking_car, recorder):
+    system = aeb_factory(push=False, user_throttle_key='mousel')
+    seen = recorder('throttle_cut_availability')
+    system._on_player_changed({'control_mode': 0})
+    assert seen.last('throttle_cut_availability')['reason'] == 'throttle_binding_not_pushed'
+    system.process(braking_car, {})
+    assert system.key_throttle.unavailable_reason() is None
+    assert seen.last('throttle_cut_availability')['reason'] is None
+    count = seen.count('throttle_cut_availability')
+    system.process(braking_car, {})
+    assert seen.count('throttle_cut_availability') == count

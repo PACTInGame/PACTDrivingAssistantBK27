@@ -4,6 +4,7 @@
 
 ```
 setup_logging()                # console + rotating file handler, once, from __main__
+SingleInstance().acquire()     # TCP 127.0.0.1:29997; a second copy exits 1 here
 run_setup_if_needed()          # blocking Tkinter wizard on first run only (.setup_done flag)
 EventBus()                     # created first, everything else receives it
 SettingsManager()              # loads settings.json, falls back to hardcoded defaults
@@ -111,6 +112,20 @@ dict, not the payloads.
 
 When you add state that both sides touch, assume it can change mid-iteration.
 
+**A thread does not escape the GIL.** "Move it off the assistance thread" only
+helps when the work releases the GIL — I/O, `subprocess`, most `ctypes` calls.
+Some C extensions hold it for their whole duration, and then the *other* threads
+pay the cost with none of the blame. Measured here: `pygame.joystick.init()`
+(168 ms) and each `pygame.joystick.Joystick(i)` (54–258 ms) hold it throughout,
+which is where two mis-attributed budget warnings came from —
+`gearbox 553.5 ms` and `aeb 362.9 ms`, neither of which was doing any work.
+
+So before trusting `AssistanceManager`'s per-system timing, check what the *main*
+thread was doing at the same timestamp. If the answer is "something in a C
+extension", the slow system is a bystander. Such work is split into steps across
+main-loop pumps instead (`PedalWatch.start`), never handed to a thread and
+forgotten.
+
 ## 3. EventBus (`core/event_bus.py`)
 
 ```python
@@ -158,6 +173,8 @@ main.py                    Application composition root and lifecycle
 kontext_prompt             Original hand-written project briefing (superseded, kept for context)
 
 core/
+  single_instance.py       Startup lock (TCP 127.0.0.1:29997) — a second copy of the add-on exits instead of running blind
+  outgauge_config.py        Read-only startup check of saved OutGauge settings; running installation takes precedence
   event_bus.py             Publish/subscribe hub — the only inter-component interface
   settings_manager.py      settings.json persistence + the authoritative default table
   thread_manager.py        ScheduledTask + one thread per interval

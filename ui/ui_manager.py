@@ -116,9 +116,8 @@ BSW_TEXTS = {1: "^3!", 2: "^1!!", 3: "^1!!!"}
 BSW_ACUTE_AUDIO = 'warning_3'
 BSW_ACUTE_BEEP_INTERVAL_S = 1.0
 # Wie oft der Gong der Kollisions- und der Querverkehrswarnung anschlaegt.
-# ``AudioPlayer`` spielt sie nacheinander; drei *gleichzeitige* Kopien waren
-# das Knacken aus known-issues #54.
-FCW_BEEPS = 3
+# Ein Ereignis bekommt genau einen Gong, keine direkte Wiederholung.
+FCW_BEEPS = 1
 
 # Notifications: eine Zeile fuer 3 s. Ohne Obergrenze staut eine Serie
 # (z.B. die Getriebekalibrierung) minutenlang.
@@ -777,9 +776,7 @@ class UIManager:
         """Aktualisiert Kollisionswarn-Anzeige"""
         warning_level = _as_int(data.get('level', 0)) if isinstance(data, dict) else 0
         if warning_level >= 2 > self.collision_warning_level:
-            # ``repeat``, not three events: three events landed on three
-            # channels at the same instant, which is the same waveform three
-            # times over and straight into clipping (known-issues #54).
+            # Ein Gong pro Warnbeginn; AudioPlayer entprellt weitere Events.
             self.event_bus.emit('play_audio',
                                 {'audio_file': 'fcw', 'repeat': FCW_BEEPS})
 

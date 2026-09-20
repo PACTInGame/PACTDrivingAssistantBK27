@@ -7,10 +7,13 @@ of that is arithmetic, so it is tested with numbers -- no joystick, no LFS, and
 no thread.
 """
 
+import logging
+
 import pytest
 
-from misc.pedal_watch import (FIT_ERROR_CYCLES, MIN_SAMPLES, PedalFit,
-                              PedalLearner, PedalWatch, _correlate, _endpoints)
+from misc.pedal_watch import (CONFIRM_SAMPLES, FIT_ERROR_CYCLES, MIN_SAMPLES,
+                              REFUSAL_LOG_INTERVAL_S, PedalFit, PedalLearner,
+                              PedalWatch, _correlate, _endpoints)
 
 
 # Three devices' worth of axes, of which exactly one is the pedal.
@@ -333,14 +336,74 @@ def test_a_brief_disagreement_does_not_throw_the_calibration_away(
 def test_a_calibration_that_keeps_disagreeing_is_measured_again(
         bus, make_settings, make_own_vehicle):
     """Somebody recalibrated the pedals, or the devices came back in a
-    different order. Nothing announces that; the value would just drift."""
+    different order. Nothing announces that; the value would just drift.
+
+    The axis reads +0.6 -- i.e. 0.8 on this fit -- while LFS reports a pedal
+    that is not pressed. Deliberately not 0.0: that is the "SDL has not
+    delivered anything for this device yet" signature and is ignored rather
+    than counted against the fit (see the dead-axis tests below).
+    """
     watch, settings = calibrated_watch(bus, make_settings)
-    watch._axes = (0.0,) * 6                      # says 0.5
+    watch._axes = (0.0, 0.0, 0.6, 0.0, 0.0, 0.0)   # axis 2 -> pedal 0.8
 
     for _ in range(FIT_ERROR_CYCLES + 1):
         watch.observe(make_own_vehicle(local_plid=1, plid=1, brake=0.0))
 
     assert watch.driver_brake() is None
+    assert settings.get('pedal_brake_axis') == -1
+
+
+# ─── A device that has not delivered anything yet ────────────────────────────
+#
+# Measured live on 2026-09-20. Three seconds after the joysticks were opened,
+# both stored calibrations were discarded with "axis says 0.50, LFS says 0.00"
+# and "axis says 0.52, LFS says 0.05". Neither number was a reading: 0.4994 is
+# what value_for(0.0) returns for a brake fitted at +0.9077/-0.9100, and 0.5177
+# is the same arithmetic for a throttle at +1.0704/-0.9971. The axes were dead
+# -- SDL delivers per device and the pedals sat on the one that came up second
+# -- and 3 s is exactly FIT_ERROR_CYCLES. The driver had to re-brake the
+# calibration in every session before the axis throttle cut could arm.
+
+
+def test_an_axis_that_has_never_reported_anything_is_not_evidence(
+        bus, make_settings, make_own_vehicle):
+    watch, settings = calibrated_watch(bus, make_settings)
+    watch._axes = (0.0,) * 6        # nothing delivered for this device yet
+
+    for _ in range(FIT_ERROR_CYCLES * 3):
+        watch.observe(make_own_vehicle(local_plid=1, plid=1, brake=0.0))
+
+    assert settings.get('pedal_brake_axis') == 2      # kept, not discarded
+
+
+def test_a_dead_axis_does_not_earn_confidence_either(
+        bus, make_settings, make_own_vehicle):
+    """The guard must not turn "no data" into "agrees with LFS" -- that would
+    confirm an axis nobody has read and let the throttle cut arm on it."""
+    watch, _settings = calibrated_watch(bus, make_settings)
+    watch._axes = (0.0,) * 6
+
+    for _ in range(CONFIRM_SAMPLES * 2):
+        watch.observe(make_own_vehicle(local_plid=1, plid=1, brake=0.0))
+
+    assert watch.confidence('brake') == 0.0
+
+
+def test_once_the_axis_comes_alive_a_real_disagreement_still_counts(
+        bus, make_settings, make_own_vehicle):
+    """The guard is about "never delivered", not about the value 0.0. One live
+    sample is enough to arm the check for good."""
+    watch, settings = calibrated_watch(bus, make_settings)
+
+    # The device starts delivering: the pedal is at rest, one end of its travel.
+    watch._axes = (0.0, 0.0, -1.0, 0.0, 0.0, 0.0)
+    watch.observe(make_own_vehicle(local_plid=1, plid=1, brake=0.0))
+
+    # Now it reads mid-travel while LFS says nothing is pressed.
+    watch._axes = (0.0,) * 6
+    for _ in range(FIT_ERROR_CYCLES + 1):
+        watch.observe(make_own_vehicle(local_plid=1, plid=1, brake=0.0))
+
     assert settings.get('pedal_brake_axis') == -1
 
 
@@ -354,3 +417,285 @@ def test_a_normal_pass_feeds_both_learners(bus, settings, make_own_vehicle):
 
     assert watch._learners['brake'].samples[-1] == ((0.1, 0.2, 0.3), 0.4)
     assert watch._learners['throttle'].samples[-1] == ((0.1, 0.2, 0.3), 0.6)
+
+
+# ─── known-issues #56: opening the devices is spread over several pumps ──────
+#
+# Measured: ``pygame.joystick.init()`` and every ``Joystick(i)`` hold the GIL
+# for their whole duration (168 / 106 / 258 / 54 ms here). Doing all of it in
+# one pump kept the main loop out of ``asyncore`` for ~590 ms and stalled the
+# 100 ms assistance thread for up to 258 ms.
+
+
+class _FakeJoystick:
+    def __init__(self, name, axes):
+        self._name = name
+        self._axes = axes
+
+    def init(self):
+        pass
+
+    def get_name(self):
+        return self._name
+
+    def get_numaxes(self):
+        return self._axes
+
+    def get_axis(self, index):
+        return 0.0
+
+
+class _FakeJoystickModule:
+    def __init__(self, outer):
+        self._outer = outer
+
+    def init(self):
+        pass
+
+    def get_count(self):
+        return len(self._outer._devices)
+
+    def Joystick(self, index):
+        self._outer.opened.append(index)
+        name, axes = self._outer._devices[index]
+        return _FakeJoystick(name, axes)
+
+
+class _FakeDisplayModule:
+    def __init__(self, outer):
+        self._outer = outer
+
+    def init(self):
+        self._outer.subsystem_inits += 1
+
+
+class _FakeEventModule:
+    @staticmethod
+    def pump():
+        pass
+
+
+class _FakePygame:
+    """Counts the SDL calls, so "one device per call" is assertable."""
+
+    def __init__(self, devices):
+        self._devices = devices
+        self.opened = []
+        self.subsystem_inits = 0
+        self.display = _FakeDisplayModule(self)
+        self.joystick = _FakeJoystickModule(self)
+        self.event = _FakeEventModule
+
+
+def _watch_with(monkeypatch, bus, settings, devices):
+    fake = _FakePygame(devices)
+    monkeypatch.setattr('misc.pedal_watch.get_joystick', lambda: fake)
+    monkeypatch.setattr('misc.pedal_watch.is_available', lambda _name: True)
+    watch = PedalWatch(bus, settings)
+    watch.request_start()
+    watch._warming = False          # the pygame import is what that thread does
+    return watch, fake
+
+
+def test_only_one_device_is_opened_per_call(monkeypatch, bus, settings):
+    watch, fake = _watch_with(monkeypatch, bus, settings,
+                              [('FANATEC Wheel', 12), ('FANATEC Wheel', 8),
+                               ('vJoy Device', 8)])
+
+    assert watch.start() is False           # the SDL subsystem, no device yet
+    assert fake.opened == []
+    assert watch.start() is False
+    assert fake.opened == [0]
+    assert watch.start() is False
+    assert fake.opened == [0, 1]
+    assert watch.start() is True            # last device, and it finishes
+    assert fake.opened == [0, 1, 2]
+    assert watch.is_running() is True
+
+
+def test_nothing_reads_a_half_built_axis_list(monkeypatch, bus, settings):
+    """``is_running`` stays False until every device is open -- a partial list
+    would make ``_flat_index`` resolve a stored fit onto the wrong axis."""
+    watch, _fake = _watch_with(monkeypatch, bus, settings,
+                               [('FANATEC Wheel', 12), ('FANATEC Wheel', 8)])
+
+    watch.start()
+    assert watch.is_running() is False
+    watch.start()
+    assert watch.is_running() is False
+    watch.start()
+    assert watch.is_running() is True
+
+
+def test_our_own_virtual_device_is_still_skipped(monkeypatch, bus, settings):
+    watch, _fake = _watch_with(monkeypatch, bus, settings,
+                               [('vJoy Device', 8), ('FANATEC Wheel', 3)])
+
+    while not watch.start():
+        pass
+
+    # Only the wheel's three axes are watched; the vJoy device is ours.
+    assert len(watch._joysticks) == 3
+    assert {label[1] for label in watch._labels.values()} == {'FANATEC Wheel'}
+
+
+def test_a_machine_with_no_joystick_at_all_finishes_in_one_step(
+        monkeypatch, bus, settings):
+    watch, fake = _watch_with(monkeypatch, bus, settings, [])
+
+    assert watch.start() is False           # nothing found -> a failure
+    assert fake.subsystem_inits == 1
+    assert watch.unavailable_reason() == 'no_joystick_found'
+    assert watch.start() is False           # remembered, not retried
+    assert fake.subsystem_inits == 1
+
+
+def test_a_stop_does_not_resume_a_half_finished_enumeration(
+        monkeypatch, bus, settings):
+    watch, fake = _watch_with(monkeypatch, bus, settings,
+                              [('FANATEC Wheel', 12), ('FANATEC Wheel', 8)])
+    watch.start()
+    watch.start()
+    assert fake.opened == [0]
+
+    watch.stop()
+    watch.request_start()
+    watch._warming = False
+
+    watch.start()
+    assert fake.opened == [0]               # back at the subsystem step
+    watch.start()
+    assert fake.opened == [0, 0]            # device 0 again, not device 1
+
+
+# ─── A saturated pedal teaches nothing, and used to say nothing ──────────────
+#
+# Measured live on 2026-09-20: the driver braked to a full stop four times from
+# ~50 km/h and the brake did not calibrate, while the throttle calibrated in the
+# same window. Nothing in the log, the menu or the chat said why -- every gate in
+# PedalLearner.attempt returned a bare None. The cause is that only the linear
+# middle counts (FIT_LOW..FIT_HIGH) and a pedal held at 1.00 is outside it, so a
+# full application contributes about 4 usable samples out of 36.
+
+
+def _application(rise_s, hold_s, fall_s, peak, rate_hz=10):
+    """One pedal application, sampled at the assistance rate."""
+    count = lambda seconds: max(1, int(round(seconds * rate_hz)))
+    out = [peak * (i + 1) / count(rise_s) for i in range(count(rise_s))]
+    out += [peak] * count(hold_s)
+    out += [peak * (1 - (i + 1) / count(fall_s)) for i in range(count(fall_s))]
+    return out
+
+
+def _drive(learner, applications, rest_samples=20):
+    """Feed the learner: axis 0 is the pedal, at rest +0.91, full -0.91."""
+    for application in applications:
+        for ref in application:
+            learner.add((0.91 - 1.82 * ref, 0.0), ref)
+        for _ in range(rest_samples):
+            learner.add((0.91, 0.0), 0.0)
+
+
+_PEDAL_LABELS = {0: (1, 'FANATEC Wheel', 4), 1: (1, 'FANATEC Wheel', 1)}
+
+
+def test_four_full_stops_do_not_identify_the_brake():
+    """The live case, reproduced: 16 of 224 samples land in the usable band."""
+    learner = PedalLearner('brake')
+    _drive(learner, [_application(0.3, 3.0, 0.3, 1.00)] * 4)
+
+    assert learner.attempt(_PEDAL_LABELS) is None
+
+
+def test_the_same_four_applications_at_85_percent_do_identify_it():
+    """Same manoeuvre, same count, only not flat out -- and the endpoints come
+    back at the pedal's real travel."""
+    learner = PedalLearner('brake')
+    _drive(learner, [_application(0.4, 2.5, 0.4, 0.85)] * 4)
+
+    fit = learner.attempt(_PEDAL_LABELS)
+
+    assert fit is not None
+    assert fit.axis == 4
+    assert fit.raw_zero == pytest.approx(0.91, abs=0.02)
+    assert fit.raw_full == pytest.approx(-0.91, abs=0.02)
+
+
+def test_a_refusal_names_the_gate_that_stopped_it():
+    learner = PedalLearner('brake')
+    _drive(learner, [_application(0.3, 3.0, 0.3, 1.00)] * 4)
+
+    learner.attempt(_PEDAL_LABELS)
+
+    assert learner.refusal is not None
+    assert 'usable range' in learner.refusal
+    assert str(MIN_SAMPLES) in learner.refusal
+
+
+def test_a_pedal_that_barely_moved_says_so_rather_than_blaming_the_samples():
+    learner = PedalLearner('brake')
+    _drive(learner, [_application(1.0, 4.0, 1.0, 0.30)] * 4)
+
+    learner.attempt(_PEDAL_LABELS)
+
+    assert learner.refusal is not None
+    assert 'travel' in learner.refusal
+
+
+def test_two_axes_that_move_together_say_which_ones():
+    """A wheel with a combined axis, a load cell or a clutch that follows the
+    brake lands here, and it never clears by itself."""
+    learner = PedalLearner('brake')
+    for ref in _application(0.5, 0.5, 0.5, 0.9) * 12:
+        learner.add((0.91 - 1.82 * ref, 0.91 - 1.82 * ref), ref)
+
+    assert learner.attempt(_PEDAL_LABELS) is None
+    assert 'equally well' in (learner.refusal or '')
+
+
+def test_a_successful_fit_clears_the_refusal():
+    learner = PedalLearner('brake')
+    _drive(learner, [_application(0.3, 3.0, 0.3, 1.00)] * 4)
+    learner.attempt(_PEDAL_LABELS)
+    assert learner.refusal is not None
+
+    _drive(learner, [_application(0.4, 2.5, 0.4, 0.85)] * 4)
+
+    assert learner.attempt(_PEDAL_LABELS) is not None
+    assert learner.refusal is None
+
+
+def test_the_reason_is_logged_once_and_then_rate_limited(
+        bus, settings, make_own_vehicle, caplog):
+    """A standing condition, not an event: say it, then leave the driver
+    alone."""
+    watch = PedalWatch(bus, settings)
+    watch._devices_ready = True
+    watch._labels = _PEDAL_LABELS
+    clock = {'t': 0.0}
+    watch.clock = lambda: clock['t']
+    _drive(watch._learners['brake'], [_application(0.3, 3.0, 0.3, 1.00)] * 4)
+
+    with caplog.at_level(logging.INFO, logger='misc.pedal_watch'):
+        watch._try_fits()
+        watch._try_fits()                       # same reason, same moment
+        clock['t'] = REFUSAL_LOG_INTERVAL_S + 1.0
+        watch._try_fits()                       # timer expired
+
+    said = [r.getMessage() for r in caplog.records
+            if 'not identified yet' in r.getMessage()]
+    assert len(said) == 2
+
+
+def test_nothing_is_said_before_the_driver_has_touched_the_pedal(
+        bus, settings, caplog):
+    """"No samples yet" is not a problem and must not read like one."""
+    watch = PedalWatch(bus, settings)
+    watch._devices_ready = True
+    watch._labels = _PEDAL_LABELS
+
+    with caplog.at_level(logging.INFO, logger='misc.pedal_watch'):
+        watch._try_fits()
+
+    assert [r for r in caplog.records
+            if 'not identified yet' in r.getMessage()] == []

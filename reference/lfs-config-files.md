@@ -101,6 +101,27 @@ v1 entry, 4 bytes: `u16 axis, u16 invert`
   `(65, 5)`, everything else `(95, 5)`. A calibration or deadzone percentage pair is the
   obvious reading; it is not confirmed and nothing should depend on it.
 
+### Saved configuration can disagree with working live pedals
+
+Observed in the axis-throttle-cut investigation: `FANATEC_Wheel_3.csf` stored
+steer `0xFFFD`, combined `0xFFFE`, throttle `0xFFFF`, brake 11 and clutch 12,
+while the user reported a working throttle pedal in the running game. The
+older `.con` still stored throttle 8/invert 1. This does not prove that the
+legacy value is the current live assignment; do not fall back to it automatically.
+The user subsequently confirmed the live assignments for this installation:
+steer 8/invert 0, throttle 9/invert 1, brake 12/invert 1, clutch 13/invert 1.
+These agree with the older file after offset +1, but are not portable defaults
+and do not validate choosing an older file automatically on other machines.
+Next check: inspect which controller snapshot LFS updates after a normal exit.
+The meaning of `0xFFFD`/`0xFFFE` remains unknown. Never add an offset and pass
+these values to `/axis`: the reader now excludes assignments outside 0..31 and
+invalid polarity, and accepts only observed format versions 1, 6 and 7.
+
+A missing throttle in the selected snapshot requires comparison with the live
+Options -> Controls -> Axes page. Stop the add-on before exiting LFS to save
+working assignments, then restart both; verify the newly saved file rather
+than assuming that a restart rewrote the expected device snapshot.
+
 ### 4.1 The number stored is NOT the number `/axis` takes
 
 This is the trap. `FANATEC_Wheel_3.csf` reads:

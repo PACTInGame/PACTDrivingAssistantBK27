@@ -557,9 +557,19 @@ class LanguageManager:
                 "dk": "Speederakse ikke fundet",
                 "se": "Gasaxeln hittades inte"
             },
+            "Throttle binding pending": {
+                "en": "Throttle control is being connected",
+                "de": "Gassteuerung wird verbunden",
+                "it": "Collegamento comando gas",
+                "fr": "Connexion de la commande des gaz",
+                "tr": "Gaz kontrolu baglaniyor",
+                "no": "Kobler til gasskontroll",
+                "dk": "Tilslutter speederstyring",
+                "se": "Ansluter gasreglage"
+            },
             "Throttle key cannot be used": {
                 "en": "Throttle key cannot be used",
-                "de": "Gastaste unbrauchbar",
+                "de": "Gaswegnehmen nicht verfuegbar - Gastaste pruefen",
                 "it": "Tasto gas inutilizzabile",
                 "fr": "Touche accel. inutilisable",
                 "tr": "Gaz tusu kullanilamiyor",

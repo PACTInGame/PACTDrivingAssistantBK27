@@ -7,32 +7,17 @@ the deceleration gone, and the stopping distance grows by the same fraction --
 from ~12 m at 50 km/h to ~17 m. Every production AEB cuts the throttle first
 and brakes second, and so does this.
 
-Taking the function away, and why that is not enough
-====================================================
+The two control modes use different cut mechanisms
+==================================================
 
-The first half is to take the **function** away from the input for as long as
-the intervention lasts::
+In ``wheel_js``, engage sends ``/axis -1 throttle``; release restores the
+axis and its polarity. In ``mouse_kb``, the binding remains assigned and
+``suppress()`` releases the held input on each intervention cycle.
+``/key -1 throttle`` is invalid in LFS and has no effect except a chat error
+(user verified). It must never be sent. Earlier traces showing a held
+throttle after that command were not evidence of successful unassignment.
 
-    engage    /key -1 throttle        LFS stops reading the throttle key
-              /axis -1 throttle       LFS stops reading the throttle axis
-    release   /key <their key> throttle
-              /axis <their axis> throttle  +  /invert <their polarity> throttle
-
-and the same control-mode split as the brake decides which pair is used: keys
-are simply ignored for throttle in ``wheel_js``, axes do not exist in
-``mouse_kb`` (§2.1).
-
-**On the key path that is not sufficient, and it was measured not to be**
-(known-issues #46). ``/key -1 throttle`` stops LFS reading *new* presses, but
-an input the driver is **already holding** keeps delivering full throttle:
-LFS latches the held state and does not re-evaluate it until the input is
-released. In ``simulation_tests`` scenario 08 the cut went out and OutGauge
-reported ``Throttle = 1.00`` for the entire braking phase; scenario 26 (a
-different hazard, the same path) did the same. The car stopped anyway, because
-the brake beats the engine, but it stopped over a third more distance than it
-had to, and the system reported a cut that never happened.
-
-So the key path also **un-presses the input**, which the brake path may never
+The key path **un-presses the input**, which the brake path may never
 do. The asymmetry is the whole point:
 
 ===============  =========================================  ==================
@@ -59,7 +44,7 @@ direction, and it is the reverse of what a stranded *brake* press would do.
 The asymmetry that decides the safety design
 ============================================
 
-**Engaging needs no knowledge; releasing does.** ``-1`` is the same command for
+**The axis cut needs a known restore.** ``/axis -1`` is the same command for
 everyone, but the restore has to name the input the driver actually uses, and
 LFS holds exactly one input per function: naming the wrong one takes the
 function away from the right input *and* destroys whatever the named one was
@@ -87,7 +72,10 @@ anything, so a process killed mid-intervention leaves ``guardian.py`` able to
 give the throttle back too -- otherwise the driver would be left with a car that
 does not accelerate and no idea why.
 
-Cost: two or three ``IS_MST`` at each end of an intervention, nothing per cycle.
+Cost: the key path sends no cut command and one binding command on handback;
+the axis path sends one cut and two restore commands. Key suppression costs
+one tracked-state lookup per active cycle, plus an injected release only when
+the input is down. This correction adds no per-cycle work.
 """
 
 import logging
@@ -147,10 +135,12 @@ class _ThrottleCut:
         if not commands:
             return False
         self.marker.claim(MARKER_OWNER, commands)
-        self.event_bus.emit('send_command_to_lfs', self._cut_command())
+        cut_command = self._cut_command()
+        if cut_command is not None:
+            self.event_bus.emit('send_command_to_lfs', cut_command)
         self._engaged = True
         logger.info("Throttle cut for the intervention (%s).",
-                    self._cut_command())
+                    cut_command or "tracked input release")
         return True
 
     def release(self):
@@ -173,7 +163,7 @@ class _ThrottleCut:
 
     # ─── Commands ─────────────────────────────────────────────────────
 
-    def _cut_command(self) -> str:
+    def _cut_command(self) -> Optional[str]:
         raise NotImplementedError
 
     def _restore_commands(self) -> List[str]:
@@ -181,7 +171,7 @@ class _ThrottleCut:
 
 
 class KeyThrottleCut(_ThrottleCut):
-    """``mouse_kb``: unassign the throttle key *and* un-press it.
+    """``mouse_kb``: keep the binding and un-press the tracked throttle input.
 
     The key is the driver's own, and this class pushes that binding into LFS
     itself, for the same reason ``KeyBrakeOutput`` does: a restore can only be
@@ -242,8 +232,9 @@ class KeyThrottleCut(_ThrottleCut):
         """Forget the binding (disconnect, rebind). Leaves this path unarmed."""
         self._bound_key = None
 
-    def _cut_command(self) -> str:
-        return "/key -1 throttle"
+    def _cut_command(self) -> Optional[str]:
+        # LFS rejects /key -1. suppress() performs the actual key cut.
+        return None
 
     def _restore_commands(self) -> List[str]:
         lfs_key = lfs_name_for(self.key)
@@ -410,7 +401,7 @@ class AxisThrottleCut(_ThrottleCut):
 
     # ─── Commands ─────────────────────────────────────────────────────
 
-    def _cut_command(self) -> str:
+    def _cut_command(self) -> Optional[str]:
         return "/axis -1 throttle"
 
     def _restore_commands(self) -> List[str]:

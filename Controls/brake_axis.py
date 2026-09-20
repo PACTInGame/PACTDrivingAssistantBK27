@@ -79,6 +79,11 @@ MARKER_OWNER = 'brake'
 # are "look at this again, but not from the 100 ms thread".
 GUARDIAN_RETRY_S = 30.0
 
+# Transient, not a fault: the vJoy DLL is still being loaded on its own thread
+# (``misc/vjoy_device.py``). Callers treat it like "ask again next cycle", not
+# like "this path is broken" -- see ``EmergencyBrake._output_for``.
+REASON_LOADING = 'vjoy_loading'
+
 
 class AxisBrakeOutput:
     """Analog brake actuation through a vJoy axis, with handback to the driver."""
@@ -125,6 +130,11 @@ class AxisBrakeOutput:
             # Handing back to ourselves is not a handback. Almost certainly a
             # half-finished calibration; refusing beats swapping to nothing.
             return 'vjoy_and_driver_axis_identical'
+        if not self.device.prepare():
+            # Loading the DLL costs ~72 ms with a warm file cache, which is
+            # most of an assistance cycle, so it happens on its own thread and
+            # this pass simply says "not yet" (known-issues #56).
+            return REASON_LOADING
         return self.device.unavailable_reason()
 
     # ─── Actuation ────────────────────────────────────────────────────

@@ -146,7 +146,12 @@ validation if the list of reserved keys is ever established.
 > job, and the driver's axis is already `brake`). Anything that wants to *search* does
 > not, and must not be written.
 
-`/axis -1 <function>` and `/key -1 <function>` unassign. Keys valid for `/key`: `A-Z`,
+`/axis -1 <function>` unassigns an axis. **`/key -1 throttle` is invalid**:
+the user verified it only prints "Invalid parameter" and changes no binding.
+The key throttle cut keeps the binding and releases the tracked input instead;
+`suppress()` repeats that release only when LFS sees a fresh press. Handback
+re-presses only a still physically held input. Never use an invalid key command
+as an unassignment mechanism. Keys valid for `/key`: `A-Z`,
 `0-9`, `space`, `up/down/left/right`, `pgup`, `pgdn`, **`mousel`, `mouser`, `mousem`,
 `wheelu`, `wheeld`** — mouse buttons are bindable as keys, which is how a mouse driver
 is covered by the same mechanism as a keyboard one.
@@ -176,6 +181,17 @@ Lifting off withdraws the decision; the expiry is what keeps this an AEB rather 
 something a held pedal switches off. There is deliberately **no minimum hold**: §1 says
 releasing our share is always allowed, and a timer holding the brake against a resolved
 situation would be the worse failure. `known-issues.md` #49.
+
+**Standstill is a Schmitt trigger, not a threshold.** The intervention holds the
+brake for `STANDSTILL_HOLD_S` (1.0 s) after the car stops, because AutoHold has
+to see standstill *and* brake pressure in the same pass. Measured live on
+2026-09-20: `standstill reached` was logged twice in the same second — a body
+settling after a full stop crosses `STANDSTILL_KMH` (0.3 km/h) again, which
+restarted the hold every time, so the brake stayed in longer than the hold and
+in the limit indefinitely. Entering standstill still uses 0.3 km/h; leaving it
+needs `STANDSTILL_EXIT_KMH` (2.0 km/h). That number separates settling from
+rolling away physically: on a 5 % gradient a ≈ 0.49 m/s², so a car that really
+rolls is past 1.8 km/h within the hold window, and rebound never is.
 
 `known-issues.md`: the **throttle cut did not stay effective** (#46 — LFS went
 back to reading the held left button despite `/key -1 throttle`), and the
@@ -393,6 +409,100 @@ limits decide how it may be used:
 The same file answers, with no offset problem, whether `brake`, `clutch` and `handbrake`
 are on an axis in the last saved configuration. AutoHold checks the live handbrake
 light before reporting success, because disk state may lag behind a running session.
+
+#### The pedals are learned from *partial* travel, not from full applications
+
+`PedalWatch` identifies each pedal by correlating every joystick axis against
+what OutGauge reports, and it fits **only the linear middle** —
+`FIT_LOW = 0.02 … FIT_HIGH = 0.98`. Outside that band LFS's own dead zones move
+the axis while the reported value stands still, which would tilt the regression
+and put the endpoints in the wrong place. That part is right.
+
+The consequence is not obvious and it bit a live session on 2026-09-20. **A
+fully pressed pedal is saturated, so it teaches nothing**, and the harder the
+driver brakes the less the system learns:
+
+| One application, 10 Hz | samples | usable |
+|---|---:|---:|
+| full stop, held at 1.00 for 3 s | 36 | **4** |
+| the same, braked to 0.85 | 33 | 32 |
+| ordinary deceleration, peak 0.45 | 42 | 41 |
+
+`MIN_SAMPLES` is 40, so four full-stop brakings give 16 usable samples and
+identify nothing, while four applications to 85 % identify the axis and recover
+its endpoints to ±0.002 of the stored calibration. Ten full stops would be
+needed. That is exactly what happened: the driver braked hard four times, the
+throttle — which is modulated continuously while driving — calibrated in the
+same window, and the brake did not.
+
+Two things follow, and both are implemented:
+
+* **every refusal says which gate stopped it**, once and then at most every
+  `REFUSAL_LOG_INTERVAL_S` (30 s), naming the numbers. Before this, all six
+  exits in `PedalLearner.attempt` returned a bare `None` and the driver had
+  nothing to act on. The combined-axis case (`axis N and another one track the
+  pedal equally well`) is the one that never clears by itself — a wheel with a
+  combined pedal axis, a load cell or a clutch that follows the brake needs a
+  manoeuvre that moves only the one pedal;
+* **the driver is told to slow down smoothly, not to "brake once"**, which was
+  the previous wording and is the worst possible advice here.
+
+#### A dead axis is not a disagreement
+
+`PedalWatch` cross-checks its identified axis against what OutGauge reports, and
+discards the calibration after `FIT_ERROR_CYCLES` (30 cycles = 3 s) of
+disagreement. **SDL delivers per device, and the devices do not come up
+together**, so for the first seconds an axis on a slower device reads exactly
+`0.0` — which the fit dutifully converts into a plausible mid-travel number.
+
+Measured 2026-09-20: the stored calibrations were discarded on every start with
+`axis says 0.50, LFS says 0.00` and `axis says 0.52, LFS says 0.05`. Neither was
+a reading. `0.4994` is `value_for(0.0)` for a brake fitted at +0.9077/−0.9100 and
+`0.5177` is the same arithmetic for a throttle at +1.0704/−0.9971 — the two logged
+numbers to the digit. The wheel driver then had to brake the calibration back in
+every session before the axis throttle cut could arm
+(`throttle_pedal_not_confirmed`).
+
+`_note_movement` does not catch it: it compares the whole axis tuple, so a live
+steering axis on device 0 satisfies it while the pedals on device 1 are still
+zero. The check is now skipped per axis until that axis has been seen at
+something other than exactly `0.0` — which a pedal does on its first real sample,
+because its rest position is one end of its travel, not the middle. A dead axis
+earns no confidence either, so nothing arms on an axis nobody has read.
+
+#### Nothing on this path is initialised on the assistance thread
+
+Arming the axis path used to load `vJoyInterface.dll` inline in `process()`.
+Measured: `ctypes.CDLL` on it costs **72 ms with a warm file cache**, against a
+100 ms cycle budget — and it happens on exactly the pass that arms the path.
+
+`VJoyDevice.prepare()` now starts that load on its own daemon thread and returns
+False until it is done; `AxisBrakeOutput.unavailable_reason()` answers
+`vjoy_loading` meanwhile, and `EmergencyBrake._output_for()` treats that like a
+pending input hook — no output, no "AEB unavailable" on screen, ask again next
+cycle. Readiness is never assumed: the path arms only once the DLL is actually
+loaded.
+
+Three warm-ups on this path now follow the same shape, and the ordering keeps
+them on different cycles: the DLL load first, then (once it reports ready) the
+guardian process and the pygame/SDL warm-up behind `PedalWatch.request_start()`.
+
+Measured, so none of it has to be guessed again:
+
+| Step | Wall time | Stalls another thread by |
+|---|---|---|
+| `import pygame` (on its own thread) | ~309 ms | ~5 ms |
+| `pygame.display.init()` | 2.3 ms | 2.8 ms |
+| `pygame.joystick.init()` | 168.1 ms | **169 ms** |
+| `pygame.joystick.Joystick(i)`, per device | 54–258 ms | **the same** |
+| `HandoverMarker.claim()` (fsync) | ~3 ms | — |
+| `ctypes.CDLL(vJoyInterface.dll)` | 72 ms | — |
+
+The import is harmless; **opening the devices is not**. Every SDL call above
+holds the GIL for its whole duration, so a worker thread cannot escape it — see
+`PedalWatch.start`, which therefore opens one device per main-loop pump. The
+marker fsync stays inline: it has to be durable before the axis swap or the
+guardian cannot undo it, and 3 ms once per intervention is affordable.
 
 #### Open problem: installing vJoy wipes the driver's LFS controller setup
 

@@ -80,6 +80,8 @@ def _read_axis_table(path: str) -> Optional[Dict[str, AxisAssignment]]:
         return None
 
     version = data[_VERSION_OFFSET]
+    if version not in (1, 6, 7):
+        return None
     width = _AXIS_ENTRY_V1 if version == 1 else _AXIS_ENTRY
     try:
         buttons = struct.unpack_from('<I', data, _BUTTON_COUNT_OFFSET)[0]
@@ -91,6 +93,8 @@ def _read_axis_table(path: str) -> Optional[Dict[str, AxisAssignment]]:
             # the layout changed and nothing below can be believed.
             logger.info("%s has %d axis functions, not %d - ignoring it.",
                         os.path.basename(path), count, len(AXIS_FUNCTIONS))
+            return None
+        if len(data) < offset + count * width:
             return None
         table = {}
         for index, function in enumerate(AXIS_FUNCTIONS):
@@ -125,7 +129,7 @@ def axis_assignments(lfs_directory: str,
         if table is None:
             continue
         stored_brake = table['brake'].axis
-        if stored_brake == UNASSIGNED:
+        if not 0 <= stored_brake <= 31 or table['brake'].invert not in (0, 1):
             continue
         offset = known_brake_axis - stored_brake
         if not 0 <= offset <= 1:
@@ -137,11 +141,22 @@ def axis_assignments(lfs_directory: str,
             function: AxisAssignment(assignment.axis + offset,
                                      assignment.invert)
             for function, assignment in table.items()
-            if assignment.axis != UNASSIGNED
+            # 0xFFFD/0xFFFE also occur in saved LFS configs. Their meaning
+            # is unverified; neither is a physical axis to restore with /axis.
+            if 0 <= assignment.axis + offset <= 31
+            and assignment.invert in (0, 1)
         }
         logger.info("Read the controller configuration from %s (offset %+d): "
                     "%s", os.path.basename(path), offset,
                     {name: value.axis for name, value in resolved.items()})
+        if 'throttle' not in resolved:
+            logger.warning(
+                "Selected controller file %s has no usable saved throttle axis "
+                "(raw axis %d, invert %d). A working pedal in LFS can differ "
+                "from this saved snapshot. Check Options - Controls - Axes; "
+                "stop the add-on before exiting LFS to save the current setup, "
+                "then restart LFS and the add-on. No legacy binding is substituted.",
+                path, table['throttle'].axis, table['throttle'].invert)
         return resolved
     logger.info("No controller file in %s names brake axis %d - the driver's "
                 "other axis numbers stay unknown.",

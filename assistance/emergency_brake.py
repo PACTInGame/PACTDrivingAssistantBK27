@@ -54,7 +54,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from Controls.brake_axis import AxisBrakeOutput
+from Controls.brake_axis import AxisBrakeOutput, REASON_LOADING
 from Controls.brake_key import KeyBrakeOutput
 from Controls.handover_marker import HandoverMarker
 from Controls.throttle_axis_check import ThrottleAxisCheck
@@ -165,6 +165,19 @@ class EmergencyBrake(AssistanceSystem):
     # Stillstand. Deutlich ueber dem Rauschen von OutGauge, deutlich unter
     # jedem Kriechen (0.3 km/h = 8 cm/s).
     STANDSTILL_KMH = 0.3
+    # Und die Schwelle, ab der der Wagen als *wieder fahrend* gilt. Zwei
+    # Schwellen, nicht eine: gemessen im Log vom 2026-09-20 wurde
+    # "standstill reached" in derselben Sekunde zweimal geschrieben. Eine
+    # Karosserie, die sich nach einer Vollbremsung ausfedert, ueberschreitet
+    # 0.3 km/h noch ein paar Mal, und jede Ueberschreitung setzte die
+    # Uebergabefrist zurueck - die Bremse blieb laenger als STANDSTILL_HOLD_S
+    # drin, im Grenzfall beliebig lange.
+    #
+    # 2.0 km/h trennt Ausfedern von Wegrollen physikalisch: an 5 % Steigung
+    # wirken a = g*sin(atan(0.05)) ~ 0.49 m/s², nach einer Sekunde also
+    # 0.49 m/s = 1.8 km/h. Ein Wagen, der wirklich anrollt, ist innerhalb der
+    # Haltezeit darueber; Ausfedern ist es nie.
+    STANDSTILL_EXIT_KMH = 2.0
     # Danach die Bremse noch so lange halten. ``AutoHold`` zieht die
     # Handbremse erst, wenn es *gleichzeitig* Stillstand und einen getretenen
     # Bremsdruck sieht - liessen wir im selben Zyklus los, in dem der Wagen
@@ -467,6 +480,11 @@ class EmergencyBrake(AssistanceSystem):
         self._ensure_binding(own_vehicle, own.control_mode)
 
         output = self._output_for(own.control_mode)
+        # NPL can report an unpushed binding before the first process pass.
+        # Refresh after binding and hook setup, even without a brake demand.
+        # Key path only: O(1) settings/hook checks, no axis discovery or I/O.
+        if own.control_mode in MOUSE_KB_MODES:
+            self._publish_throttle_availability(self.key_throttle.unavailable_reason())
         if output is None:
             self._disengage()
             return {'active': False}
@@ -641,6 +659,12 @@ class EmergencyBrake(AssistanceSystem):
             return None
 
         reason = self.axis_output.unavailable_reason()
+        if reason == REASON_LOADING:
+            # The vJoy DLL is still coming up on its own thread. Same rule as
+            # the input hooks above: it clears itself within a cycle or two,
+            # and reporting it would put "AEB unavailable" on screen at every
+            # single startup (known-issues #56).
+            return None
         if reason is None:
             self._publish_availability(None)
             # Start the watchdog now, not at the first intervention: by then it
@@ -796,11 +820,17 @@ class EmergencyBrake(AssistanceSystem):
             self._throttle_handback_at = self.clock()
             self._lockout_logged = False
             return False
-        if own.speed > self.STANDSTILL_KMH:
+        # Schmitt-Trigger, kein einzelner Schwellwert: hinein bei
+        # STANDSTILL_KMH, hinaus erst bei STANDSTILL_EXIT_KMH. Sonst startet
+        # das Ausfedern nach der Vollbremsung die Haltezeit immer wieder neu.
+        standing = self._standstill_since is not None
+        threshold = (self.STANDSTILL_EXIT_KMH if standing
+                     else self.STANDSTILL_KMH)
+        if own.speed > threshold:
             self._standstill_since = None
             return True
         now = self.clock()
-        if self._standstill_since is None:
+        if not standing:
             self._standstill_since = now
             logger.info("Emergency brake: standstill reached, holding %.1f s "
                         "for the handover.", self.STANDSTILL_HOLD_S)

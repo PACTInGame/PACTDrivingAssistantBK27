@@ -39,7 +39,7 @@ import pytest
 
 import guardian
 import pyinsim
-from Controls.brake_axis import AxisBrakeOutput
+from Controls.brake_axis import AxisBrakeOutput, REASON_LOADING
 from misc.vjoy_device import VJoyDevice
 
 
@@ -62,6 +62,17 @@ class FakeVJoy:
         self.acquired = False
         self.relinquished = 0
         self.reason_queries = 0
+        # ``prepare`` is the real device's off-thread DLL warm-up. A fake has
+        # nothing to load, so it is ready from the start; ``prepares`` records
+        # that the output asks before it reports.
+        self.prepares = 0
+
+    def prepare(self) -> bool:
+        self.prepares += 1
+        return True
+
+    def loading(self) -> bool:
+        return False
 
     def unavailable_reason(self):
         self.reason_queries += 1
@@ -877,3 +888,74 @@ def test_relinquishing_a_device_we_never_took_does_nothing():
     device.relinquish()          # no DLL at all -- must not raise
 
     assert device.acquired is False
+
+
+# ─── known-issues #56: the DLL load must not sit in the assistance pass ──────
+
+def test_the_dll_is_loaded_off_the_calling_thread(monkeypatch):
+    """``ctypes.CDLL`` on vJoyInterface costs ~72 ms with a warm file cache --
+    most of a 100 ms assistance cycle. ``prepare`` moves it to a thread of its
+    own and says "not yet" until it is done."""
+    caller = threading.get_ident()
+    loaded_on = []
+    release = threading.Event()
+
+    def slow_load(self):
+        release.wait(5.0)
+        loaded_on.append(threading.get_ident())
+        self._dll = FakeDll()
+        self._loaded = True
+
+    monkeypatch.setattr(VJoyDevice, '_load_locked', slow_load, raising=True)
+    device = VJoyDevice()
+
+    assert device.prepare() is False          # started, not finished
+    assert device.loading() is True
+    assert device.prepare() is False          # idempotent: no second thread
+    release.set()
+
+    deadline = time.monotonic() + 5.0
+    while device.loading() and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert device.prepare() is True
+    assert device.loading() is False
+    assert len(loaded_on) == 1
+    assert loaded_on[0] != caller
+
+
+def test_a_load_that_raises_does_not_block_every_later_attempt(monkeypatch):
+    """A dead warm-up thread would leave ``_loading`` set forever, and the
+    axis path would never arm -- the quiet failure AGENTS.md §3 forbids."""
+    def exploding(_self):
+        raise OSError("the driver went away")
+
+    monkeypatch.setattr(VJoyDevice, '_load_locked', exploding, raising=True)
+    device = VJoyDevice()
+    device.prepare()
+
+    deadline = time.monotonic() + 5.0
+    while device.loading() and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert device.loading() is False
+
+
+def test_the_output_says_loading_rather_than_broken_while_the_dll_comes_up(
+        bus, axis_settings, marker_path):
+    """A transient reason, not a fault: reporting it would put
+    "AEB unavailable" on screen at every startup."""
+    class Loading:
+        def prepare(self):
+            return False
+
+        def loading(self):
+            return True
+
+        def unavailable_reason(self):
+            raise AssertionError("must not be asked before the DLL is loaded")
+
+    output = AxisBrakeOutput(bus, axis_settings, device=Loading(),
+                             marker_path=marker_path, spawn=lambda _pid: None)
+
+    assert output.unavailable_reason() == REASON_LOADING

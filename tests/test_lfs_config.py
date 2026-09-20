@@ -93,6 +93,41 @@ def test_unassigned_functions_are_left_out(lfs_dir):
     assert 'brake' in resolved
 
 
+def test_live_report_special_values_are_not_physical_axes(lfs_dir, caplog):
+    write_controller_file(misc_path(lfs_dir, 'FANATEC_Wheel_3.csf'), {
+        'steer': (65533, 0), 'combined': (65534, 1),
+        'throttle': (65535, 1), 'brake': (11, 1), 'clutch': (12, 1)})
+    # The obsolete file must not silently supply an apparently useful throttle.
+    write_controller_file(misc_path(lfs_dir, 'FANATEC_Wheel_3.con'), {
+        'throttle': (8, 1), 'brake': (11, 1)}, version=6)
+    resolved = axis_assignments(lfs_dir, 12)
+    assert set(resolved) == {'brake', 'clutch'}
+    assert 'no usable saved throttle axis' in caplog.text
+
+
+@pytest.mark.parametrize('axis,invert', [(31, 1), (65534, 0), (8, 2)])
+def test_unusable_restore_assignments_are_excluded(lfs_dir, axis, invert):
+    write_controller_file(misc_path(lfs_dir, 'Wheel.csf'), {
+        'throttle': (axis, invert), 'brake': (11, 1)})
+    assert 'throttle' not in axis_assignments(lfs_dir, 12)
+
+
+def test_unknown_format_is_not_treated_as_current(lfs_dir):
+    write_controller_file(misc_path(lfs_dir, 'Future.csf'), {
+        'throttle': (8, 1), 'brake': (11, 1)}, version=8)
+    assert axis_assignments(lfs_dir, 12) is None
+
+
+def test_truncated_last_axis_entry_is_rejected(lfs_dir):
+    path = misc_path(lfs_dir, 'Wheel.csf')
+    write_controller_file(path, {'throttle': (8, 1), 'brake': (11, 1)})
+    with open(path, 'rb') as handle:
+        data = handle.read()
+    with open(path, 'wb') as handle:
+        handle.write(data[:-1])
+    assert axis_assignments(lfs_dir, 12) is None
+
+
 # ─── Picking the driver's own device out of the folder ───────────────────────
 
 def test_the_file_whose_brake_matches_is_the_drivers(lfs_dir):

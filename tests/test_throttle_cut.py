@@ -149,7 +149,7 @@ def test_cutting_and_restoring_the_key(key_cut, commands, marker):
 
     assert key_cut.engage() is True
     assert key_cut.holds_throttle() is True
-    assert sent(commands)[-1] == '/key -1 throttle'
+    assert sent(commands) == ['/key up throttle']
     assert guardian.read_marker(marker.path) == ['/key up throttle']
 
     key_cut.release()
@@ -186,7 +186,7 @@ def test_pushing_the_binding_while_the_throttle_is_cut_is_refused(
     key_cut.engage()
 
     assert key_cut.push_binding() is False
-    assert sent(commands)[-1] == '/key -1 throttle'
+    assert sent(commands) == ['/key up throttle']
 
 
 # ─── wheel_js: the axis path ─────────────────────────────────────────────────
@@ -484,8 +484,8 @@ def test_the_check_never_runs_twice(bus, make_settings):
 
 # --- Removing throttle the driver is already holding ------------------------
 #
-# known-issues #46: ``/key -1 throttle`` stops LFS reading *new* presses and
-# does nothing about an input that is already down. Measured twice, in
+# known-issues #46: ``/key -1 throttle`` is invalid and does nothing.
+# Only the tracked injected release removes a held input. Measured twice, in
 # `simulation_tests` scenarios 08 and 26: the cut went out and OutGauge
 # reported full throttle for the whole braking phase.
 
@@ -602,3 +602,19 @@ def test_the_mouse_button_path_uses_the_mouse_calls(
     cut.release()
 
     assert keyboard.calls == [('mouseUp', 'mousel'), ('mouseDown', 'mousel')]
+
+
+@pytest.mark.parametrize("key", ["up", "mousel"])
+def test_intervention_never_sends_invalid_key_unassignment(
+        bus, make_settings, marker, physical, keyboard, commands, key):
+    cut = KeyThrottleCut(bus, make_settings(user_throttle_key=key), marker,
+                         physical=physical)
+    cut.push_binding()
+    physical.driver_presses(key)
+    for _ in range(2):
+        assert cut.engage()
+        cut.suppress()
+        assert not physical.down_for_lfs(key)
+        cut.release()
+        assert physical.down_for_lfs(key)
+    assert sent(commands) == [f'/key {key} throttle'] * 3

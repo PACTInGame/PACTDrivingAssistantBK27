@@ -87,12 +87,17 @@ tests/
                            always precedes the intervention
   (offline replay)         `tools/replay_trace.py` is not a test but belongs
                            next to them: it feeds a recorded simulation trace
-                           back through BSW and CTW, so a threshold can be
-                           swept over every recorded scenario in seconds
+                           back through BSW, CTW **and FCW**, so a threshold can
+                           be swept over every recorded scenario in seconds
                            instead of a minute per in-game run. It cannot say
                            whether an intervention would have changed the
                            outcome -- the trace is a fixed history -- so
                            confirm that in game. See the module docstring.
+                           FCW's demand is read off the bus rather than out of
+                           its result dict, because that is where it publishes
+                           it; the ego speed is MCI's, not OutGauge's, so a
+                           replayed number can differ from the live one by one
+                           MCI step of acceleration.
   test_pdc.py              AXM object identity and the AXM→MCI scale, the -1/0 sensor
                            contract, and the single-threaded beeper
   test_actuation.py        the input guard's refusal table, AutoHold/Gearbox key

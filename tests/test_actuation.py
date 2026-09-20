@@ -10,6 +10,7 @@ module that records every call, so ``platform_shim.recorded_calls()`` answers
 """
 
 import json
+import logging
 
 import pytest
 
@@ -412,6 +413,50 @@ def test_gearbox_shifts_up_when_everything_is_allowed(bus, gearbox_factory, revv
     assert keys_pressed() == ['c', 's']       # clutch, shift up
 
 
+def test_every_executed_shift_is_logged(bus, gearbox_factory, revving_car,
+                                        caplog):
+    """The gearbox takes the car out of the driver's hands and used to say
+    nothing about it, unlike every other actuator here.
+
+    That is what made known-issues #47 unverifiable: the tracer gets no
+    OutGauge while the add-on holds port 30000, and MCI carries no gear, so a
+    whole live run on 2026-09-20 produced no evidence at all. The line carries
+    the fields the two suspected faults are recognised by -- several gears at
+    constant speed, and an upshift under braking.
+    """
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state())
+
+    with caplog.at_level(logging.INFO, logger='assistance.gearbox'):
+        gearbox.process(revving_car, {})
+
+    # Also drains the key tapper's thread, so the keystrokes cannot land in
+    # the next test's recording -- and proves the line describes a shift that
+    # really happened.
+    assert keys_pressed() == ['c', 's']
+    lines = [r.getMessage() for r in caplog.records
+             if r.getMessage().startswith('Gearbox shift')]
+    assert len(lines) == 1
+    assert 'up' in lines[0]
+    assert '90.0 km/h' in lines[0]
+    assert '6800 min-1' in lines[0]
+
+
+def test_a_refused_shift_is_not_logged_as_one(bus, gearbox_factory,
+                                              revving_car, caplog):
+    """A log line that says "shift" when no key was pressed would be worse
+    than no line at all."""
+    gearbox = gearbox_factory()
+    bus.emit('state_data', track_state(on_track=False))
+
+    with caplog.at_level(logging.INFO, logger='assistance.gearbox'):
+        gearbox.process(revving_car, {})
+
+    assert keys_pressed() == []
+    assert [r for r in caplog.records
+            if r.getMessage().startswith('Gearbox shift')] == []
+
+
 @pytest.mark.parametrize("state", [
     {'on_track': False}, {'text_entry': True}, {'dialog': True},
 ])
@@ -690,9 +735,9 @@ def test_the_suppression_is_reported_once_not_once_per_cycle(
     assert gearbox_reasons(seen) == ['lfs_auto_gears']
 
 
-def test_no_calibration_can_start_while_lfs_shifts_by_itself(
+def test_calibration_can_start_while_lfs_shifts_by_itself(
         bus, gearbox_factory, make_own_vehicle):
-    """Step 3 asks the driver to hold the top gear -- impossible on LFS auto."""
+    """Calibration observes telemetry without issuing shifts."""
     gearbox = gearbox_factory(calibrated=False)
     bus.emit('state_data', track_state())
     standing = make_own_vehicle(speed=0.0, gear=1, rpm=900, local_plid=1,
@@ -701,10 +746,10 @@ def test_no_calibration_can_start_while_lfs_shifts_by_itself(
     bus.emit('gearbox_calibrate', {})
     gearbox.process(standing, {})
 
-    assert gearbox.calibrating is False
+    assert gearbox.calibrating is True
 
 
-def test_a_running_calibration_is_aborted_when_lfs_takes_over(
+def test_a_running_calibration_continues_when_lfs_takes_over(
         bus, gearbox_factory, make_own_vehicle):
     clock = FakeClock()
     gearbox = gearbox_factory(clock=clock, calibrated=False)
@@ -720,7 +765,7 @@ def test_a_running_calibration_is_aborted_when_lfs_takes_over(
                                      player_flags=pyinsim.PIF_AUTOGEARS)
     gearbox.process(lfs_took_over, {})
 
-    assert gearbox.calibrating is False
+    assert gearbox.calibrating is True
 
 
 def test_unknown_flags_leave_the_gearbox_working(bus, gearbox_factory, revving_car):

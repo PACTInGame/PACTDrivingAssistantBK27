@@ -11,7 +11,8 @@ Drei Ursachen, alle drei hier behoben (``known-issues.md`` #54):
    ``play_audio`` dreimal in derselben Zeile abgesetzt, um dreimal zu piepen.
    pygame hat daraus drei *gleichzeitige* Kopien derselben Welle gemacht -
    dreifache Amplitude, also rund 9.5 dB darueber und sicher im Clipping. Ein
-   ``repeat`` im Payload spielt sie jetzt **nacheinander** (``Channel.queue``).
+   Gong wird jetzt genau einmal gespielt, auch wenn ein alter Payload
+   Wiederholungen anfordert. Die bisherige Queue erzeugte den Doppelton.
 2. **Unbegrenzte Ueberlagerung.** Jeder Aufruf nahm sich einen freien Kanal.
    Flatterte eine Warnstufe im 50-ms-UI-Takt, lagen Sekundenbruchteile spaeter
    ein Dutzend Kopien eines 0.88-s-Samples uebereinander, bis pygame die
@@ -151,6 +152,9 @@ class AudioPlayer:
         except (TypeError, ValueError):
             repeat = 1
         repeat = max(1, min(self.MAX_REPEAT, repeat))
+        # Der Kollisionsgong ist ein einzelnes Signal, auch bei alten Payloads.
+        if audio_file == "fcw":
+            repeat = 1
 
         if not self._may_play(audio_file):
             return

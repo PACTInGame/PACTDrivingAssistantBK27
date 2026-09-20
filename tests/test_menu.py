@@ -147,7 +147,7 @@ def test_the_aeb_button_is_red_while_braking_cannot_be_armed(menu, settings, bus
 
 # ─── The gearbox says why it is not shifting ─────────────────────────────────
 
-def test_the_gearbox_button_is_red_while_lfs_shifts_by_itself(menu, settings, bus):
+def test_the_gearbox_button_is_disabled_while_lfs_shifts_by_itself(menu, settings, bus):
     """Switched on but standing down is a state the driver has to see.
 
     The reason line wins over the brake's, because this is the one the driver
@@ -165,7 +165,7 @@ def test_the_gearbox_button_is_red_while_lfs_shifts_by_itself(menu, settings, bu
 
     bus.emit('gearbox_availability', {'reason': 'lfs_auto_gears'})
 
-    assert text_of(26).startswith("^1")
+    assert text_of(26).startswith("^8")
     assert 'LFS' in text_of(33)
 
     bus.emit('gearbox_availability', {'reason': None})
@@ -407,3 +407,57 @@ def test_a_button_outside_the_menu_range_is_ignored(menu):
     menu._handle_ui_action(Click())
 
     assert menu.current_menu == 'main'
+
+
+@pytest.mark.parametrize("name", MENUS)
+def test_menu_pages_share_header_and_primary_column(menu, name):
+    buttons = menu.buttons_for(name)
+    header = next(b for b in buttons if b[0] == 21)
+    assert header[1:5] == (0, 70, 25, 5)
+    assert all(b[3] == 25 for b in buttons if b[1] == 0)
+    assert all(b[1] >= 25 for b in buttons if b[1] != 0)
+    for i, first in enumerate(buttons):
+        for second in buttons[i + 1:]:
+            assert (first[1] + first[3] <= second[1]
+                    or second[1] + second[3] <= first[1]
+                    or first[2] + first[4] <= second[2]
+                    or second[2] + second[4] <= first[2]), (name, first, second)
+
+
+def test_gearbox_note_is_compact_and_beside_gearbox(menu, settings):
+    settings.set('automatic_gearbox', True)
+    menu._gearbox_reason = 'lfs_auto_gears'
+    buttons = {b[0]: b for b in menu.buttons_for('driving')}
+    note, gearbox, calibration = (buttons[i] for i in (33, 26, 30))
+    assert note[2] == gearbox[2]
+    assert note[1] >= calibration[1] + calibration[3]
+    assert note[3] <= 30
+    assert note[4] < gearbox[4]
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+@pytest.mark.parametrize('reason', ['lfs_auto_gears', 'not_calibrated', 'car_not_supported'])
+def test_unavailable_gearbox_blocks_click_but_keeps_calibration(menu, settings, bus, recorder, enabled, reason):
+    settings.set('automatic_gearbox', enabled)
+    bus.emit('gearbox_availability', {'reason': reason})
+    menu.open_driving_menu()
+    buttons = {b[0]: b for b in menu.buttons_for('driving')}
+    assert buttons[26][-1] == pyinsim.ISB_LIGHT
+    assert buttons[30][-1] & pyinsim.ISB_CLICK
+    assert 33 in buttons
+    menu._handle_menu_click(26)
+    assert settings.get('automatic_gearbox') is enabled
+    seen = recorder('gearbox_calibrate')
+    menu._handle_menu_click(30)
+    assert seen.count('gearbox_calibrate') == 1
+
+
+def test_pending_throttle_binding_is_not_reported_as_bad_key(menu, settings, bus):
+    settings.set('automatic_emergency_brake', 2)
+    settings.set('language', 'de')
+    bus.emit('throttle_cut_availability', {'reason': 'throttle_binding_not_pushed'})
+    buttons = {b[0]: b for b in menu.buttons_for('driving')}
+    assert 'unbrauchbar' not in buttons[33][5]
+    assert buttons[33][2] == buttons[32][2]
+    bus.emit('throttle_cut_availability', {'reason': None})
+    assert 33 not in {b[0] for b in menu.buttons_for('driving')}

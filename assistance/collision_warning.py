@@ -3,19 +3,20 @@ from typing import Any, Dict
 
 from assistance import park_distance_control
 from assistance.base_system import AssistanceSystem
+from assistance.path_conflict import direction_vector
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
-from misc.helpers import calc_polygon_points, is_reversing, point_in_rectangle
+from misc.helpers import is_reversing
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle, VehicleData
 
-# Fahrzeuglaengen: ``park_distance_control.is_known_car`` sagt, ob die
+# Fahrzeugmasse: ``park_distance_control.is_known_car`` sagt, ob die
 # Tabelle dieses CName wirklich kennt. Fuer jedes unbekannte - also fuer
-# jeden Fahrzeug-Mod - liefert ``get_vehicle_size`` den Mittelklassewert
-# 4.5 m (known-issues #28). Zu kurz geschaetzt heisst hier: die Warnung
-# kommt zu spaet, und genau diesen Fehler darf ein Warnsystem nicht machen.
-# Fuer unbekannte Autos wird deshalb die groesste Serienlaenge angesetzt
-# (siehe FALLBACK_VEHICLE_LENGTH_M).
+# jeden Fahrzeug-Mod - liefert ``get_vehicle_size`` die Mittelklasse
+# (known-issues #28). Zu klein geschaetzt heisst hier: die Warnung kommt
+# zu spaet, und genau diesen Fehler darf ein Warnsystem nicht machen. Fuer
+# unbekannte Autos gelten deshalb die Masse des laengsten und breitesten
+# Serienautos (FALLBACK_VEHICLE_LENGTH_M / _WIDTH_M).
 
 
 class ForwardCollisionWarning(AssistanceSystem):
@@ -32,20 +33,42 @@ class ForwardCollisionWarning(AssistanceSystem):
     * ``SAFETY_BUFFER_M`` (0.5 m) Restabstand, den wir nicht aufbrauchen wollen.
     * ``REACTION_TIME_S`` (0.2 s) Reaktionszeit, aber nur, solange wir wirklich
       auflaufen - beim Entfernen waere sie ein Geschenk in die falsche Richtung.
-    * Fahrzeuglaengen aus ``park_distance_control.get_vehicle_size``, mit
-      konservativem Rueckfallwert fuer Mods.
+    * Fahrzeugmasse aus ``park_distance_control``, mit konservativem
+      Rueckfallwert fuer Mods.
     """
 
     # ─── Erfassungsbereich ────────────────────────────────────────────
-    # Ein gedrehtes Viereck: nah ±20° breit, ab ~85 m nur noch ±1°.
-    WEDGE_LENGTH_M = 85.0
-    WEDGE_NEAR_RADIUS_M = 3.0
-    WEDGE_HALF_ANGLE_DEG = 20.0
-    WEDGE_FAR_HALF_ANGLE_DEG = 1.0
-    # Etwas weiter als das Polygon, damit die Vorauswahl nie etwas verwirft,
-    # das der Polygontest angenommen haette.
-    ANGLE_GATE_DEG = WEDGE_HALF_ANGLE_DEG + 1.0
-    RANGE_GATE_M = WEDGE_LENGTH_M + 1.0
+    #
+    # Ein gerader Korridor vor uns, und seine Breite ist **keine** frei
+    # gewaehlte Zahl: zwei Autos treffen sich genau dann, wenn ihre
+    # Mittelpunkte quer zur Fahrtrichtung naeher beieinander liegen als die
+    # Summe ihrer halben Breiten. Genau das wird geprueft.
+    #
+    # Vorher stand hier ein Keil aus Winkeln - nah ±20°, ab 85 m nur noch ±1°
+    # -, dessen halbe Breite ueber die ganze Laenge zwischen 1.03 m und 1.48 m
+    # lag. Ein 1.8 m breites Auto in derselben Spur faellt daraus heraus,
+    # sobald es anderthalb Meter neben unserer Achse liegt, und das ist auf
+    # einer Geraden bei 90 km/h voellig normal. Gemessen
+    # (``simulation_tests``, 2026-09-20, jeweils der Lauf mit Add-on):
+    #
+    # ==========================================  ==========  =============
+    # Lauf                                        |quer| max  Ausgang
+    # ==========================================  ==========  =============
+    # 07 Auffahren auf stehendes Auto               1.68 m    Aufprall
+    # 32 Stresstest, Teilfall 3                     1.77 m    Aufprall
+    # 10 knappes Vorbeifahren (Fehlalarmtest)       2.74 m    kein Kontakt
+    # ==========================================  ==========  =============
+    #
+    # In 07 und 32/3 verschwand das Ziel genau in der Sekunde aus dem Keil, in
+    # der der Eingriff haette beginnen muessen; die Warnstufe fiel auf 0 und
+    # der Bedarf auf 0. Die Ueberlappungsbedingung liegt bei rund 1.9 m (FZ5
+    # 2.0 m neben RB4 1.8 m) sauber zwischen beiden Gruppen - sie sieht die
+    # Aufprallfaelle und laesst das Vorbeifahren in Ruhe, ohne dass daran
+    # etwas eingestellt worden waere.
+    CORRIDOR_LENGTH_M = 85.0
+    # Etwas weiter als der Korridor, damit die Vorauswahl auf dem
+    # Mittelpunktsabstand nie etwas verwirft, das noch drin liegen koennte.
+    RANGE_GATE_M = CORRIDOR_LENGTH_M + 1.0
 
     METRE = 65536.0     # MCI-Positionseinheiten pro Meter
 
@@ -60,10 +83,11 @@ class ForwardCollisionWarning(AssistanceSystem):
     # Untere Schranke fuer "das Auto vor uns bremst wirklich" - darunter ist
     # das Messrauschen groesser als der Wert.
     LEAD_BRAKING_EPS_MS2 = 0.001
-    # Groesste Serienlaenge in LFS (FXR/XRR/FZR). Fuer ein unbekanntes CName
+    # Groesste Serienmasse in LFS (FXR/XRR/FZR). Fuer ein unbekanntes CName
     # kommt die Warnung damit hoechstens 0.25 m frueher als noetig, statt bis
     # zu 0.65 m zu spaet.
     FALLBACK_VEHICLE_LENGTH_M = 5.0
+    FALLBACK_VEHICLE_WIDTH_M = 2.1
 
     # Schwellen der noetigen Verzoegerung in m/s², je nach Einstellung
     # ``collision_warning_distance``: [Stufe 3, Stufe 2, Stufe 1].
@@ -81,21 +105,20 @@ class ForwardCollisionWarning(AssistanceSystem):
     def __init__(self, event_bus: EventBus, settings: SettingsManager):
         super().__init__("forward_collision_warning", event_bus, settings)
         self.current_warning_level = 0
-        self.own_rectangle = None
-        # Laengen je CName werden einmal aufgeloest und gemerkt - im Zyklus
+        # Masse je CName werden einmal aufgeloest und gemerkt - im Zyklus
         # bleibt ein dict-Zugriff statt zweier Tabellen-Lookups.
         self._length_cache: Dict[str, float] = {}
+        self._width_cache: Dict[str, float] = {}
 
     # ─── Hauptschleife ────────────────────────────────────────────────
 
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Prüft auf Kollisionsgefahr voraus
 
-        Kosten pro Zyklus: pro Fahrzeug zwei Zahlenvergleiche (Abstand und
-        Winkel, beide vom VehicleManager ohnehin pro Frame ausgerechnet); nur
-        was beide besteht, geht in den Polygontest. Gemessen mit 40 Autos:
-        ~8 µs, wenn sie ueber die Strecke verteilt sind, ~93 µs im
-        (unrealistischen) Fall, dass alle 40 im Keil stehen - bei 100 ms Budget.
+        Kosten pro Zyklus: pro Fahrzeug ein Vergleich auf dem Abstand, den
+        der VehicleManager ohnehin je Frame ausrechnet; nur was den besteht,
+        bekommt zwei Skalarprodukte. Das ist weniger als vorher - der Keil
+        baute je Zyklus ein Polygon und prueste vier Kanten pro Fahrzeug.
         """
         # Einmal binden: OutGauge schreibt nebenlaeufig in own_vehicle
         # (known-issues #12).
@@ -109,7 +132,10 @@ class ForwardCollisionWarning(AssistanceSystem):
             self._publish(0, 0.0, always_emit_deceleration=False)
             return {'level': 0}
 
-        self.own_rectangle = self._build_wedge(own)
+        # Einmal je Zyklus, nicht je Fahrzeug. Bewusst eine lokale Groesse und
+        # kein Feld: ein Feld waere vor dem ersten Durchlauf (0, 0), und damit
+        # laege *jedes* Fahrzeug in Reichweite genau voraus.
+        forward = direction_vector(own.heading)
         thresholds = self.WARNING_THRESHOLDS.get(
             self.settings.get('collision_warning_distance'),
             self.WARNING_THRESHOLDS[1])
@@ -117,7 +143,7 @@ class ForwardCollisionWarning(AssistanceSystem):
         max_needed_deceleration = 0.0
         for vehicle in vehicles.values():
             other = vehicle.data
-            if not self._is_vehicle_ahead(other):
+            if not self._is_vehicle_ahead(own, other, forward):
                 continue
             needed_braking = self._calculate_needed_braking(own, other)
             if needed_braking > max_needed_deceleration:
@@ -125,8 +151,30 @@ class ForwardCollisionWarning(AssistanceSystem):
 
         warning_level = self._warning_level(max_needed_deceleration,
                                             own.acceleration, thresholds)
-        # Der Bremseingriff ist abgeschaltet (siehe unten); der Vertrag des
-        # Events bleibt trotzdem: jeden Zyklus, 0 ausser bei Stufe 3.
+        # Die Sollverzoegerung geht erst ab Stufe 3 hinaus. Das ist bewusst
+        # **nicht** die Schwelle, die ``EmergencyBrake`` fuer sich selbst
+        # nennt: dessen ``ENGAGE_DECELERATION_MS2`` steht auf 6.0 m/s², und
+        # Stufe 3 beginnt in jeder Einstellung erst ueber 7.5 m/s². Effektiv
+        # wird also bei 7.5 gebremst.
+        #
+        # Beides wurde gemessen (2026-09-20, dieselben Aufnahmen, einmal so
+        # und einmal ab Stufe 2 veroeffentlicht):
+        #
+        # * **ab Stufe 2** (Eingriff also ab 6.0): Szenario 32 wurde in allen
+        #   fuenf Teilfaellen kollisionsfrei - aber der Wagen stand danach 6 m
+        #   (07), 11 m (12) und 11 m (26) vor dem Hindernis. Das ist keine
+        #   Notbremsung mehr, das ist Stehenbleiben auf Verdacht.
+        # * **ab Stufe 3**: der Restabstand liegt im Bereich, den ein Fahrer
+        #   erwartet.
+        #
+        # Der Grund fuer den Unterschied liegt nicht in der Schwelle, sondern
+        # im Aktuator: die Tastenausgabe kennt nur ganz oder gar nicht. Wer bei
+        # einem Bedarf von 6.0 m/s² eingreift und dann mit den ~9.7 m/s²
+        # bremst, die der Reifen hergibt, steht zwangslaeufig rund ein Viertel
+        # des Bremswegs zu frueh. Solange der Eingriff nicht moduliert
+        # (Tastentakten oder die Achse, ``control-intervention.md`` §3), ist die
+        # spaetere Schwelle die ehrlichere: sie laesst dem Fahrer mehr Weg und
+        # dem Eingriff weniger Ueberschuss.
         self._publish(warning_level,
                       max_needed_deceleration if warning_level > 2 else 0.0)
 
@@ -156,44 +204,39 @@ class ForwardCollisionWarning(AssistanceSystem):
 
     # ─── Geometrie ────────────────────────────────────────────────────
 
-    def _build_wedge(self, own: VehicleData):
-        """Baut das gedrehte Viereck vor dem eigenen Auto (MCI-Einheiten)"""
-        # (heading + 16384) / 182.05: LFS-Heading (0 = +Y, gegen den
-        # Uhrzeigersinn) in Mathe-Grad (0 = +X) - reference/conventions.md §2.
-        angle_of_car = (own.heading + 16384) / 182.05
-        near = self.WEDGE_NEAR_RADIUS_M * self.METRE
-        far = self.WEDGE_LENGTH_M * self.METRE
-        # Umlaufende Reihenfolge: erst dieselbe Seite fern/nah, dann die
-        # Gegenseite nah/fern. Gekreuzte Kanten verschieben den Dreieckstest
-        # einseitig und lassen Fahrzeuge im vorgesehenen Bereich aus.
-        return [
-            calc_polygon_points(own.x, own.y, far,
-                                angle_of_car + self.WEDGE_FAR_HALF_ANGLE_DEG),
-            calc_polygon_points(own.x, own.y, near,
-                                angle_of_car + self.WEDGE_HALF_ANGLE_DEG),
-            calc_polygon_points(own.x, own.y, near,
-                                angle_of_car - self.WEDGE_HALF_ANGLE_DEG),
-            calc_polygon_points(own.x, own.y, far,
-                                angle_of_car - self.WEDGE_FAR_HALF_ANGLE_DEG),
-        ]
+    def _is_vehicle_ahead(self, own: VehicleData, other: VehicleData,
+                          forward) -> bool:
+        """Liegt dieses Fahrzeug in unserem Fahrschlauch?
 
-    def _is_vehicle_ahead(self, other: VehicleData) -> bool:
-        """Prüft ob Fahrzeug vor uns ist
+        Zwei Fragen, in der Reihenfolge ihrer Kosten:
 
-        Zwei billige Vorauswahlen vor dem Polygontest. Beide Groessen rechnet
-        der ``VehicleManager`` ohnehin einmal pro Frame aus, hier kostet die
-        Abfrage also nur je einen Vergleich - und keine Wurzel:
+        * **Reichweite** - ``distance_to_player`` rechnet der
+          ``VehicleManager`` ohnehin je Frame aus; alles jenseits der
+          Korridorlaenge kann nicht drin liegen. Ein Vergleich, keine Wurzel.
+        * **Ueberlappung** - der Abstand quer zu unserer Fahrtrichtung gegen
+          die Summe der beiden halben Fahrzeugbreiten. Genau dann, wenn er
+          kleiner ist, belegen die beiden Autos dieselbe Spurbreite; alles
+          andere faehrt aneinander vorbei (siehe Klassendoku).
 
-        * Abstand: alles hinter der Keillaenge kann nicht drin liegen.
-        * Winkel: ``angle_to_player`` ist 0/360 = genau voraus, der Keil ist
-          ±20° breit (reference/conventions.md §2).
+        Laengs wird nur "vor uns" verlangt: ein Fahrzeug, dessen Mittelpunkt
+        hinter unserem liegt, ist kein Auffahrfall, sondern Sache der
+        Toter-Winkel-Warnung.
+
+        ``forward`` ist der normierte Fahrtrichtungsvektor, den ``process``
+        einmal je Zyklus aus dem Heading rechnet.
         """
         if other.distance_to_player > self.RANGE_GATE_M:
             return False
-        angle = other.angle_to_player
-        if self.ANGLE_GATE_DEG < angle < 360.0 - self.ANGLE_GATE_DEG:
+        dx, dy = forward
+        gap_x = (other.x - own.x) / self.METRE
+        gap_y = (other.y - own.y) / self.METRE
+        along = dx * gap_x + dy * gap_y
+        if along < 0.0 or along > self.CORRIDOR_LENGTH_M:
             return False
-        return point_in_rectangle(other.x, other.y, self.own_rectangle)
+        lateral = -dy * gap_x + dx * gap_y
+        reach = (self._vehicle_width(own.cname)
+                 + self._vehicle_width(other.cname)) / 2.0
+        return abs(lateral) <= reach
 
     # ─── Warnstufe ────────────────────────────────────────────────────
 
@@ -236,6 +279,18 @@ class ForwardCollisionWarning(AssistanceSystem):
         self._length_cache[cname] = length
         return length
 
+    def _vehicle_width(self, cname) -> float:
+        """Fahrzeugbreite in Metern, mit konservativem Rueckfall fuer Mods."""
+        cached = self._width_cache.get(cname)
+        if cached is not None:
+            return cached
+        if park_distance_control.is_known_car(cname):
+            width = park_distance_control.get_vehicle_size(cname)[1]
+        else:
+            width = self.FALLBACK_VEHICLE_WIDTH_M
+        self._width_cache[cname] = width
+        return width
+
     def _calculate_needed_braking(self, own: VehicleData,
                                   other: VehicleData) -> float:
         """
@@ -250,9 +305,27 @@ class ForwardCollisionWarning(AssistanceSystem):
         # --- 1. SETUP & CONVERSION ---
         v_own = own.speed * 0.277778  # km/h to m/s
         v_other = other.speed * 0.277778  # km/h to m/s
-        # Ensure a_other is treated as signed (negative for braking)
         relative_speed = v_own - v_other
-        a_other = other.acceleration
+        # Only the lead car's *braking* is extrapolated. Its speed is a
+        # measurement and is used in full; the speed it has not gained yet is
+        # a claim about the future, and a car cannot accelerate for ever - the
+        # one pulling away now is the same one standing still a second later.
+        #
+        # Measured (``simulation_tests`` 32, sub-case 4, 2026-09-20): the lead
+        # accelerated away at 4-6 m/s² from a standstill and then braked at
+        # 10 m/s² back to zero. Crediting its acceleration made
+        # ``req_accel`` positive - "we may even speed up" - so the demand was
+        # **0.0 for 1.8 s** while we closed from 55 m to 44 m at 82 km/h. The
+        # warning then arrived 1.15 s before contact, at which point no tyre
+        # could have helped. With the acceleration clamped away the same frames
+        # ask for 3.7 to 7.2 m/s², which is where an intervention belongs.
+        #
+        # The asymmetry is deliberate and is the same rule
+        # ``assistance/path_conflict.py`` applies to yaw: an extrapolation may
+        # only ever bring an answer *forward*, never postpone it. Braking is
+        # kept because it only raises the demand, and because a car that is
+        # braking demonstrably goes on braking.
+        a_other = min(0.0, other.acceleration)
 
         # --- 2. GEOMETRY & DISTANCE ---
         # Average length is used to find center-to-center offset,
@@ -270,15 +343,16 @@ class ForwardCollisionWarning(AssistanceSystem):
         if d <= 0.01:
             return self.PANIC_DECELERATION_MS2
 
-        # If we are slower than them and they are not braking (or accelerating away),
-        # we don't need to do anything.
+        # If we are slower than them and they are not braking, we don't need to
+        # do anything. (``a_other`` is clamped at 0, so ``>= 0`` reads "not
+        # braking" and nothing else.)
         if v_own <= v_other and a_other >= 0:
             return 0.0
 
         # --- 4. CALCULATE TIME HORIZONS ---
 
-        # Time until the lead car comes to a complete stop
-        # If a_other is 0 (constant speed) or > 0 (accelerating), it never stops.
+        # Time until the lead car comes to a complete stop. At constant speed
+        # it never does.
         if a_other >= -self.LEAD_BRAKING_EPS_MS2:
             t_stop = float('inf')
         else:
@@ -323,6 +397,13 @@ class ForwardCollisionWarning(AssistanceSystem):
             # still zu False machen.
             return 0.0
         # Ein positives req_accel heisst: wir duerften sogar beschleunigen.
-        return max(0.0, -req_accel)
-
-# TODO no automatic braking for now
+        #
+        # Gedeckelt auf denselben Panikwert wie oben: ``d`` geht gegen Null,
+        # wenn der Abstand aufgebraucht ist, und die Division liefert dann
+        # keine Information mehr, sondern Rundungsfehler mal einer grossen
+        # Zahl. Gemessen in Traces vom 2026-09-20: 198, 1354 und 4758 m/s² -
+        # Zahlen, die in Logs und Traces nur verwirren und die jede
+        # Mittelung ueber den Bedarf unbrauchbar machen. Jenseits von 20 m/s²
+        # ist die Antwort ohnehin dieselbe: alles, was die Reifen hergeben.
+        # Dieselbe Deckelung wie in ``path_conflict.stopping_deceleration``.
+        return min(self.PANIC_DECELERATION_MS2, max(0.0, -req_accel))

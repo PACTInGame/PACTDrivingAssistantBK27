@@ -129,6 +129,20 @@ is enforced on every run, including `--no-summary` (see below). Further checks:
 - **A warning-only feature is not proven by the trace.** MCI and OutGauge show
   that the situation happened, not that the HUD or the beeper fired. That still
   needs a human, or a diagnostic output the add-on does not have yet.
+- **"Without the add-on" is not automatically the right baseline.** None of the
+  driving recordings contain a gear change: they were driven with *something*
+  shifting. If that something was the add-on's automatic gearbox, then stopping
+  the add-on also stops the shifting, and the replay plays out in first gear —
+  a different scenario, not a control. Measured on 2026-09-20, scenario 12:
+  **61 km/h** with the add-on off against **115 km/h** with it on, same input,
+  same track. Every rear-end scenario was affected; the collisions the recording
+  was made for did not even happen.
+  Before reading a baseline, check `OutGauge.Gear` actually changes
+  (`--signal OutGauge.Gear`). If it does not, either switch **LFS's own**
+  automatic gearbox on (SHIFT+G on track; the add-on's gearbox then stands down
+  by itself and both sides shift), or keep the add-on running and disarm only
+  the feature under test. The point of a baseline is that exactly one thing
+  differs.
 
 #### Some scenarios have to be run three times, not once
 
@@ -444,6 +458,36 @@ python simulation_tests/analyze_trace.py runs/04_drive_and_stop_<stamp>/ \
 
 Compare `brake.csv` against the run from before the change. The markers make the
 two runs line up even though they are not the same length.
+
+## 7a. A recording is only as current as the menu it was recorded against
+
+A replay is absolute screen coordinates. LFS's own menus are stable, but **the
+add-on's menus are ours and they move**, and `player.py` places the cursor from
+the click event itself, so a moved button means a click that silently lands
+somewhere else. Nothing fails loudly: the scenario runs to the end and the trace
+looks plausible.
+
+Measured 2026-09-20. `ui/menu_system.py` was rebuilt during a refactoring and
+three of scenario 21's four add-on clicks missed. The run produced a trace, a
+summary and zero add-on log lines, because the AI traffic was never started at
+all. Scenario 15 was unaffected — it only uses LFS's own menus.
+
+**Re-pointing beats re-recording.** The button grid is 200×200 over the whole
+screen, so on 1920×1080:
+
+```
+x_px = x_button * 9.6        y_px = y_button * 5.4
+```
+
+`ui/menu_system.py` gives the grid position of every button (`MENU_TOP`,
+`MENU_ROW_HEIGHT`, the row index in `_buttons_*`), so the new pixel position can
+be computed and checked against one live measurement rather than recording the
+whole scenario again. Only the `click` events need rewriting; the `move` events
+in between do not decide where a click lands.
+
+Worth knowing when reading an old recording: a menu action can be two clicks on
+the *same* button. `_toggle_ai_traffic` arms a confirmation on the first click
+and only acts on the second.
 
 ## 8. Shipped scenarios
 

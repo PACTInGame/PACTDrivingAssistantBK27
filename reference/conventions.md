@@ -164,6 +164,18 @@ default, and never let an unknown `CName` raise.
 connection selects a car — both are unused here but are the hooks if mod handling ever
 needs to be explicit.
 
+### Limits of automatic dimension discovery
+
+The published [CAR_info.bin specification](https://www.lfs.net/programmer/carinfo)
+(export with O in the garage) includes wheelbase, wheel contact positions and
+centre-of-gravity/reference-point offsets, but no body length/width or collision
+outline. Its documented version is old; mod compatibility is not verified.
+Do not treat wheelbase/track width as body dimensions: overhangs remain unknown.
+Ordinary motion telemetry likewise does not uniquely identify the body outline.
+A potential fallback is a user-verified geometry profile per mod, including the
+outline's offset relative to the MCI reference point; this is a proposal, not
+implemented dimension discovery. Unknown vehicles must remain explicitly unknown.
+
 ## 5. Player identification (PLID) — whose car is this actually?
 
 `PLID` (player ID) is the key almost everything in this project is indexed by: the

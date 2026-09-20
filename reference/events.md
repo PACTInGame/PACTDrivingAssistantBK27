@@ -15,6 +15,7 @@ Emission is synchronous and runs in the emitter's thread — see `architecture.m
 | `vehicle_data_received` | `IS_MCI` packet | `VehicleManager` |
 | `outgauge_data` | `OutGaugePack` | `VehicleManager`, `UIManager`, `InputGuard` (one per key-injecting system) |
 | `outsim_data` | `OutSimPack` | *(reserved; OutSim is not started by the app)* |
+| `outgauge_config_checked` | `{path: str\|None, issues: list[str]}` — saved config check once before connection; not proof of live telemetry | `core.outgauge_config` via startup | Diagnostic observers; findings also logged directly |
 | `outgauge_status` | `{bound: bool, reason: str\|None, error: str}` — emitted on every `start_outgauge()`, including the re-open on track entry. `reason` is `port_in_use` or `open_failed` | `InputGuard` |
 | `player_joined` | `IS_NPL` packet | `VehicleManager` |
 | `player_flags_changed` | `IS_PFL` packet | `VehicleManager` |
@@ -122,7 +123,7 @@ grep before editing. Keys may be added, never removed or renamed.
 | `pdc_beep_allowed` | `{allowed: bool}` — **on change only**, `False` after 1 s at a standstill | `ParkDistanceControl` | `UIManager` |
 | `needed_deceleration_update` | `{deceleration: float, source: str}` m/s² | `ForwardCollisionWarning`, `CrossTrafficWarning`, `BlindSpotWarning` | `EmergencyBrake` |
 | `emergency_brake_changed` | `{active: bool, source: str\|None}` — which warning asked for it | `EmergencyBrake` | `UIManager` |
-| `gearbox_availability` | `{reason: str\|None}` — `None` = shifting; `lfs_auto_gears`, `car_not_supported`, `not_calibrated` | `Gearbox` | `MenuSystem` |
+| `gearbox_availability` | `{reason: str\|None}` — `None` = available for shifting; `lfs_auto_gears`, `car_not_supported`, `not_calibrated` | `Gearbox` | `MenuSystem` |
 | `ai_traffic_state_changed` | `{active: bool}` | `AIDriver` | `MenuSystem` |
 
 PDC sensor index order: `0,1,2` = front left/middle/right, `3,4,5` = rear left/middle/right.
@@ -136,8 +137,7 @@ Warning-output events are emitted **only on change**, not every cycle. Keep that
 contract — the UI relies on it and the bus is synchronous.
 
 `gearbox_availability` follows the same *availability* pattern as
-`emergency_brake_availability`: it answers "switched on, but is it actually doing
-anything?" and is emitted once per change of the answer, `None` included — a reason
+`emergency_brake_availability`: it answers "can automatic shifting be enabled?", even when the setting is off and is emitted once per change of the answer, `None` included — a reason
 that never clears would sit in the menu for ever. It carries the internal key only;
 the driver-facing text is `GEARBOX_REASON_TEXTS` in `ui/menu_system.py`.
 
@@ -170,6 +170,20 @@ implementation details:
   failures, or simply off track — in every case the demand disappears instead of being
   held at its last value by a subscriber with a pressed brake key.
 
+**An emitter may publish 0 while it is still below its own announce threshold, and that
+raises the effective engage point.** Nothing may brake before the driver has been warned,
+so each emitter withholds its demand until it has said something: FCW below level 3,
+CTW through its `*_DEMAND_FRACTION`. The consequence is that
+`EmergencyBrake.ENGAGE_DECELERATION_MS2` (6.0 m/s²) is a floor, not the actual trigger —
+for FCW the first demand that can arrive is above 7.5 m/s².
+When reading a trace, do not conclude from "no demand" that the geometry saw nothing;
+it may simply not have been announced yet.
+Lowering FCW's gate to level 2 was tried in game on 2026-09-20: it removed the last
+rear-end collisions and left the car standing up to 11 m short, because the digital
+brake answers a 6 m/s² demand with full braking. The announce threshold is therefore
+also the place where the *strength* of the actuator is compensated for, which is an
+argument for modulating the output rather than for moving thresholds around.
+
 ## Commands and actuation (app → LFS / hardware)
 
 | Event | Payload | Emitters | Subscriber |
@@ -201,7 +215,7 @@ Its producers include AI traffic and the brake/throttle outputs.
 | Event | Payload | Emitters | Subscriber |
 |---|---|---|---|
 | `notification` | `{notification: str}` | ~27 call sites across most systems, plus `ThreadManager` / `AssistanceManager` when they disable a failing task or system | `UIManager` |
-| `play_audio` | `{audio_file: str, repeat: int = 1}` — basename without `.wav`, resolved under `audio/`; `repeat` plays it **back to back**, never at the same time | `UIManager` | `AudioPlayer` |
+| `play_audio` | `{audio_file: str, repeat: int = 1}` — basename without `.wav`, resolved under `audio/`; `fcw` always plays once, regardless of `repeat` | `UIManager` | `AudioPlayer` |
 | `show_siren_ui` | `{ui: bool}` | `LightAssists` | `UIManager` |
 | `siren_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
 | `strobe_toggle_requested` | `{}` | `ChatCommandHandler` | `LightAssists` |
@@ -211,9 +225,9 @@ Its producers include AI traffic and the brake/throttle outputs.
 | `await_keybinding` | `{setting: str}` | `MenuSystem` | `Keybinder` |
 
 `play_audio` is **one voice**: `AudioPlayer` holds a single reserved mixer channel
-and a new tone replaces whatever is still sounding. Emitting the same file N times
-to hear it N times plays N simultaneous copies of one waveform and clips — use
-`repeat` (`known-issues.md` #54).
+and a new tone replaces whatever is still sounding. The collision/cross-traffic
+gong (`fcw`) always plays once and shares a three-second cooldown across both
+emitters. Repeated warning edges must not stack copies (`known-issues.md` #54).
 | `new_keybinding` | `{button: str, setting: str}` | `Keybinder` | `MenuSystem` |
 
 Notifications are queued in `UIManager.notifications` and displayed one at a time for

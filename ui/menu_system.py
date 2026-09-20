@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 # Schrittweite der HUD-Pfeile im Systemmenue.
 HUD_STEP = 2
 
+# Gemeinsames Raster aller Menues, in LFS-Buttonkoordinaten.
+MENU_TOP = 70
+MENU_WIDTH = 25
+MENU_ROW_HEIGHT = 5
+
 # ``automatic_emergency_brake``: 0 = aus, 1 = nur warnen, 2 = warnen und
 # bremsen. Spiegelt ``assistance.emergency_brake.AEB_MODE_BRAKE``; importiert
 # wird es nicht, damit die UI nicht am Assistenzpaket haengt.
@@ -71,7 +76,7 @@ THROTTLE_REASON_TEXTS = {
     'throttle_and_brake_axis_identical': "Throttle axis not found",
     'throttle_restore_failed': "Throttle axis not found",
     'throttle_key_not_bindable_in_lfs': "Throttle key cannot be used",
-    'throttle_binding_not_pushed': "Throttle key cannot be used",
+    'throttle_binding_not_pushed': "Throttle binding pending",
 }
 
 
@@ -278,24 +283,24 @@ class MenuSystem:
     def _buttons_main(self) -> List[Button]:
         lang = self.language
         return [
-            (21, 0, 80, 20, 5, self.translator.get("Main Menu", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Main Menu", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 85, 20, 5, self.translator.get("Driving", lang),
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("Driving", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 0, 90, 20, 5, self.translator.get("Parking", lang),
+            (23, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("Parking", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (24, 0, 95, 20, 5, self.translator.get("System", lang),
+            (24, 0, MENU_TOP + 3 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("System", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 100, 20, 5, self.translator.get("Cop Mode", lang),
+            (25, 0, MENU_TOP + 4 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("Cop Mode", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (26, 0, 105, 20, 5, self.translator.get("Keys and Axes", lang),
+            (26, 0, MENU_TOP + 5 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("Keys and Axes", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (28, 0, 110, 20, 5, self.translator.get("AI Traffic", lang),
+            (28, 0, MENU_TOP + 6 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("AI Traffic", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 0, 115, 20, 5,
+            (27, 0, MENU_TOP + 7 * MENU_ROW_HEIGHT, MENU_WIDTH, 5,
              self.translator.get("Language", lang) + f": {lang}",
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (BTN_CLOSE, 0, 120, 20, 5, "^1" + self.translator.get("Close", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 8 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -312,9 +317,10 @@ class MenuSystem:
         ctw = "^2" if self.settings.get('cross_traffic_warning') else "^1"
         # Rot heisst beim Getriebe wie beim Bremseingriff nicht nur "aus",
         # sondern auch "eingeschaltet, schaltet aber nicht" - der Grund steht
-        # in der Detailzeile unter dem Menue.
+        # rechts neben dem Getriebe.
         agb_on = self.settings.get('automatic_gearbox')
-        agb = "^2" if agb_on and self._gearbox_reason is None else "^1"
+        agb_available = self._gearbox_reason is None
+        agb = ("^2" if agb_on else "^1") if agb_available else "^8"
         ah = "^2" if self.settings.get('auto_hold') else "^1"
         al = "^2" if self.settings.get('adaptive_lights') else "^1"
         hba = "^2" if self.settings.get('high_beam_assist') else "^1"
@@ -338,57 +344,56 @@ class MenuSystem:
             aeb_text = "^1" + self.translator.get("Warn & Brake", lang)
 
         buttons = [
-            (21, 0, 70, 25, 5, self.translator.get("Driving Settings", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Driving Settings", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 75, 25, 5, fcw + self.translator.get("Collision Warning", lang),
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, fcw + self.translator.get("Collision Warning", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 25, 75, 15, 5, distance_text,
+            (23, 25, MENU_TOP + MENU_ROW_HEIGHT, 15, 5, distance_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (32, 40, 75, 25, 5, aeb_text,
+            (32, 40, MENU_TOP + MENU_ROW_HEIGHT, 25, 5, aeb_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (24, 0, 80, 25, 5, bsw + self.translator.get("Blind Spot Warn.", lang),
+            (24, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, bsw + self.translator.get("Blind Spot Warn.", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 85, 25, 5, ctw + self.translator.get("Cross Traffic Warn.", lang),
+            (25, 0, MENU_TOP + 3 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, ctw + self.translator.get("Cross Traffic Warn.", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (31, 25, 85, 15, 5, ctw_distance_text,
+            (31, 25, MENU_TOP + 3 * MENU_ROW_HEIGHT, 15, 5, ctw_distance_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (26, 0, 90, 25, 5, agb + self.translator.get("Automatic Gearbox", lang),
+            (26, 0, MENU_TOP + 4 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, agb + self.translator.get("Automatic Gearbox", lang),
+             (pyinsim.ISB_DARK | pyinsim.ISB_CLICK) if agb_available else pyinsim.ISB_LIGHT),
+            (30, 25, MENU_TOP + 4 * MENU_ROW_HEIGHT, 15, 5, self.translator.get("Calibrate", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (30, 25, 90, 15, 5, self.translator.get("Calibrate", lang),
+            (27, 0, MENU_TOP + 5 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, ah + self.translator.get("Auto Hold", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 0, 95, 25, 5, ah + self.translator.get("Auto Hold", lang),
+            (28, 0, MENU_TOP + 6 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, al + self.translator.get("Adaptive Lights", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (28, 0, 100, 25, 5, al + self.translator.get("Adaptive Lights", lang),
+            (29, 0, MENU_TOP + 7 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, hba + self.translator.get("High Beam Assist", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (29, 0, 105, 25, 5, hba + self.translator.get("High Beam Assist", lang),
-             pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (BTN_CLOSE, 0, 110, 25, 5, "^1" + self.translator.get("Close", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 8 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
-        # Die Begruendung haengt *unter* dem Menue statt in der Zeile, damit
-        # sie keine der festen Zeilen verschiebt, wenn sie erscheint oder
-        # verschwindet.
-        if agb_on and self._gearbox_reason is not None:
+        # Der Getriebehinweis steht kompakt neben der Kalibrierung;
+        # sein Erscheinen verschiebt keine Menuezeile.
+        if self._gearbox_reason is not None:
             # Vor dem Bremseingriff: das Getriebe ist der einzige Punkt, den
             # der Fahrer selbst in Sekunden beheben kann (LFS-Automatik aus).
             detail = self.translator.get(
                 GEARBOX_REASON_TEXTS.get(self._gearbox_reason,
                                          "Automatic Gearbox not available"),
                 lang)
-            buttons.append((33, 0, 115, 65, 5, "^3" + detail, pyinsim.ISB_LIGHT))
+            buttons.append((33, 40, MENU_TOP + 4 * MENU_ROW_HEIGHT, 30, 4, "^3" + detail, pyinsim.ISB_LIGHT))
         elif aeb_on and self._aeb_reason is not None:
             detail = self.translator.get(
                 AEB_REASON_TEXTS.get(self._aeb_reason, "Braking unavailable"),
                 lang)
-            buttons.append((33, 0, 115, 65, 5, "^1" + detail, pyinsim.ISB_LIGHT))
+            buttons.append((33, 0, MENU_TOP + 9 * MENU_ROW_HEIGHT, 65, 5, "^1" + detail, pyinsim.ISB_LIGHT))
         elif aeb_on and self._throttle_reason is not None:
             # Only when braking itself is fine: two red lines about the same
             # feature would bury the one that matters.
             detail = self.translator.get(
                 THROTTLE_REASON_TEXTS.get(self._throttle_reason,
                                           "Throttle axis not checked"), lang)
-            buttons.append((33, 0, 115, 65, 5, "^3" + detail, pyinsim.ISB_LIGHT))
+            buttons.append((33, 65, MENU_TOP + MENU_ROW_HEIGHT, 45, 5, "^3" + detail, pyinsim.ISB_LIGHT))
         return buttons
 
     def open_driving_menu(self):
@@ -412,13 +417,13 @@ class MenuSystem:
         )
 
         return [
-            (21, 0, 80, 25, 5, self.translator.get("Parking Settings", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Parking Settings", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 85, 25, 5, pdc + self.translator.get("Park Distance Control", lang),
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, pdc + self.translator.get("Park Distance Control", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 25, 85, 20, 5, pdc_mode_text,
+            (23, 25, MENU_TOP + MENU_ROW_HEIGHT, 20, 5, pdc_mode_text,
              (pyinsim.ISB_DARK | pyinsim.ISB_CLICK) if pdc_on else pyinsim.ISB_LIGHT),
-            (BTN_CLOSE, 0, 90, 25, 5, "^1" + self.translator.get("Close", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -449,27 +454,27 @@ class MenuSystem:
         hud_position_colour = "^7"
 
         return [
-            (21, 0, 75, 25, 5, self.translator.get("System Settings", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("System Settings", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 80, 20, 5, self.translator.get("Unit", lang),
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("Unit", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (23, 20, 80, 10, 5, unit_text,
+            (23, MENU_WIDTH, MENU_TOP + MENU_ROW_HEIGHT, 10, 5, unit_text,
              pyinsim.ISB_LIGHT),
-            (24, 0, 85, 20, 5, hud_text + self.translator.get("Head-Up Display", lang),
+            (24, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, hud_text + self.translator.get("Head-Up Display", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (25, 0, 90, 25, 5,
+            (25, 0, MENU_TOP + 3 * MENU_ROW_HEIGHT, MENU_WIDTH, 5,
              f"{hud_position_colour}{self.translator.get('HUD Position', lang)}"
              f"  (V:{hud_h}  H:{hud_w})",
              pyinsim.ISB_LIGHT),
-            (26, 25, 90, 5, 5, "^7" + self.translator.get("Up", lang),
+            (26, 25, MENU_TOP + 3 * MENU_ROW_HEIGHT, 8, 5, "^7" + self.translator.get("Up", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (27, 30, 90, 5, 5, "^7" + self.translator.get("Down", lang),
+            (27, 33, MENU_TOP + 3 * MENU_ROW_HEIGHT, 8, 5, "^7" + self.translator.get("Down", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (28, 35, 90, 5, 5, "^7" + self.translator.get("Left", lang),
+            (28, 41, MENU_TOP + 3 * MENU_ROW_HEIGHT, 8, 5, "^7" + self.translator.get("Left", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (29, 40, 90, 5, 5, "^7" + self.translator.get("Right", lang),
+            (29, 49, MENU_TOP + 3 * MENU_ROW_HEIGHT, 8, 5, "^7" + self.translator.get("Right", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (BTN_CLOSE, 0, 95, 25, 5, "^1" + self.translator.get("Close", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 4 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -484,11 +489,11 @@ class MenuSystem:
         cop = "^2" if self.settings.get('cop_assistance') else "^1"
 
         return [
-            (21, 0, 80, 25, 5, self.translator.get("Cop Mode Settings", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Cop Mode Settings", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 85, 25, 5, cop + self.translator.get("Cop Assistance", lang),
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, cop + self.translator.get("Cop Assistance", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (BTN_CLOSE, 0, 90, 25, 5, "^1" + self.translator.get("Close", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -512,11 +517,11 @@ class MenuSystem:
             toggle_text = self.translator.get("Start AI Traffic", lang)
 
         return [
-            (21, 0, 80, 25, 5, self.translator.get("AI Traffic", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("AI Traffic", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 85, 25, 5, toggle_color + toggle_text,
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, toggle_color + toggle_text,
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
-            (BTN_CLOSE, 0, 90, 25, 5, "^1" + self.translator.get("Close", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -554,19 +559,19 @@ class MenuSystem:
     def _buttons_keys(self) -> List[Button]:
         lang = self.language
         buttons: List[Button] = [
-            (21, 0, 75, 25, 5, self.translator.get("Keys and Axes", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Keys and Axes", lang),
              pyinsim.ISB_LIGHT),
         ]
         for index, (button_id, setting, label) in enumerate(self.KEY_BINDINGS):
-            top = 80 + index * 5
-            buttons.append((button_id, 0, top, 20, 5, self.translator.get(label, lang),
+            top = MENU_TOP + (index + 1) * MENU_ROW_HEIGHT
+            buttons.append((button_id, 0, top, MENU_WIDTH, 5, self.translator.get(label, lang),
                             pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
             key = self.settings.get(setting) or ''
-            buttons.append((button_id + self.KEY_DISPLAY_OFFSET, 20, top, 5, 5,
+            buttons.append((button_id + self.KEY_DISPLAY_OFFSET, MENU_WIDTH, top, 15, 5,
                             f"{str(key).upper()}", pyinsim.ISB_LIGHT))
 
-        top = 80 + len(self.KEY_BINDINGS) * 5
-        buttons.append((BTN_CLOSE, 0, top, 25, 5,
+        top = MENU_TOP + (len(self.KEY_BINDINGS) + 1) * MENU_ROW_HEIGHT
+        buttons.append((BTN_CLOSE, 0, top, MENU_WIDTH, 5,
                         "^1" + self.translator.get("Close", lang),
                         pyinsim.ISB_DARK | pyinsim.ISB_CLICK))
         return buttons
@@ -585,13 +590,13 @@ class MenuSystem:
                 f"'{self.settings.get(setting)}'.")
 
         return [
-            (21, 0, 80, 25, 5, self.translator.get("Rebind Key", lang),
+            (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Rebind Key", lang),
              pyinsim.ISB_LIGHT),
-            (22, 0, 85, 25, 5, self.translator.get("Press a key to bind...", lang),
+            (22, 0, MENU_TOP + MENU_ROW_HEIGHT, MENU_WIDTH, 5, self.translator.get("Press a key to bind...", lang),
              pyinsim.ISB_LIGHT),
-            (23, 0, 90, 50, 5, text,
+            (23, MENU_WIDTH, MENU_TOP + MENU_ROW_HEIGHT, 40, 4, text,
              pyinsim.ISB_LIGHT),
-            (BTN_CLOSE, 0, 95, 25, 5, "^1" + self.translator.get("Cancel", lang),
+            (BTN_CLOSE, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Cancel", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
 
@@ -826,6 +831,10 @@ class MenuSystem:
             self._handle_close()
             return
 
+        # Auch verspaetete Klickpakete duerfen einen gesperrten Schalter
+        # nicht umlegen; Kalibrieren (30) bleibt davon unabhaengig.
+        if self.current_menu == 'driving' and button_id == 26 and self._gearbox_reason is not None:
+            return
         action = self._actions.get(self.current_menu, {}).get(button_id)
         if action is None:
             logger.debug("Button %d has no action in menu %r", button_id, self.current_menu)

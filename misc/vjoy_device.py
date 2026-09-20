@@ -27,6 +27,7 @@ intervention leaves the car braking. See ``reference/control-intervention.md``
 import ctypes
 import logging
 import os
+import threading
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -76,20 +77,72 @@ class VJoyDevice:
         self.axis = axis
         self._dll = None
         self._loaded = False
+        # ``_load`` can run on the assistance thread *and* on the warm-up
+        # thread ``prepare`` starts. Without the lock the second caller sees
+        # ``_loaded`` already set and reads ``_dll`` while the first is still
+        # filling it in -- "vjoy_not_installed" on a machine that has vJoy.
+        self._load_lock = threading.Lock()
+        self._loading = False
         self.acquired = False
         self.raw_min = 0
         self.raw_max = 32767
 
     # ─── Availability ─────────────────────────────────────────────────
 
+    def prepare(self) -> bool:
+        """Start loading the DLL off the caller's thread. Returns True when done.
+
+        ``ctypes.CDLL`` on ``vJoyInterface.dll`` was measured at 72 ms with a
+        warm file cache -- most of a whole assistance cycle (``AGENTS.md`` §1),
+        and more on the first run of the day. It used to be paid inline by the
+        first :meth:`unavailable_reason`, which is exactly the pass that arms
+        the axis brake path (known-issues #56).
+
+        Idempotent and cheap after the first call: one attribute read. Nothing
+        waits for the result -- the next cycle asks again and arms then. This
+        is the same shape as the input-hook and pygame warm-ups.
+        """
+        if self._loaded:
+            return True
+        if self._loading:
+            return False
+        self._loading = True
+        threading.Thread(target=self._load_off_thread, name='vjoy-load',
+                         daemon=True).start()
+        return False
+
+    def loading(self) -> bool:
+        """Is a warm-up started by :meth:`prepare` still running?"""
+        return self._loading and not self._loaded
+
+    def _load_off_thread(self):
+        # Must never let an exception escape: a dead thread would leave
+        # ``_loading`` set forever and the path would never arm. ``_load``
+        # already degrades on its own, so anything arriving here is a surprise
+        # and is logged as one rather than dropped.
+        try:
+            self._load()
+        except Exception as exc:
+            self._loaded = True
+            logger.error("Loading the vJoy DLL raised: %s: %s",
+                         type(exc).__name__, exc)
+        finally:
+            self._loading = False
+
     def _load(self):
         """Load the DLL once. Never raises; ``self._dll`` stays None on failure."""
         if self._loaded:
             return
-        self._loaded = True
+        with self._load_lock:
+            if self._loaded:
+                return
+            self._load_locked()
+
+    def _load_locked(self):
         path = _find_dll()
         if path is None:
             logger.info("vJoy is not installed - no virtual brake axis.")
+            self._loaded = True
             return
         try:
             dll = ctypes.CDLL(path)
@@ -101,8 +154,12 @@ class VJoyDevice:
         except Exception as exc:
             logger.warning("vJoy DLL at %s could not be loaded: %s: %s",
                            path, type(exc).__name__, exc)
+            self._loaded = True
             return
         self._dll = dll
+        # Last, and only now: a reader that sees ``_loaded`` sees a finished
+        # object behind it.
+        self._loaded = True
 
     def unavailable_reason(self) -> Optional[str]:
         """Why this device cannot be driven, or ``None`` if it can.

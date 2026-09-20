@@ -8,8 +8,10 @@ import pyinsim
 from assistance.manager import AssistanceManager
 from core.connection_test import LfsConnectionTest
 from core.event_bus import EventBus
+from core.outgauge_config import validate_startup
 from core.settings_manager import SettingsManager
 from core.setup_wizard import run_setup_if_needed
+from core.single_instance import SingleInstance
 from core.thread_manager import ThreadManager, ScheduledTask
 from lfs.connector import LFSConnector
 from lfs.message_sender import MessageSender
@@ -43,6 +45,21 @@ class LFSAssistantApp:
     """Hauptanwendung - orchestriert alle Komponenten"""
 
     def __init__(self):
+        # Vor allem anderen, auch vor dem Setup-Assistenten: nur eine
+        # Instanz. Eine zweite kann OutGauge nicht binden, laeuft blind,
+        # zeichnet aber trotzdem ueber die Buttons der ersten und bedient
+        # dieselben Aktuatoren (core/single_instance.py).
+        self._instance_lock = SingleInstance()
+        if not self._instance_lock.acquire():
+            logger.error(
+                "Another copy of the PACT Driving Assistant is already "
+                "running. A second one cannot bind OutGauge on port 30000, so "
+                "it would run blind - and both would fight over the same LFS "
+                "buttons and the same brake. Close the other one first. To "
+                "find it: Get-Process python | Where-Object "
+                "{ $_.CommandLine -like '*main.py*' }")
+            sys.exit("Already running")
+
         # --- First-time setup (blocks until wizard is closed) ---
         run_setup_if_needed()
 
@@ -177,6 +194,7 @@ class LFSAssistantApp:
 
         self.install_signal_handlers()
         try:
+            validate_startup(self.event_bus, self.settings.get('lfs_directory'))
             # LFS-Verbindung herstellen
             self.lfs_connector.connect()
 
@@ -293,6 +311,17 @@ class LFSAssistantApp:
             self.lfs_connector.disconnect()
         except Exception as e:
             logger.warning("Disconnecting from LFS failed: %s: %s", type(e).__name__, e)
+
+        # Zuletzt: die Sperre geben wir erst frei, wenn nichts mehr von uns in
+        # LFS steht. Sonst startet die naechste Instanz in unser Aufraeumen
+        # hinein. Wie jeder Schritt hier gekapselt - ein Shutdown darf an
+        # keiner Stelle werfen. Das Betriebssystem gibt den Socket ohnehin
+        # frei, falls wir hier nicht ankommen.
+        try:
+            self._instance_lock.release()
+        except Exception as e:
+            logger.warning("Releasing the single-instance lock failed: %s: %s",
+                           type(e).__name__, e)
 
         logger.info("Shutdown complete.")
 

@@ -181,6 +181,17 @@ def main(argv: Optional[List[str]] = None) -> int:  # noqa: C901 - a linear scri
     print(f"Tracer   : {os.path.relpath(tracer_path, paths.REPO_ROOT)}")
     print(f"Run dir  : {run_dir}")
 
+    # Preconditions were stored and never shown, so nobody read them. Two live
+    # gearbox runs (2026-09-19, 2026-09-20) were wasted because LFS was in a
+    # mode the recording does not set and cannot see: the add-on stood down and
+    # the run tested nothing. A scenario that needs something set in LFS has to
+    # say so at the moment somebody is about to start it.
+    preconditions = scenario.get("preconditions") or []
+    if preconditions:
+        print("Check before starting:")
+        for item in preconditions:
+            print(f"  - {item}")
+
     result: Dict[str, Any] = {
         "scenario": scenario["name"],
         "scenario_path": scenario_path,

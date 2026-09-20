@@ -109,6 +109,11 @@ CORRELATION_MARGIN = 0.015
 # The axis must actually travel. Without this a nearly constant axis whose
 # noise happens to line up would win on correlation alone.
 MIN_AXIS_SPAN = 0.15
+# How often an unidentified pedal may explain itself. Long, because it is a
+# standing condition and not an event: a driver who has not braked yet should
+# not be nagged, and a driver whose wheel genuinely cannot be resolved needs to
+# read it once, not forty times.
+REFUSAL_LOG_INTERVAL_S = 30.0
 
 # A calibrated axis has to span something; below this the two endpoints are
 # indistinguishable and the mapping would explode.
@@ -243,12 +248,18 @@ class PedalLearner:
     def __init__(self, name: str):
         self.name = name
         self.samples: deque = deque(maxlen=SAMPLE_LIMIT)
+        # Why the last attempt gave nothing, as a ready-made sentence. Every
+        # gate below used to fail in silence, so a pedal that never calibrated
+        # gave the driver nothing to act on -- and the one thing they are told
+        # to do is the thing that helps least (see ``_usable``).
+        self.refusal: Optional[str] = None
 
     def add(self, axes: Tuple[float, ...], reference: float):
         self.samples.append((axes, reference))
 
     def reset(self):
         self.samples.clear()
+        self.refusal = None
 
     def attempt(self, labels: Dict[int, Tuple[int, str, int]]) -> Optional[PedalFit]:
         """Try to identify the axis. ``None`` while the evidence is not there.
@@ -256,13 +267,35 @@ class PedalLearner:
         *labels* maps a flat axis index to ``(device_index, device_name,
         axis_within_device)`` -- the poller owns that mapping, this class only
         needs it to describe the winner.
+
+        Every ``None`` also sets :attr:`refusal` to a sentence naming the gate
+        that stopped it. ``PedalWatch`` prints that, rate-limited, because the
+        alternative is what actually happened on 2026-09-20: a driver braked
+        hard four times, the brake did not calibrate, and nothing anywhere said
+        why.
         """
         usable = [(axes, ref) for axes, ref in self.samples
                   if FIT_LOW < ref < FIT_HIGH]
         if len(usable) < MIN_SAMPLES:
+            # Measured, and it is the opposite of what anyone expects: a full
+            # application is nearly worthless here. Only the linear middle
+            # counts (FIT_LOW..FIT_HIGH), and a pedal held at 1.00 for three
+            # seconds contributes about 4 usable samples out of 36, because
+            # everything in the hold is saturated. Braking to 0.85 instead
+            # contributes 32 of 33. So "brake hard a few times" needs ten
+            # applications and "slow down smoothly a few times" needs one or
+            # two -- which is why the wording below says the latter.
+            self.refusal = (
+                f"only {len(usable)} of {len(self.samples)} samples are in the "
+                f"usable range {FIT_LOW:.2f}-{FIT_HIGH:.2f} (need "
+                f"{MIN_SAMPLES}); a fully pressed pedal is saturated and "
+                f"teaches nothing - press it part way and release it slowly")
             return None
         refs = [ref for _axes, ref in usable]
         if max(refs) - min(refs) < MIN_REFERENCE_SPAN:
+            self.refusal = (
+                f"the pedal only moved over {max(refs) - min(refs):.2f} of its "
+                f"travel (need {MIN_REFERENCE_SPAN:.2f})")
             return None
 
         width = min(len(axes) for axes, _ref in usable)
@@ -279,23 +312,39 @@ class PedalLearner:
             elif score > runner_up:
                 runner_up = score
 
-        if best_index < 0 or best_score < MIN_CORRELATION:
+        if best_index < 0:
+            self.refusal = (
+                f"no axis moved more than {MIN_AXIS_SPAN:.2f} while the pedal "
+                f"did")
+            return None
+        if best_score < MIN_CORRELATION:
+            self.refusal = (
+                f"the best axis ({best_index}) tracks the pedal at only "
+                f"{best_score:.3f} (need {MIN_CORRELATION:.2f})")
             return None
         if best_score - runner_up < CORRELATION_MARGIN:
-            logger.debug("%s: axes %d and the runner-up track the pedal "
-                         "equally well (%.3f vs %.3f) - waiting for a clearer "
-                         "manoeuvre.", self.name, best_index, best_score,
-                         runner_up)
+            # A wheel with a combined axis, a load cell or a clutch that moves
+            # with the brake lands here. It is not a fault, but it never clears
+            # by itself either, so it is said out loud rather than at DEBUG.
+            self.refusal = (
+                f"axis {best_index} and another one track the pedal equally "
+                f"well ({best_score:.3f} vs {runner_up:.3f}) - a manoeuvre "
+                f"that moves only this pedal would separate them")
             return None
 
         column = [axes[best_index] for axes, _ref in usable]
         ends = _endpoints(column, refs)
         if ends is None:
+            self.refusal = (f"axis {best_index} tracks the pedal but its "
+                            f"travel could not be fitted")
             return None
         device_index, device_name, axis = labels[best_index]
         fit = PedalFit(device_index, device_name, axis, ends[0], ends[1])
         if not fit.valid:
+            self.refusal = (f"axis {best_index} produced a degenerate "
+                            f"calibration ({fit!r})")
             return None
+        self.refusal = None
         return fit
 
 
@@ -339,6 +388,14 @@ class PedalWatch:
         self._agreeing: Dict[str, int] = {'brake': 0, 'throttle': 0}
         self._seen_low: Dict[str, float] = {}
         self._seen_high: Dict[str, float] = {}
+        # Flat axis indices that have been seen at something other than exactly
+        # 0.0 -- see ``_check_fit``. A set rather than a flag per pedal because
+        # the two pedals can sit on different devices, which come up at
+        # different times.
+        self._axes_alive: set = set()
+        # When each pedal last explained why it is still unidentified.
+        self._refusal_logged_at: Dict[str, float] = {}
+        self._last_refusal: Dict[str, str] = {}
 
         # Published by pump(), read by everyone else. Rebound as a whole
         # tuple, never mutated, so a reader can never see half an update.
@@ -346,6 +403,13 @@ class PedalWatch:
         self._labels: Dict[int, Tuple[int, str, int]] = {}
         self._devices_ready = False
         self._reason: Optional[str] = None
+        # Opening the devices is spread over several pumps -- see ``start``.
+        # ``None`` means "not begun"; otherwise it is the next device index to
+        # open, and ``_opening`` collects the flat axis list as it grows.
+        self._open_index: Optional[int] = None
+        self._open_count = 0
+        self._opening: List[Tuple[object, int]] = []
+        self._opening_labels: Dict[int, Tuple[int, str, int]] = {}
 
         self._fits: Dict[str, Optional[PedalFit]] = {'brake': None,
                                                      'throttle': None}
@@ -394,10 +458,33 @@ class PedalWatch:
             self._warming = False
 
     def start(self) -> bool:
-        """Open the devices. **Main thread only** -- see the module docstring.
+        """Open the devices, **one step per call**. Main thread only.
 
-        Idempotent, and a failure is remembered as a failure: retrying an SDL
-        init that has already gone wrong once only produces more log lines.
+        Measured on this machine (Windows 11, SDL 2.28.4, two FANATEC devices
+        plus vJoy), and it is why this is a step machine rather than one call::
+
+            pygame.display.init()        2.3 ms
+            pygame.joystick.init()     168.1 ms
+            Joystick(0)                106.2 ms
+            Joystick(1)                257.9 ms
+            Joystick(2)                 54.2 ms
+
+        **Every one of those holds the GIL for its whole duration** -- a ticker
+        thread sleeping 1 ms saw stalls exactly as long. So opening everything
+        in one pump did two things at once: it kept the main loop out of
+        ``asyncore`` for ~590 ms, long enough to drop InSim packets, and it
+        stalled the 100 ms assistance thread for up to 258 ms. That is where
+        "gearbox 553.5 ms" and "aeb 362.9 ms" came from -- neither system was
+        doing any work, both were waiting for the GIL (known-issues #56).
+
+        A thread does not help: the GIL follows. Spreading does -- the worst
+        single block drops from ~590 ms to one device, and the main loop
+        answers LFS in between. ``is_running`` stays False until every device
+        is open, so nothing reads a half-built axis list.
+
+        Returns True once the devices are ready. A failure is remembered as a
+        failure: retrying an SDL init that has already gone wrong once only
+        produces more log lines.
         """
         if self._started or self._failed:
             return self._started
@@ -409,12 +496,14 @@ class PedalWatch:
                            "the worst and brake fully.")
             return False
         try:
-            self._joysticks = self._open_devices()
+            done = self._open_step()
         except Exception as exc:
             self._failed = True
             self._reason = 'joystick_open_failed'
             logger.error("Opening the joysticks failed: %s: %s",
                          type(exc).__name__, exc)
+            return False
+        if not done:
             return False
         if not self._joysticks:
             self._failed = True
@@ -435,6 +524,13 @@ class PedalWatch:
         self._devices_ready = False
         self._axes = ()
         self._joysticks = []
+        # The flat indices mean nothing once the devices are closed.
+        self._axes_alive = set()
+        # A half-finished enumeration must not be resumed after a stop.
+        self._open_index = None
+        self._open_count = 0
+        self._opening = []
+        self._opening_labels = {}
 
     # ─── Reading ──────────────────────────────────────────────────────
 
@@ -530,7 +626,31 @@ class PedalWatch:
         One subtraction and one counter per pedal per cycle. See
         ``FIT_ERROR_TOLERANCE`` for why a single disagreement means nothing and
         a persistent one means everything.
+
+        **An axis that has never reported anything but exactly 0.0 is not
+        evidence, in either direction.** Measured on 2026-09-20: three seconds
+        after the devices were opened, a perfectly good calibration was thrown
+        away with "axis says 0.50, LFS says 0.00". 0.50 was not a reading --
+        it is what ``value_for(0.0)`` returns for a pedal whose endpoints sit
+        at +0.91 and -0.91, and 0.52 is the same arithmetic for the throttle's
+        +1.07 / -1.00. Both axes were simply still dead: SDL delivers per
+        device, the pedals sat on the second one, and it came up later than the
+        first. Exactly 30 cycles of that is ``FIT_ERROR_CYCLES``, so the
+        calibration was discarded every single session and the driver had to
+        brake it back in before the axis throttle cut could arm.
+
+        ``_note_movement`` does not catch this: it compares the whole tuple, so
+        the steering axis of a device that *is* live satisfies it while the
+        pedals on another device are still zero.
+
+        A physical pedal never rests at exactly 0.0 -- its rest position is one
+        end of its travel -- so this costs nothing once the device is alive.
         """
+        index = self._axis_index(which)
+        if index is not None and index not in self._axes_alive:
+            if self._axes[index] == 0.0:
+                return
+            self._axes_alive.add(index)
         predicted = self._pedal(which)
         if predicted is None:
             return
@@ -562,7 +682,12 @@ class PedalWatch:
             if name not in self._fits:
                 continue
             self._forget(name)
-        logger.info("Pedal calibration cleared - drive and brake once.")
+        # Not "brake once": measured, one full stop contributes about four
+        # usable samples out of forty, because a saturated pedal is discarded
+        # (PedalLearner.attempt). Smooth, partial applications are what teach
+        # it, and they do so in one or two goes.
+        logger.info("Pedal calibration cleared - drive normally and slow down "
+                    "smoothly a few times, without flooring the pedals.")
 
     # ─── The pump ─────────────────────────────────────────────────────
 
@@ -634,12 +759,14 @@ class PedalWatch:
             return
         self._movement_seen = True
         logger.info("The driver's input devices are being read (%d axes). "
-                    "Brake and throttle will be identified from the next "
-                    "manoeuvre.", len(self._axes))
+                    "Brake and throttle are identified from ordinary driving; "
+                    "partial pedal travel teaches more than full.",
+                    len(self._axes))
 
-    def _open_devices(self) -> List[Tuple[object, int]]:
-        """Open every joystick and build the flat axis list plus its labels.
+    def _open_step(self) -> bool:
+        """One step of the enumeration. True when there is nothing left to do.
 
+        Step 0 is the SDL subsystem, every later step is exactly one device.
         ``pygame.display.init()`` rather than ``pygame.init()``: the event queue
         that ``pump()`` drives lives in SDL's *video* subsystem (without it
         ``pump()`` raises "video system not initialized"), but the rest of
@@ -647,28 +774,46 @@ class PedalWatch:
         :mod:`misc.audio_player` owns. No window is ever created.
         """
         pygame = get_joystick()
-        os.environ.setdefault(_BACKGROUND_EVENTS_HINT, '1')
-        pygame.display.init()
-        pygame.joystick.init()
-        flat: List[Tuple[object, int]] = []
-        labels: Dict[int, Tuple[int, str, int]] = {}
-        for device_index in range(pygame.joystick.get_count()):
+        if self._open_index is None:
+            os.environ.setdefault(_BACKGROUND_EVENTS_HINT, '1')
+            pygame.display.init()
+            pygame.joystick.init()
+            self._open_count = pygame.joystick.get_count()
+            self._open_index = 0
+            self._opening = []
+            self._opening_labels = {}
+            # "No device at all" still finishes here rather than costing
+            # another pump.
+            if self._open_count > 0:
+                return False
+
+        while self._open_index < self._open_count:
+            device_index = self._open_index
+            self._open_index += 1
             joystick = pygame.joystick.Joystick(device_index)
             joystick.init()
             name = joystick.get_name()
             if any(marker in name.lower() for marker in _EXCLUDED_DEVICES):
                 logger.info("Skipping %r - that is our own virtual device.",
                             name)
-                continue
-            for axis in range(joystick.get_numaxes()):
-                labels[len(flat)] = (device_index, name, axis)
-                flat.append((joystick, axis))
-        self._labels = labels
-        if flat:
+            else:
+                for axis in range(joystick.get_numaxes()):
+                    self._opening_labels[len(self._opening)] = (device_index,
+                                                                name, axis)
+                    self._opening.append((joystick, axis))
+            if self._open_index < self._open_count:
+                # One device per call: the next one waits for the next pump.
+                return False
+
+        self._labels = self._opening_labels
+        self._joysticks = self._opening
+        self._opening = []
+        self._opening_labels = {}
+        if self._joysticks:
             logger.info("Watching %d axes on %d device(s) for the driver's "
-                        "pedals.", len(flat),
-                        len({label[0] for label in labels.values()}))
-        return flat
+                        "pedals.", len(self._joysticks),
+                        len({label[0] for label in self._labels.values()}))
+        return True
 
     def _try_fits(self):
         for which, learner in self._learners.items():
@@ -676,6 +821,7 @@ class PedalWatch:
                 continue
             fit = learner.attempt(self._labels)
             if fit is None:
+                self._report_refusal(which, learner)
                 continue
             self._fits[which] = fit
             self._fit_errors[which] = 0
@@ -683,10 +829,48 @@ class PedalWatch:
             learner.reset()
             self._save_fit(which, fit)
             logger.info("Identified the %s pedal: %r", which, fit)
+            self._refusal_logged_at.pop(which, None)
+            self._last_refusal.pop(which, None)
             self.event_bus.emit('pedal_identified',
                                 {'pedal': which,
                                  'device': fit.device_name,
                                  'axis': fit.axis})
+
+    def _report_refusal(self, which: str, learner: 'PedalLearner'):
+        """Say why a pedal is still unidentified. Once, then on a slow timer.
+
+        The failure this closes was measured on 2026-09-20: four full-stop
+        brakings produced no brake calibration, the throttle calibrated fine in
+        the same window, and there was nothing in the log, the menu or the chat
+        to tell the driver what to do differently. Every gate in
+        ``PedalLearner.attempt`` returned a bare ``None``.
+
+        A new reason is printed immediately -- it means something changed --
+        and a repeated one at most every ``REFUSAL_LOG_INTERVAL_S``. Nothing is
+        printed before the driver has touched the pedal at all, because "no
+        samples yet" is not a problem.
+        """
+        reason = learner.refusal
+        if reason is None or not learner.samples:
+            return
+        now = self.clock()
+        last_at = self._refusal_logged_at.get(which)
+        if self._last_refusal.get(which) == reason and last_at is not None \
+                and now - last_at < REFUSAL_LOG_INTERVAL_S:
+            return
+        self._last_refusal[which] = reason
+        self._refusal_logged_at[which] = now
+        logger.info("The %s pedal is not identified yet: %s.", which, reason)
+
+    def _axis_index(self, which: str) -> Optional[int]:
+        """The flat index this pedal's fit currently resolves to, if any."""
+        fit = self._fits.get(which)
+        if fit is None:
+            return None
+        index = self._flat_index(fit)
+        if index is None or index >= len(self._axes):
+            return None
+        return index
 
     def _flat_index(self, fit: PedalFit) -> Optional[int]:
         """Where this fit's axis sits in the current flat list.

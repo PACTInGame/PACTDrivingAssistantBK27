@@ -296,8 +296,9 @@ The fix, and the pattern for anything similar:
   made the procedure impossible to debug from the cockpit.
 - Results and one-off events stay notifications. Those are what the ticker is for.
 
-Watch the queue: `known-issues.md` #45 records a still-unidentified emitter that floods it
-at cycle rate.
+Historical notification flooding no longer reproduced in the user's AutoHold and
+gearbox-calibration checks. Keep overflow diagnostics: they identify dropped and
+incoming text if a different emitter floods the queue in a future session.
 
 ### 1.8 A warning that blinks has to be drawn by the UI pass, not by its event
 
@@ -405,6 +406,12 @@ lied.
 
 ## 4. Menus — `ui/menu_system.py`
 
+All menu headers start at `MENU_TOP = 70`, with a 25-unit main column and
+5-unit rows. Header, primary entries and close/cancel share that width;
+additional controls and values start to the right of it. The gearbox note
+is 30 units wide and 4 high, beside calibration rather than below the menu.
+Layout changes are event-driven and add no assistance-cycle work.
+
 A flat state machine: `current_menu ∈ {'none','main','driving','parking','system','cop','ai_traffic','keys','await_key'}`.
 Each menu has **two halves that must agree**:
 
@@ -422,14 +429,19 @@ Toggling a setting immediately re-opens the same menu so the `^1`/`^2` colour pr
 reflects the new state — that is the established pattern, keep it. `_toggle` and
 `_cycle` do exactly that.
 
-**Green means "working", not "switched on".** Two entries in the driving menu are red
-while the setting is on but the feature cannot act: automatic braking
-(`emergency_brake_availability`) and the automatic gearbox (`gearbox_availability`).
-Both publish an internal reason on change and the menu translates it through
-`AEB_REASON_TEXTS` / `GEARBOX_REASON_TEXTS` into **one shared detail line, button 33**,
-hung under the menu so it never shifts a fixed row. Only one reason is shown at a time
-— the gearbox first, because it is the one a driver can clear in two seconds (SHIFT+G).
-A system adding a third availability source shares that slot; do not add a second line.
+**Unavailable gearbox controls are disabled.** Button 26 uses `ISB_LIGHT`,
+grey text and no `ISB_CLICK` whenever `gearbox_availability.reason` is non-null.
+The click handler rejects stale clicks too. Availability is refreshed even with
+the toggle off, so switching off LFS automatic gears unlocks the control again.
+Calibration (30) stays clickable and observes telemetry independently of shifting.
+
+Automatic braking still uses red for an enabled but unavailable intervention.
+The translated availability detail uses shared button 33: gearbox reasons beside
+the calibration row, braking reasons below the menu, throttle reasons beside the
+braking row. The gearbox reason takes priority, regardless of its toggle setting.
+`throttle_binding_not_pushed` means setup is pending, not an unusable key. The key
+path republishes availability after binding/hook setup on each assistance pass
+(only changes emit), so a startup refusal cannot remain until the first intervention.
 
 The menu reads `language` live through the `MenuSystem.language` property. It used to
 cache the value at construction, so a language change from anywhere but the menu itself
