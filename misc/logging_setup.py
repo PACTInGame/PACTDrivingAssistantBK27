@@ -45,6 +45,26 @@ _configured = False
 _configure_lock = threading.Lock()
 
 
+# Environment override for the root level, so a live run can be made verbose
+# without editing code or shipping a debug build. ``PACT_LOG_LEVEL=DEBUG``
+# is the one that matters: the assistance systems keep their per-cycle
+# diagnostics at DEBUG precisely so they cost nothing at the default level.
+LEVEL_ENV_VAR = 'PACT_LOG_LEVEL'
+
+
+def _level_from_env(default: int) -> int:
+    """The level named in :data:`LEVEL_ENV_VAR`, or *default*.
+
+    An unrecognised value is ignored rather than raising: a typo in an
+    environment variable must not stop the add-on from starting.
+    """
+    name = os.environ.get(LEVEL_ENV_VAR)
+    if not name:
+        return default
+    resolved = logging.getLevelName(name.strip().upper())
+    return resolved if isinstance(resolved, int) else default
+
+
 def setup_logging(level: int = logging.INFO,
                   log_file: Optional[str] = None,
                   console: bool = True) -> logging.Logger:
@@ -71,7 +91,7 @@ def setup_logging(level: int = logging.INFO,
         if _configured:
             return root
 
-        root.setLevel(level)
+        root.setLevel(_level_from_env(level))
         formatter = logging.Formatter(_LOG_FORMAT, _DATE_FORMAT)
 
         if console:

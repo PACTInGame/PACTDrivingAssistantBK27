@@ -53,6 +53,7 @@ from assistance.parking.geometry import (MCI_TO_M, OrientedBox, Pose,
                                          VehicleShape, box_from_corners,
                                          heading_to_rad, pose_from_mci)
 from assistance.parking.path_follower import PathFollower
+from assistance.parking.scene_dump import dump_scene
 from assistance.parking.slot_detection import (Obstacle, ParkingSlot,
                                                ParkingSlotDetector,
                                                SCAN_MAX_SPEED_KMH)
@@ -132,6 +133,10 @@ MAX_PLAN_CANDIDATES = 3
 MAX_MANOEUVRE_S = 120.0
 # How often installing the physical key hooks is retried after a failure.
 HOOK_RETRY_S = 10.0
+# One telemetry line per this long while a manoeuvre runs; see _log_progress.
+PROGRESS_LOG_INTERVAL_S = 1.0
+# And one DEBUG line per this long while scanning; see _trace.
+TRACE_INTERVAL_S = 1.0
 
 # Refusals that clear themselves within a second or two, and must therefore not
 # be remembered against the space that happened to be on screen at the time.
@@ -145,9 +150,41 @@ TRANSIENT_REFUSALS = frozenset(('no_physical_key_tracking', 'vjoy_loading',
 # At most one line per distinct refusal per this long.
 REFUSAL_LOG_INTERVAL_S = 30.0
 # The driver pressing the brake pedal this hard ends the manoeuvre. It is their
-# car; a deliberate brake application is the clearest "stop" there is, and the
-# controller never commands more than 0.5 itself.
-DRIVER_BRAKE_OVERRIDE = 0.65
+# car; a deliberate brake application is the clearest "stop" there is.
+#
+# ``OutGauge.Brake`` is the **merged** pedal -- it contains what the manoeuvre
+# is commanding as well -- and the first thing a manoeuvre does is brake,
+# because the gear is not in yet. Read as the driver's, it ended every
+# manoeuvre the first three live runs started, within a cycle.
+#
+# Subtracting what the controller asked for is not enough either, and that is
+# worth spelling out because it cost a live run to find. The brake is a *key*
+# (``Controls/manoeuvre_outputs.KeyPedalOutput``): a demand of 0.35 and a
+# demand of 1.0 are the same keystroke, so LFS reports 1.0 for both. There is
+# no fractional headroom to measure a driver against.
+#
+# So the rule is the only one the signal supports: the reading is the driver's
+# **only while the manoeuvre is not braking at all**, and only once the key
+# has been released long enough for LFS to have noticed
+# (:data:`BRAKE_SETTLE_S`). A manoeuvre brakes at a standstill and into one,
+# so this leaves the driver's brake visible for most of every stroke; for the
+# rest, the cancel button and the off-track check are what stops it.
+DRIVER_BRAKE_OVERRIDE = 0.5
+# How long our own brake key has to have been up before the reading is
+# believed. Two assistance cycles: the key is released during ``apply()``, so
+# the packet that still shows it arrives after the cycle that released it.
+BRAKE_SETTLE_S = 0.25
+# How long a space that would not plan stays at the back of the ranking.
+# Long enough that the ranking does not pick it up again on the next scan --
+# which is what made the offer flicker at 2 Hz in a live run -- and short
+# enough that a space blocked by a car that then drives away is reconsidered
+# within a couple of seconds.
+UNPLANNABLE_TTL_S = 5.0
+# How much nearer a rival space has to be before it takes the offer away from
+# the one already on screen. Half a car length: enough that rolling forward
+# past a space does not hand the offer back and forth, small enough that the
+# space the driver has actually stopped beside wins.
+STICKY_MARGIN_M = 2.0
 # And the car going this fast means something is wrong -- the manoeuvre is a
 # crawl and never asks for more than 2.2 m/s.
 RUNAWAY_SPEED_MPS = 4.0
@@ -225,8 +262,16 @@ class ParkAssist(AssistanceSystem):
         self._refusal_logged = {}
         # slot_id -> True once the car has driven past that space.
         self._passed: Dict[Any, bool] = {}
+        # slot_id -> when planning last failed for it. See UNPLANNABLE_TTL_S.
+        # Bounded the same way ``_passed`` is: pruned with the spaces in range.
+        self._unplannable: Dict[Any, float] = {}
         self._hooks_tried_at = None
         self._hooks_pending = False
+        # When the manoeuvre's own brake was last released, or ``None`` while
+        # it is applied. See DRIVER_BRAKE_OVERRIDE.
+        self._brake_free_since = None
+        self._last_progress_log = 0.0
+        self._last_trace = 0.0
 
     # ─── Events ───────────────────────────────────────────────────────
 
@@ -371,6 +416,7 @@ class ParkAssist(AssistanceSystem):
     def _scan(self, own_vehicle: OwnVehicle, own, vehicles):
         """Look for a space, and plan the best one. Rate-limited; see above."""
         if own.speed > SCAN_MAX_SPEED_KMH:
+            self._trace('too fast: %.1f km/h', own.speed)
             self._forget_slot()
             self._set_state(STATE_SCANNING)
             return
@@ -384,6 +430,7 @@ class ParkAssist(AssistanceSystem):
         obstacles = self._obstacles(ego, own, vehicles)
         slots = self._detector.scan(ego, obstacles)
         if not slots:
+            self._trace('%d obstacle(s), no space', len(obstacles))
             self._forget_slot()
             self._set_state(STATE_SCANNING)
             return
@@ -393,6 +440,13 @@ class ParkAssist(AssistanceSystem):
                   if self._passed.get(slot.slot_id)
                   and slot.ahead_of_ego < PASSED_MARGIN_M]
         if not passed:
+            self._trace('%d obstacle(s), %d space(s), none driven past yet: %s',
+                        len(obstacles), len(slots),
+                        ', '.join('%s %s %.1fm %+.1fm ahead%s'
+                                  % (slot.kind, slot.side, slot.length,
+                                     slot.ahead_of_ego,
+                                     ' open' if slot.open_ended else '')
+                                  for slot in slots[:4]))
             self._forget_slot()
             self._set_state(STATE_SCANNING)
             return
@@ -400,6 +454,16 @@ class ParkAssist(AssistanceSystem):
         ranked = self._rank(passed)
         best = ranked[0]
         if self.slot is None or best.slot_id != self.slot.slot_id:
+            # Not rate-limited: the offered space changing is an event, not a
+            # per-cycle condition, and when it is *not* an event -- the 2 Hz
+            # churn two live runs showed -- that is the thing being diagnosed.
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Parking scan: offer moves from %s to %s %s "
+                             "%.1fm at %+.1fm%s, %d candidate(s)",
+                             self.slot.slot_id if self.slot else None,
+                             best.kind, best.side, best.length,
+                             best.ahead_of_ego,
+                             ' open' if best.open_ended else '', len(passed))
             self.slot = best
             self._slot_seen_since = now
             self._planned_slot_id = None
@@ -419,6 +483,13 @@ class ParkAssist(AssistanceSystem):
             self._last_plan = now
             self._planned_slot_id = best.slot_id
             self._plan_best_of(ego, ranked, obstacles)
+        if self.trajectory is None:
+            self._trace('space %s %s %.1fm at %+.1fm is not drivable: %s',
+                        best.kind, best.side, best.length, best.ahead_of_ego,
+                        self.reason)
+            # Once per run, at DEBUG only, off-thread: see scene_dump.
+            dump_scene(ego, best, [obstacle.box for obstacle in obstacles],
+                       self.reason)
         if self.trajectory is not None:
             self._set_state(STATE_OFFERED)
             if (self.settings.get(SETTING_AUTO_ACCEPT)
@@ -429,6 +500,26 @@ class ParkAssist(AssistanceSystem):
                 self._accept_requested = True
         else:
             self._set_state(STATE_SCANNING)
+
+    def _trace(self, message: str, *args):
+        """Why the scan did not offer anything, at DEBUG, at most once a second.
+
+        The scanning path is otherwise silent, which is right at the default
+        level -- nothing has happened -- but it made "no space was offered"
+        undiagnosable in a live run: the only two states the log can tell
+        apart are "nothing found" and "manoeuvre started". This closes that
+        gap without costing anything when DEBUG is off, which is the point of
+        the ``isEnabledFor`` guard: the argument tuple is never even built.
+
+        Run the add-on with ``PACT_LOG_LEVEL=DEBUG`` to see it.
+        """
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        now = self.clock()
+        if now - self._last_trace < TRACE_INTERVAL_S:
+            return
+        self._last_trace = now
+        logger.debug("Parking scan: " + message, *args)
 
     def _note_passing(self, slots: List[ParkingSlot]):
         """Remember which spaces the car has driven past. See PASSED_MARGIN_M.
@@ -445,6 +536,9 @@ class ParkAssist(AssistanceSystem):
         for known in list(self._passed):
             if known not in visible:
                 del self._passed[known]
+        for known in list(self._unplannable):
+            if known not in visible:
+                del self._unplannable[known]
 
     def _rank(self, slots: List[ParkingSlot]) -> List[ParkingSlot]:
         """Best candidate first, with the one already on screen kept on top.
@@ -462,15 +556,40 @@ class ParkAssist(AssistanceSystem):
         it the offer would swap between two equally good spaces as the car
         rolls between them, and a driver cannot click something that keeps
         changing under the cursor.
+
+        That stickiness is **beatable**, and it has to be. Held absolutely it
+        pinned the first space found -- always the open-ended strip behind the
+        last parked car, because that is what the car reaches first -- and the
+        real space between two cars, found a moment later, could never take
+        its place. A live run spent a whole pass along the row being offered
+        the same piece of road. A challenger wins when it is closed where the
+        held space is open-ended, or when it is :data:`STICKY_MARGIN_M` nearer;
+        anything less and the held space keeps the screen.
         """
-        ranked = sorted(slots, key=lambda slot: (slot.open_ended,
+        now = self.clock()
+        ranked = sorted(slots, key=lambda slot: (self._unplannable_now(slot, now),
+                                                 slot.open_ended,
                                                  abs(slot.ahead_of_ego)))
-        if self.slot is not None:
-            for index, slot in enumerate(ranked):
-                if slot.slot_id == self.slot.slot_id:
-                    ranked.insert(0, ranked.pop(index))
-                    break
+        if self.slot is None:
+            return ranked
+        held_index = next((index for index, slot in enumerate(ranked)
+                           if slot.slot_id == self.slot.slot_id), None)
+        if held_index is None or held_index == 0:
+            return ranked
+        held, best = ranked[held_index], ranked[0]
+        if self._unplannable_now(held, now):
+            # The held space has since failed to plan. Whatever is on top now
+            # is the one the driver can actually be offered.
+            return ranked
+        if _clearly_better(best, held):
+            return ranked
+        ranked.insert(0, ranked.pop(held_index))
         return ranked
+
+    def _unplannable_now(self, slot: ParkingSlot, now: float) -> bool:
+        """Did planning for this space fail recently? See UNPLANNABLE_TTL_S."""
+        failed_at = self._unplannable.get(slot.slot_id)
+        return failed_at is not None and now - failed_at < UNPLANNABLE_TTL_S
 
     def _plan_best_of(self, ego: Pose, ranked: List[ParkingSlot],
                       obstacles: List[Obstacle]):
@@ -485,15 +604,20 @@ class ParkAssist(AssistanceSystem):
         the assistance thread.
         """
         boxes = [obstacle.box for obstacle in obstacles]
+        now = self.clock()
         self.trajectory = None
         for slot in ranked[:MAX_PLAN_CANDIDATES]:
             result = self._planner.plan(ego, slot, boxes)
             self.reason = result.reason
             if result.ok:
+                self._unplannable.pop(slot.slot_id, None)
                 self.slot = slot
                 self.trajectory = result.trajectory
                 self._planned_slot_id = slot.slot_id
                 return
+            # Remembered, so the next scan's ranking does not put this space
+            # back on top and undo the offer that was just made below it.
+            self._unplannable[slot.slot_id] = now
 
     def _obstacles(self, ego: Pose, own, vehicles) -> List[Obstacle]:
         """Everything standing near the car, from both sources LFS offers.
@@ -572,6 +696,8 @@ class ParkAssist(AssistanceSystem):
             return
         self.follower = PathFollower(self.trajectory)
         self.controller.reset()
+        self._brake_free_since = None
+        self._last_progress_log = 0.0
         self._started_at = self.clock()
         self._set_state(STATE_PARKING)
         logger.info("Parking manoeuvre started: %s on the %s, %.1f m of path, "
@@ -637,10 +763,14 @@ class ParkAssist(AssistanceSystem):
         if refusal is not None:
             self._finish(STATE_ABORTED, refusal)
             return
-        if own_vehicle.brake >= DRIVER_BRAKE_OVERRIDE:
+        now = self.clock()
+        # Only believed while our own brake is off and has been for a moment;
+        # see DRIVER_BRAKE_OVERRIDE.
+        if (self._brake_free_since is not None
+                and now - self._brake_free_since >= BRAKE_SETTLE_S
+                and own_vehicle.brake >= DRIVER_BRAKE_OVERRIDE):
             self._finish(STATE_ABORTED, 'driver_brake')
             return
-        now = self.clock()
         if now - self._started_at > MAX_MANOEUVRE_S:
             self._finish(STATE_ABORTED, 'timeout')
             return
@@ -663,9 +793,48 @@ class ParkAssist(AssistanceSystem):
                              gear=own_vehicle.gear,
                              reversing=demand.direction < 0)
         status = self.controller.apply(demand, state)
+        self._note_commanded_brake(status.brake, now)
         self._last_demand = demand
+        self._log_progress(demand, state, status)
         if status.fault is not None:
             self._finish(STATE_ABORTED, status.fault)
+
+    def _note_commanded_brake(self, brake: float, now: float):
+        """Track when the manoeuvre's own brake was last off. See above."""
+        if brake > 0.0:
+            self._brake_free_since = None
+        elif self._brake_free_since is None:
+            self._brake_free_since = now
+
+    def _log_progress(self, demand, state: VehicleState, status):
+        """One telemetry line per second while a manoeuvre runs.
+
+        A manoeuvre is a ten-second event that either works or does not, and
+        when it does not the question is always the same: was the demand
+        wrong, or did the car not follow it? Both halves are on the line. One
+        second is slow enough not to be spam (ten lines for a typical
+        manoeuvre) and fast enough to see a stroke go wrong. Cost: one clock
+        comparison on nine cycles out of ten.
+        """
+        now = self.clock()
+        if now - self._last_progress_log < PROGRESS_LOG_INTERVAL_S:
+            return
+        self._last_progress_log = now
+        measured = (state.yaw_rate / (-state.speed_mps if state.reversing
+                                      else state.speed_mps)
+                    if state.speed_mps > 0.2 else 0.0)
+        logger.info("Parking: stroke %d/%d %s %.0f%%, v %.2f/%.2f m/s, "
+                    "gear %d/%d%s, kappa %+.3f/%+.3f 1/m, steer %+.2f "
+                    "(gain %.3f), thr %.0f brk %.0f",
+                    demand.stroke + 1, len(self.trajectory.segments),
+                    'rev' if demand.direction < 0 else 'fwd',
+                    100.0 * demand.progress, state.speed_mps, demand.speed,
+                    state.gear, status.gear_wanted,
+                    '' if status.gear_ready else ' (waiting)',
+                    demand.curvature, measured, status.steer,
+                    getattr(getattr(self.controller, 'model', None),
+                            'gain', float('nan')),
+                    status.throttle, status.brake)
 
     def _finish(self, state: str, reason: Optional[str]):
         """End a manoeuvre, whichever way it ended. Always releases first."""
@@ -673,6 +842,7 @@ class ParkAssist(AssistanceSystem):
         if was_parking or self._controller is not None:
             self.controller.release()
         self.follower = None
+        self._brake_free_since = None
         self._accept_requested = False
         self._cancel_requested = False
         self.reason = reason
@@ -695,6 +865,8 @@ class ParkAssist(AssistanceSystem):
 
     def _set_state(self, state: str):
         if state != self.state:
+            logger.debug("Parking state: %s -> %s (%s)", self.state, state,
+                         self.reason)
             self.state = state
             if state in (STATE_SCANNING, STATE_OFF):
                 self.reason = None
@@ -741,3 +913,13 @@ class ParkAssist(AssistanceSystem):
         """Give every input back before the process ends."""
         if self._controller is not None:
             self.controller.release()
+
+
+def _clearly_better(challenger: ParkingSlot, held: ParkingSlot) -> bool:
+    """Is *challenger* enough better than *held* to take the offer over?"""
+    if held.open_ended and not challenger.open_ended:
+        return True
+    if challenger.open_ended and not held.open_ended:
+        return False
+    return (abs(held.ahead_of_ego) - abs(challenger.ahead_of_ego)
+            > STICKY_MARGIN_M)

@@ -10,7 +10,7 @@ lane keeper or an automated test driver needs exactly the same three numbers;
 none of them needs to know that the path came from a parking slot. Whatever
 actuates the car reads a ``ControlDemand`` and never sees a ``Trajectory``.
 
-### Lateral: pure pursuit, in curvature
+### Lateral: the path's own arc, corrected by pure pursuit
 
 The steering demand is a **curvature**, not a steering angle, and that is the
 important choice. A steering angle would have to be converted through a
@@ -20,8 +20,16 @@ car. Curvature is measurable from data LFS already sends -- ``yaw_rate / v``
 from ``CompCar`` -- so the loop that turns a demanded curvature into steering
 can *learn* the car it is driving instead of assuming one.
 
-Pure pursuit picks a point on the path a lookahead ahead of the car and asks
-for the arc that reaches it::
+The demand is the **curvature of the path under the car**, plus a pure-pursuit
+correction for being off it. Feeding the path's own arc forward matters most
+exactly where this feature lives: a parking shuffle's last strokes are under a
+metre long, and pure pursuit alone has to *infer* their arc from a lookahead
+point that is barely further away than the car is long. Measured on the
+shortest space the detector offers, pure pursuit alone parked the car 12.6
+degrees crooked; with the feedforward the same manoeuvre ends square.
+
+Pure pursuit then picks a point on the path a lookahead ahead of the car and
+asks for the arc that reaches it::
 
     kappa = 2 * sin(alpha) / lookahead
 
@@ -260,8 +268,11 @@ class PathFollower:
                                 finished=True, cross_track=cross_track,
                                 heading_error=heading_error)
 
-        curvature = self._pursuit_curvature(pose, segment.direction, speed_mps,
-                                            remaining_segment, heading_error)
+        # Feedforward the arc the path is actually on, and let pure pursuit
+        # correct the error rather than reproduce the arc from scratch.
+        curvature = current.curvature + self._pursuit_curvature(
+            pose, segment.direction, speed_mps, remaining_segment,
+            heading_error)
         speed = self._speed_limit(remaining_segment, remaining_total, segment)
         return self._demand(speed, segment.direction, curvature, current,
                             cross_track=cross_track,

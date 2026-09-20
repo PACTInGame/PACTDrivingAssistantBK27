@@ -57,12 +57,37 @@ from assistance.parking.geometry import (OrientedBox, Pose, VehicleShape,
 
 # ─── What counts as a slot ────────────────────────────────────────────────
 
-# Parallel: the classic driving-school allowance. A parallel space needs
-# roughly 1.2 m more than the car to be enterable in two arcs at all -- below
-# that the two-arc geometry needs a turning radius no road car has, and the
-# planner would reject the plan anyway. Rejecting here is cheaper and lets the
-# driver be told "too short" instead of "no plan".
-PARALLEL_LENGTH_MARGIN_M = 1.2
+# Parallel: how much longer than the car a space has to be before it is worth
+# offering. **Measured against the planner**, not assumed, because a detector
+# that is more optimistic than the planner is worse than one that is too
+# strict: it offers the driver a space, the plan then fails, and the offer
+# blinks on and off -- which is exactly what two live runs did with the 1.2 m
+# this used to be.
+#
+# The measurement is a grid over car sizes 4.5-5.2 m, turning radii 4-7 m and
+# lateral offsets 2.6-4.2 m, run against the planner itself
+# (``tests/test_parking_agreement.py`` pins the result). Over that grid the
+# shortest space the planner can enter needs between 1.5 and 2.45 m more than
+# the car, depending mostly on the car's size. 2.5 m is the figure that holds
+# everywhere rather than on average, and it agrees with what driving schools
+# teach -- roughly one and a half car lengths: 4.5 + 2.5 = 7.0 m.
+#
+# One corner of the grid is deliberately outside that promise and is called
+# out here rather than averaged away: the **largest** car (5.2 m) with the
+# driver **closest** to the row (2.6 m centre-to-centre) needs up to 4.3 m,
+# and no length constant that also serves a small car can cover it.
+#
+# **Length is the only thing this constant can answer for.** The same grid
+# shows the binding limit is often not length at all but how far out from the
+# parked row the driver stopped: at 2.4 m the requirement jumps to over 5 m
+# of slack and at some radii nothing works at any length, because the car is
+# too close to the row to swing in. The detector cannot answer that -- it is
+# a property of the manoeuvre, not of the gap -- so the planner rejects it,
+# and ``ParkAssist`` remembers the rejection and offers the next candidate
+# instead of re-offering this one (``park_assist.UNPLANNABLE_TTL_S``). That
+# split is deliberate: the detector owns the gap, the planner owns the
+# manoeuvre.
+PARALLEL_LENGTH_MARGIN_M = 2.5
 # Perpendicular: the door has to open, and the swept path of the rear end needs
 # room. 0.7 m total, i.e. 35 cm a side, is the narrow end of a marked bay.
 PERPENDICULAR_WIDTH_MARGIN_M = 0.7

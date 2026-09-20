@@ -13,6 +13,7 @@ import pytest
 from assistance.parking.geometry import OrientedBox, Pose, VehicleShape
 from assistance.parking.slot_detection import (KIND_PARALLEL,
                                                KIND_PERPENDICULAR, Obstacle,
+                                               PARALLEL_LENGTH_MARGIN_M,
                                                ParkingSlotDetector, SIDE_LEFT,
                                                SIDE_RIGHT)
 
@@ -56,13 +57,13 @@ class TestParallelSlots:
         assert slot.target.yaw == pytest.approx(0.0)
 
     def test_gap_one_metre_too_short_is_rejected(self):
-        """4.5 m car, 1.2 m margin -- 5.7 m is the line, 5.0 m is not a slot."""
-        obstacles = [parked(0.0, -3.0), parked(9.5, -3.0)]   # 5.0 m gap
+        """4.5 m car, 2.5 m margin -- 7.0 m is the line, 6.0 m is not a slot."""
+        obstacles = [parked(0.0, -3.0), parked(10.5, -3.0)]  # 6.0 m gap
         closed = [s for s in detector().scan(EGO, obstacles) if not s.open_ended]
         assert closed == []
 
     def test_gap_just_long_enough_is_accepted(self):
-        obstacles = [parked(0.0, -3.0), parked(10.3, -3.0)]  # 5.8 m gap
+        obstacles = [parked(0.0, -3.0), parked(11.6, -3.0)]  # 7.1 m gap
         closed = [s for s in detector().scan(EGO, obstacles) if not s.open_ended]
         assert len(closed) == 1
 
@@ -86,12 +87,14 @@ class TestParallelSlots:
         # Two of them: one in front of the car, one behind it.
         assert len(slots) == 2
         centres = sorted(s.ahead_of_ego for s in slots)
-        assert centres[0] == pytest.approx(-5.85, abs=0.01)
-        assert centres[1] == pytest.approx(5.85, abs=0.01)
+        # Half a car plus half the cut-off open slot, either side of it.
+        reach = CAR_L * 0.5 + (CAR_L + PARALLEL_LENGTH_MARGIN_M + 1.5) * 0.5
+        assert centres[0] == pytest.approx(-reach, abs=0.01)
+        assert centres[1] == pytest.approx(reach, abs=0.01)
 
     def test_open_end_is_cut_off_not_unbounded(self):
         slot = detector().scan(EGO, [parked(0.0, -3.0)])[0]
-        assert slot.length == pytest.approx(CAR_L + 1.2 + 1.5)
+        assert slot.length == pytest.approx(CAR_L + PARALLEL_LENGTH_MARGIN_M + 1.5)
 
 
 class TestRejections:

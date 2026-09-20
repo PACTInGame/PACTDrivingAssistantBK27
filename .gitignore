@@ -34,3 +34,4 @@ simulation_tests/runs/*
 !simulation_tests/runs/.gitkeep
 simulation_tests/_temp/*
 !simulation_tests/_temp/README.md
+park_scene_debug.json

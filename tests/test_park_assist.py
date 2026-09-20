@@ -14,7 +14,9 @@ from assistance.park_assist import (BTN_PARK_CANCEL, BTN_PARK_OFFER,
                                     OFFER_SETTLE_S, ParkAssist, SCAN_INTERVAL_S,
                                     STATE_ABORTED, STATE_DONE, STATE_OFF,
                                     STATE_OFFERED, STATE_PARKING,
-                                    STATE_SCANNING)
+                                    STATE_SCANNING, UNPLANNABLE_TTL_S,
+                                    BRAKE_SETTLE_S)
+from assistance.parking.slot_detection import ParkingSlot
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from vehicles.own_vehicle import OwnVehicle
@@ -68,6 +70,19 @@ class RecordingController:
         from Controls.vehicle_control import ControlStatus
         self.applied.append((demand, state))
         return ControlStatus(fault=self.fault)
+
+
+class BrakingController(RecordingController):
+    """A controller that reports commanding a brake, as the real one does."""
+
+    def __init__(self, brake=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.brake = brake
+
+    def apply(self, demand, state):
+        from Controls.vehicle_control import ControlStatus
+        self.applied.append((demand, state))
+        return ControlStatus(brake=self.brake, fault=self.fault)
 
 
 def settings(tmp_path, **overrides):
@@ -235,6 +250,75 @@ class TestScanning:
         assert payload['state'] == STATE_SCANNING
 
 
+class TestRanking:
+    """``_rank`` decides which of several spaces the driver is offered."""
+
+    @staticmethod
+    def _slot(bounds, open_ended, ahead):
+        from assistance.parking.geometry import Pose
+        return ParkingSlot(kind='parallel', side='right',
+                           entry=Pose(0.0, 0.0, 0.0),
+                           target=Pose(0.0, 0.0, 0.0),
+                           length=6.5, depth=2.5, bounded_by=bounds,
+                           open_ended=open_ended, ahead_of_ego=ahead)
+
+    def test_a_closed_space_beats_a_nearer_open_one(self, tmp_path):
+        system, _, _ = build(tmp_path)
+        open_one = self._slot(('a',), True, -2.0)
+        closed = self._slot(('a', 'b'), False, -6.0)
+        assert system._rank([open_one, closed])[0] is closed
+
+    def test_the_space_on_screen_is_not_swapped_out_for_a_marginal_one(self, tmp_path):
+        system, _, _ = build(tmp_path)
+        held = self._slot(('a', 'b'), False, -5.0)
+        rival = self._slot(('c', 'd'), False, -4.0)
+        system.slot = held
+        assert system._rank([rival, held])[0] is held
+
+    def test_a_clearly_better_space_takes_the_offer_over(self, tmp_path):
+        """The defect a live run found: the first, open-ended space stuck.
+
+        ``_rank`` used to pin whatever was already offered, so the strip of
+        road behind the last parked car -- always found first, because it is
+        nearest -- held the screen for the whole drive down the row and the
+        real space between two cars could never win.
+        """
+        system, _, _ = build(tmp_path)
+        held = self._slot(('a',), True, -3.0)
+        better = self._slot(('a', 'b'), False, -8.0)
+        system.slot = held
+        assert system._rank([held, better])[0] is better
+
+    def test_a_space_that_would_not_plan_drops_to_the_back(self, tmp_path):
+        """The 2 Hz flicker a live run showed, in one assertion.
+
+        ``_plan_best_of`` offers the best *drivable* candidate, which need not
+        be the best-ranked one. Ranked purely on geometry the undrivable space
+        came back to the top on the very next scan, the offered slot changed
+        under the driver, and the button blinked on and off twice a second.
+        """
+        system, _, clock = build(tmp_path)
+        undrivable = self._slot(('a', 'b'), False, -3.0)
+        drivable = self._slot(('c', 'd'), False, -9.0)
+        system._unplannable[undrivable.slot_id] = clock()
+        assert system._rank([undrivable, drivable])[0] is drivable
+
+    def test_a_space_is_reconsidered_once_the_memory_expires(self, tmp_path):
+        system, _, clock = build(tmp_path)
+        undrivable = self._slot(('a', 'b'), False, -3.0)
+        drivable = self._slot(('c', 'd'), False, -9.0)
+        system._unplannable[undrivable.slot_id] = clock()
+        clock.tick(UNPLANNABLE_TTL_S + 0.1)
+        assert system._rank([undrivable, drivable])[0] is undrivable
+
+    def test_a_much_nearer_space_of_the_same_kind_also_wins(self, tmp_path):
+        system, _, _ = build(tmp_path)
+        held = self._slot(('a', 'b'), False, -12.0)
+        nearer = self._slot(('c', 'd'), False, -3.0)
+        system.slot = held
+        assert system._rank([nearer, held])[0] is nearer
+
+
 class TestConsent:
     def test_it_never_parks_without_a_click(self, tmp_path):
         """The rule the whole feature is built around."""
@@ -319,11 +403,47 @@ class TestDriving:
         assert not seen[-1]['active']
 
     def test_the_driver_braking_ends_it(self, tmp_path):
-        system, _, _, controller = self._started(tmp_path)
+        system, _, clock, controller = self._started(tmp_path)
+        # One cycle with our own brake off, so the reading is believed.
+        system.process(own_vehicle(), a_parallel_space())
+        clock.tick(BRAKE_SETTLE_S + 0.05)
         system.process(own_vehicle(brake=0.9), a_parallel_space())
         assert system.state == STATE_ABORTED
         assert system.reason == 'driver_brake'
         assert controller.releases == 1
+
+    def test_our_own_brake_does_not_count_as_the_driver_braking(self, tmp_path):
+        """OutGauge.Brake is the merged pedal, and the manoeuvre brakes first.
+
+        The gear is not in on the opening cycles, so the controller commands a
+        full brake; read as the driver's, it ended every manoeuvre the first
+        live run started.
+        """
+        controller = BrakingController(brake=1.0)
+        system, _, clock, _ = self._started(tmp_path, controller=controller)
+        # One cycle to command the brake, then the merged reading comes back.
+        system.process(own_vehicle(brake=0.0), a_parallel_space())
+        clock.tick(BRAKE_SETTLE_S + 0.05)
+        system.process(own_vehicle(brake=1.0), a_parallel_space())
+        assert system.state == STATE_PARKING
+        assert system.reason != 'driver_brake'
+
+    def test_the_driver_braking_on_top_of_ours_still_ends_it(self, tmp_path):
+        controller = BrakingController(brake=0.35)
+        system, _, clock, _ = self._started(tmp_path, controller=controller)
+        # A full reading while the manoeuvre's own brake key is down says
+        # nothing -- the key is the same keystroke at 0.35 and at 1.0.
+        system.process(own_vehicle(brake=1.0), a_parallel_space())
+        clock.tick(BRAKE_SETTLE_S + 0.05)
+        system.process(own_vehicle(brake=1.0), a_parallel_space())
+        assert system.state == STATE_PARKING
+        # It only becomes the driver's once we stop asking for it.
+        controller.brake = 0.0
+        system.process(own_vehicle(brake=1.0), a_parallel_space())
+        clock.tick(BRAKE_SETTLE_S + 0.05)
+        system.process(own_vehicle(brake=1.0), a_parallel_space())
+        assert system.state == STATE_ABORTED
+        assert system.reason == 'driver_brake'
 
     def test_cancelling_ends_it(self, tmp_path):
         system, bus, _, controller = self._started(tmp_path)

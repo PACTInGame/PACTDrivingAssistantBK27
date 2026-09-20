@@ -443,7 +443,8 @@ class ParkingPlanner:
         if result.ok:
             return result
 
-        shuffled = self._plan_shuffle(slot, sign, local_ego, local_goal, nearby)
+        shuffled = self._shuffle_any_radius(slot, sign, local_ego, local_goal,
+                                            nearby)
         return shuffled if shuffled.ok else result
 
     def _relevant(self, obstacles: Sequence[OrientedBox],
@@ -519,9 +520,48 @@ class ParkingPlanner:
 
     # ─── Attempt 2: the shuffle, planned backwards ────────────────
 
+    def _shuffle_any_radius(self, slot: ParkingSlot, sign: float,
+                            local_ego: Pose, local_goal: Pose,
+                            obstacles: Sequence[OrientedBox]) -> PlanResult:
+        """The shuffle, over the same radii the closed form sweeps.
+
+        The shuffle is a greedy search and a greedy search dead-ends: it takes
+        the best stroke available now, and in a tight pocket the phase it
+        happens to be in decides whether the next one exists at all. Swept
+        over gap length that shows up as isolated failures -- a space that is
+        *longer* than one the planner accepted, and rejected. Measured on a
+        clean two-car scene: 8.15-8.25 m and 8.80-8.90 m failed while
+        everything either side worked.
+
+        Those holes are not geometry, they are phase, and a different turning
+        radius puts the search in a different one. Every hole in that sweep
+        closes at some radius in :data:`RADIUS_FACTORS`.
+
+        Cost: the base radius is tried first and is the one that normally
+        succeeds, so the usual case pays nothing extra. A failure costs one
+        more shuffle per radius -- about 5 ms each, worst case ~20 ms -- and
+        planning is rate-limited to once every couple of seconds and never
+        happens on a cycle that is also driving the car (``AGENTS.md`` §1).
+        """
+        base = self.min_turn_radius
+        last = PlanResult(reason=REASON_NO_ROOM)
+        try:
+            for factor in RADIUS_FACTORS:
+                self.min_turn_radius = base * factor
+                for first in (DIRECTION_REVERSE, DIRECTION_FORWARD):
+                    # The boundaries were built for the caller's radius, but
+                    # they only depend on the slot and the ego, so they hold.
+                    last = self._plan_shuffle(slot, sign, local_ego,
+                                              local_goal, obstacles, first)
+                    if last.ok:
+                        return last
+        finally:
+            self.min_turn_radius = base
+        return last
+
     def _plan_shuffle(self, slot: ParkingSlot, sign: float, local_ego: Pose,
-                      local_goal: Pose,
-                      obstacles: Sequence[OrientedBox]) -> PlanResult:
+                      local_goal: Pose, obstacles: Sequence[OrientedBox],
+                      first_direction: int = DIRECTION_REVERSE) -> PlanResult:
         """Shuffle the car **out** of the space, then drive that backwards.
 
         Two things had to be got right here, and both were got wrong first.
@@ -571,7 +611,7 @@ class ParkingPlanner:
         pose = goal
         strokes: List[Segment] = []
         best_cost = cost_of(pose)
-        last_direction = DIRECTION_REVERSE
+        last_direction = first_direction
         repositioned = False
 
         for _ in range(MAX_SHUFFLE_STROKES):
