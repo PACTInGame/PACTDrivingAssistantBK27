@@ -590,15 +590,20 @@ class UIManager:
             side = PARK_SIDE_TEXTS.get(state.get('side'), "")
             self.message_sender.create_button(
                 BTN_PARK_OFFER, *PARK_SLOT_OFFER,
-                f"^3Park here? ^7{kind} {side}, {state.get('length', 0)} m",
+                f"^3Click: park here ^7({kind} {side}, "
+                f"{state.get('length', 0)} m)",
                 pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
             self.message_sender.create_button(
                 BTN_PARK_CANCEL, *PARK_SLOT_CANCEL, "^1No",
                 pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+            # Deliberately *not* an invitation to click: this line is not
+            # clickable and the offer above it is. The first live test had
+            # "click to let the car park itself" here, and the driver clicked
+            # it -- reasonably -- and nothing happened.
             strokes = state.get('strokes', 0)
             self.message_sender.create_button(
                 BTN_PARK_STATUS, *PARK_SLOT_STATUS,
-                f"^7{strokes} move(s) - click to let the car park itself",
+                f"^7{state.get('distance', 0)} m behind you, {strokes} move(s)",
                 pyinsim.ISB_DARK)
             return
 

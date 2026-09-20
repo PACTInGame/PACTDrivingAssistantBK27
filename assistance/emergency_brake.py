@@ -66,7 +66,7 @@ from misc import input_guard
 from misc.input_guard import InputGuard
 from misc.lfs_config import axis_assignments
 from misc.pedal_watch import PedalWatch
-from misc.physical_keys import PhysicalKeyState
+from misc.physical_keys import PhysicalKeyState, get_physical_keys
 from misc.platform_shim import get_keyboard
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
@@ -234,8 +234,13 @@ class EmergencyBrake(AssistanceSystem):
 
         self.clock = clock or time.monotonic
 
-        self.physical_keys = physical_keys or PhysicalKeyState()
-        self._owns_physical_keys = physical_keys is None
+        # The shared tracker (``misc/physical_keys.get_physical_keys``), so
+        # that the parking manoeuvre and this system install the low-level
+        # hooks once between them rather than once each. Ownership therefore
+        # stays with nobody: a system that stopped the shared tracker on its
+        # own shutdown would blind the other one.
+        self.physical_keys = physical_keys or get_physical_keys()
+        self._owns_physical_keys = False
         self.guard = guard or InputGuard(event_bus)
         # One marker for the whole intervention: the brake half and the
         # throttle half both have something for the guardian to undo, and both

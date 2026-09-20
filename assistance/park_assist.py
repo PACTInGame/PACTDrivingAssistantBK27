@@ -39,7 +39,7 @@ the differences only matter to the line the driver reads.
 """
 
 import logging
-import math
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -64,7 +64,8 @@ from Controls.vehicle_control import VehicleController, VehicleState
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
 from misc.input_guard import InputGuard
-from misc.physical_keys import PhysicalKeyState
+from misc.physical_keys import PhysicalKeyState, get_physical_keys
+from misc.platform_shim import get_keyboard
 from misc.spacial_hash_grid import SpatialHashGrid
 from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
@@ -103,6 +104,21 @@ PLAN_INTERVAL_S = 2.0
 # further on.
 OFFER_SETTLE_S = 0.6
 
+# ─── Driving past is part of finding it ───────────────────────────────────
+#
+# A real slot scanner measures a space *while the car goes by it*, and that is
+# what a driver expects to have happened before being offered one. The scan
+# here is pure current-frame geometry, so without this it offers a space the
+# car is merely standing next to -- which the first live test did the instant
+# the driver joined the track, several car lengths short of the space.
+#
+# So a space is only offered once it has been seen ahead of the car and is
+# then no longer ahead of it. One flag per space, dropped with the space.
+# "No longer ahead" is measured to the car's middle rather than its nose,
+# which is where the driver is sitting and where a space stops being something
+# to drive towards and starts being something to reverse into.
+PASSED_MARGIN_M = 2.0
+
 # ─── Limits ───────────────────────────────────────────────────────────────
 
 # Obstacles further than this from the car are not in the scan at all.
@@ -114,6 +130,20 @@ OBSTACLE_RANGE_M = 30.0
 MAX_PLAN_CANDIDATES = 3
 # A manoeuvre that has not finished by now is not going to.
 MAX_MANOEUVRE_S = 120.0
+# How often installing the physical key hooks is retried after a failure.
+HOOK_RETRY_S = 10.0
+
+# Refusals that clear themselves within a second or two, and must therefore not
+# be remembered against the space that happened to be on screen at the time.
+# The hooks are the whole reason this set exists: they are installed on the
+# first click, so the first click is always refused, and remembering that
+# refusal meant the space was never offered again -- the car stood beside it
+# doing nothing, which is exactly what a live run showed.
+TRANSIENT_REFUSALS = frozenset(('no_physical_key_tracking', 'vjoy_loading',
+                                'binding_not_pushed',
+                                'throttle_binding_not_pushed'))
+# At most one line per distinct refusal per this long.
+REFUSAL_LOG_INTERVAL_S = 30.0
 # The driver pressing the brake pedal this hard ends the manoeuvre. It is their
 # car; a deliberate brake application is the clearest "stop" there is, and the
 # controller never commands more than 0.5 itself.
@@ -149,7 +179,9 @@ class ParkAssist(AssistanceSystem):
                  clock=time.monotonic):
         super().__init__(SETTING_ENABLED, event_bus, settings)
         self.clock = clock
-        self.physical_keys = physical_keys or PhysicalKeyState()
+        # Shared with the emergency brake, so the low-level hooks are
+        # installed once for the process (``misc/physical_keys.py``).
+        self.physical_keys = physical_keys or get_physical_keys()
         self.guard = guard or InputGuard(event_bus)
 
         # Layout obstacles. Its own grid rather than a reference to the PDC's:
@@ -185,6 +217,16 @@ class ParkAssist(AssistanceSystem):
         self._cancel_requested = False
         self._on_track = False
         self._published: Optional[tuple] = None
+        # A space whose manoeuvre was refused. Without it, an offer that
+        # cannot be started is re-offered and re-refused on every scan, which
+        # in a live run produced four log lines a second for the whole time
+        # the driver was beside the space.
+        self._refused_slot_id = None
+        self._refusal_logged = {}
+        # slot_id -> True once the car has driven past that space.
+        self._passed: Dict[Any, bool] = {}
+        self._hooks_tried_at = None
+        self._hooks_pending = False
 
     # ─── Events ───────────────────────────────────────────────────────
 
@@ -228,8 +270,13 @@ class ParkAssist(AssistanceSystem):
 
     def _on_state_data(self, data):
         on_track = bool(data.get('on_track', False)) if isinstance(data, dict) else False
-        if self._on_track and not on_track and self.state == STATE_PARKING:
-            self._finish(STATE_ABORTED, 'off_track')
+        if self._on_track and not on_track:
+            if self.state == STATE_PARKING:
+                self._finish(STATE_ABORTED, 'off_track')
+            # Leaving the track is the one thing that really does invalidate
+            # "we drove past this": the car is put back somewhere else.
+            self._passed.clear()
+            self._refused_slot_id = None
         self._on_track = on_track
 
     # ─── Per-car objects ──────────────────────────────────────────────
@@ -341,7 +388,16 @@ class ParkAssist(AssistanceSystem):
             self._set_state(STATE_SCANNING)
             return
 
-        ranked = self._rank(slots)
+        self._note_passing(slots)
+        passed = [slot for slot in slots
+                  if self._passed.get(slot.slot_id)
+                  and slot.ahead_of_ego < PASSED_MARGIN_M]
+        if not passed:
+            self._forget_slot()
+            self._set_state(STATE_SCANNING)
+            return
+
+        ranked = self._rank(passed)
         best = ranked[0]
         if self.slot is None or best.slot_id != self.slot.slot_id:
             self.slot = best
@@ -365,13 +421,30 @@ class ParkAssist(AssistanceSystem):
             self._plan_best_of(ego, ranked, obstacles)
         if self.trajectory is not None:
             self._set_state(STATE_OFFERED)
-            if self.settings.get(SETTING_AUTO_ACCEPT):
+            if (self.settings.get(SETTING_AUTO_ACCEPT)
+                    and best.slot_id != self._refused_slot_id):
                 logger.info("park_assist_auto_accept is on - starting the "
                             "manoeuvre without a driver click. This setting "
                             "exists for recorded scenarios only.")
                 self._accept_requested = True
         else:
             self._set_state(STATE_SCANNING)
+
+    def _note_passing(self, slots: List[ParkingSlot]):
+        """Remember which spaces the car has driven past. See PASSED_MARGIN_M.
+
+        Bounded by construction: only spaces currently in range can be added,
+        and the record is dropped when a space leaves range, so this cannot
+        grow over a session.
+        """
+        visible = set()
+        for slot in slots:
+            visible.add(slot.slot_id)
+            if slot.ahead_of_ego > PASSED_MARGIN_M:
+                self._passed[slot.slot_id] = True
+        for known in list(self._passed):
+            if known not in visible:
+                del self._passed[known]
 
     def _rank(self, slots: List[ParkingSlot]) -> List[ParkingSlot]:
         """Best candidate first, with the one already on screen kept on top.
@@ -467,9 +540,28 @@ class ParkAssist(AssistanceSystem):
         """Take the car over. Refuses out loud rather than half-starting."""
         if self.state != STATE_OFFERED or self.trajectory is None:
             return
+        # Push the key bindings *first*. ``KeyBrakeOutput`` refuses with
+        # ``binding_not_pushed`` until ``/key <key> brake`` has been sent for
+        # the key it is about to inject -- and this manoeuvre owns its own
+        # output objects, so the emergency brake having pushed its bindings
+        # says nothing about ours. Asked in the other order, the first live
+        # test refused every click with ``binding_not_pushed``.
+        pedals = getattr(self.controller, 'pedals', None)
+        if hasattr(pedals, 'push_bindings'):
+            pedals.push_bindings()
         reason = self.controller.unavailable_reason()
+        if reason == 'no_physical_key_tracking':
+            # The hooks are a system-wide side effect and are installed on
+            # demand, not at startup, so a driver who never uses this feature
+            # never gets them. Installing them takes over 100 ms, which is a
+            # whole assistance cycle, so it happens on its own thread and this
+            # click is refused -- the next one, a moment later, arms.
+            self._start_hooks()
+            reason = self.controller.unavailable_reason()
         if reason is not None:
-            logger.warning("Parking manoeuvre refused: %s.", reason)
+            if self.slot is not None and reason not in TRANSIENT_REFUSALS:
+                self._refused_slot_id = self.slot.slot_id
+            self._report_refusal(reason)
             self._finish(STATE_ABORTED, reason)
             return
         refusal = self.guard.may_inject(own_vehicle)
@@ -478,9 +570,6 @@ class ParkAssist(AssistanceSystem):
                            refusal)
             self._finish(STATE_ABORTED, refusal)
             return
-        pedals = getattr(self.controller, 'pedals', None)
-        if hasattr(pedals, 'push_bindings'):
-            pedals.push_bindings()
         self.follower = PathFollower(self.trajectory)
         self.controller.reset()
         self._started_at = self.clock()
@@ -489,6 +578,54 @@ class ParkAssist(AssistanceSystem):
                     "%d stroke(s), planned at a %.1f m radius.",
                     self.slot.kind, self.slot.side, self.trajectory.length,
                     len(self.trajectory.segments), self.trajectory.radius)
+
+    def _report_refusal(self, reason: str):
+        """One line per distinct reason per window, not one per attempt.
+
+        A transient refusal is retried on every scan, and the first live run
+        of this feature produced four identical warnings a second for as long
+        as the driver stood beside the space. The reason still has to be said
+        out loud -- a feature that is on and does nothing is the failure mode
+        this project keeps hitting -- just not on a loop.
+        """
+        now = self.clock()
+        last = self._refusal_logged.get(reason)
+        if last is not None and now - last < REFUSAL_LOG_INTERVAL_S:
+            return
+        self._refusal_logged[reason] = now
+        logger.warning("Parking manoeuvre refused: %s.", reason)
+
+    def _start_hooks(self):
+        """Install the physical key hooks off the assistance thread.
+
+        Same shape as ``EmergencyBrake._try_start_hooks`` and for the same
+        measured reason: the two ``pynput`` listeners take over 100 ms to
+        install, and doing it inline overran the cycle budget on the very pass
+        that arms the feature. Nothing waits for the result.
+        """
+        if self._hooks_pending:
+            return
+        now = self.clock()
+        if (self._hooks_tried_at is not None
+                and now - self._hooks_tried_at < HOOK_RETRY_S):
+            return
+        self._hooks_tried_at = now
+        self._hooks_pending = True
+        threading.Thread(target=self._start_hooks_off_thread,
+                         name='park-hooks', daemon=True).start()
+
+    def _start_hooks_off_thread(self):
+        try:
+            # Warm pyautogui here too: the first import costs ~255 ms and the
+            # steering output's availability check would otherwise pay for it
+            # on the assistance thread.
+            get_keyboard()
+            self.physical_keys.start()
+        except Exception as exc:
+            logger.error("Starting the physical key hooks raised: %s: %s",
+                         type(exc).__name__, exc)
+        finally:
+            self._hooks_pending = False
 
     def _drive(self, own_vehicle: OwnVehicle, own):
         """One control cycle of an active manoeuvre."""
@@ -577,7 +714,10 @@ class ParkAssist(AssistanceSystem):
             'kind': self.slot.kind if self.slot else None,
             'side': self.slot.side if self.slot else None,
             'length': round(self.slot.length, 1) if self.slot else 0.0,
-            'distance': round(abs(self.slot.ahead_of_ego), 1) if self.slot else 0.0,
+            # Whole metres: it is read off a button by a moving driver, and
+            # publishing tenths meant a fresh event, and a fresh button, on
+            # every single scan.
+            'distance': round(abs(self.slot.ahead_of_ego)) if self.slot else 0,
             'strokes': len(self.trajectory.segments) if self.trajectory else 0,
             'stroke': demand.stroke if demand and self.state == STATE_PARKING else 0,
             'progress': (round(demand.progress, 2)

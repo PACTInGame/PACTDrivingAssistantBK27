@@ -202,3 +202,29 @@ class PhysicalKeyState:
             if not data.flags & LLMHF_INJECTED:
                 self._physical[vk] = pressed
         return False
+
+
+# ─── The shared instance ──────────────────────────────────────────────────
+#
+# A low-level Windows hook is a *system-wide* side effect: every keystroke on
+# the machine passes through it. Two features that both need to know whether a
+# key is physically down -- the emergency brake and the parking manoeuvre --
+# must therefore share one installation rather than each installing their own,
+# or the driver pays twice in input latency for a fact that is the same for
+# both. Same reasoning, and the same shape, as ``misc/key_tap.get_key_tapper``.
+#
+# Nothing stops it on a feature's behalf. The listeners are daemon threads and
+# Windows removes the hooks when the process ends; a feature that stopped the
+# shared tracker would blind the other one.
+_shared: "PhysicalKeyState" = None
+_shared_lock = threading.Lock()
+
+
+def get_physical_keys() -> "PhysicalKeyState":
+    """The process-wide physical key tracker. Not started; the caller does that."""
+    global _shared
+    if _shared is None:
+        with _shared_lock:
+            if _shared is None:
+                _shared = PhysicalKeyState()
+    return _shared

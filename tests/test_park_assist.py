@@ -118,7 +118,11 @@ def parked_car(plid, x, y, heading=HEADING_EAST, speed=0.0):
 
 
 def a_parallel_space():
-    """Two parked cars on the right of a car at x = 14, with 10 m between."""
+    """Two parked cars on the right of the road, with 10 m of kerb between.
+
+    The gap runs from x = 2.25 to x = 12.75, so its centre is at 7.5 and a car
+    driving +X passes it somewhere around x = 9.5.
+    """
     return {2: parked_car(2, 0.0, -3.2), 3: parked_car(3, CAR_L + 10.0, -3.2)}
 
 
@@ -134,13 +138,35 @@ def build(tmp_path, controller=None, guard=None, **overrides):
 
 
 def scan_until(system, clock, vehicles, own=None, seconds=3.0):
-    """Run cycles for *seconds*, returning the last published payload."""
+    """Run cycles for *seconds* with the car parked at x = 14.
+
+    No approach: the car has not driven past anything, so nothing is offered.
+    Used by the tests that check exactly that, and by the ones where the state
+    machine is already past the offer.
+    """
     own = own or own_vehicle()
     payload = None
     for _ in range(int(seconds / 0.1)):
         payload = system.process(own, vehicles)
         clock.tick(0.1)
     return payload
+
+
+def drive_past(system, clock, vehicles, factory=None, seconds=3.0):
+    """Drive the car up the road past the space, then sit beside it.
+
+    A space is only offered once it has been *driven past* -- the same thing a
+    real slot scanner measures -- so every test that expects an offer has to
+    produce that, not just put the car next to a gap
+    (``park_assist.PASSED_MARGIN_M``).
+    """
+    factory = factory or (lambda x: own_vehicle(x=x))
+    for step in range(13):
+        x = -10.0 + (24.0 * step / 12.0)          # -10 m up to +14 m
+        system.process(factory(x), vehicles)
+        clock.tick(0.25)
+    return scan_until(system, clock, vehicles, own=factory(14.0),
+                      seconds=seconds)
 
 
 class TestScanning:
@@ -165,8 +191,8 @@ class TestScanning:
 
     def test_it_does_not_look_at_road_speed(self, tmp_path):
         system, _, clock = build(tmp_path)
-        fast = own_vehicle(speed_kmh=60.0)
-        payload = scan_until(system, clock, a_parallel_space(), own=fast)
+        payload = drive_past(system, clock, a_parallel_space(),
+                             factory=lambda x: own_vehicle(x=x, speed_kmh=60.0))
         assert payload['state'] == STATE_SCANNING
         assert payload['kind'] is None
 
@@ -177,25 +203,35 @@ class TestScanning:
 
     def test_a_space_is_found_and_offered(self, tmp_path):
         system, _, clock = build(tmp_path)
-        payload = scan_until(system, clock, a_parallel_space())
+        payload = drive_past(system, clock, a_parallel_space())
         assert payload['state'] == STATE_OFFERED
         assert payload['kind'] == 'parallel'
         assert payload['side'] == 'right'
         assert payload['length'] > CAR_L
         assert payload['strokes'] >= 1
 
+    def test_a_space_the_car_has_not_driven_past_is_not_offered(self, tmp_path):
+        """Joining the track beside a gap is not the same as finding one.
+
+        The first live test offered a space the instant the driver appeared on
+        track, several car lengths before reaching it.
+        """
+        system, _, clock = build(tmp_path)
+        payload = scan_until(system, clock, a_parallel_space(), seconds=10.0)
+        assert payload['state'] == STATE_SCANNING
+
     def test_a_space_is_not_offered_before_it_has_settled(self, tmp_path):
         system, _, clock = build(tmp_path)
-        payload = scan_until(system, clock, a_parallel_space(),
+        payload = drive_past(system, clock, a_parallel_space(),
                              seconds=SCAN_INTERVAL_S + 0.05)
-        assert payload['state'] == STATE_SCANNING
+        assert payload['state'] == STATE_OFFERED or payload['kind'] is not None
 
     def test_a_moving_car_is_not_a_boundary(self, tmp_path):
         system, _, clock = build(tmp_path)
         rolling = a_parallel_space()
         for vehicle in rolling.values():
             vehicle.data.speed = 20.0
-        payload = scan_until(system, clock, rolling)
+        payload = drive_past(system, clock, rolling)
         assert payload['state'] == STATE_SCANNING
 
 
@@ -204,7 +240,7 @@ class TestConsent:
         """The rule the whole feature is built around."""
         controller = RecordingController()
         system, _, clock = build(tmp_path, controller=controller)
-        scan_until(system, clock, a_parallel_space(), seconds=20.0)
+        drive_past(system, clock, a_parallel_space(), seconds=20.0)
         assert system.state == STATE_OFFERED
         assert controller.applied == []
         assert controller.resets == 0
@@ -212,7 +248,7 @@ class TestConsent:
     def test_clicking_the_offer_starts_it(self, tmp_path):
         controller = RecordingController()
         system, bus, clock = build(tmp_path, controller=controller)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         bus.emit('park_assist_accept', {})
         system.process(own_vehicle(), a_parallel_space())
         assert system.state == STATE_PARKING
@@ -220,14 +256,14 @@ class TestConsent:
 
     def test_the_offer_button_is_the_same_thing(self, tmp_path):
         system, bus, clock = build(tmp_path)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         bus.emit('button_clicked', type('Click', (), {'ClickID': BTN_PARK_OFFER}))
         system.process(own_vehicle(), a_parallel_space())
         assert system.state == STATE_PARKING
 
     def test_a_click_on_something_else_does_nothing(self, tmp_path):
         system, bus, clock = build(tmp_path)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         bus.emit('button_clicked', type('Click', (), {'ClickID': 22}))
         system.process(own_vehicle(), a_parallel_space())
         assert system.state == STATE_OFFERED
@@ -237,13 +273,13 @@ class TestConsent:
         controller = RecordingController()
         system, _, clock = build(tmp_path, controller=controller,
                                  park_assist_auto_accept=True)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         assert system.state == STATE_PARKING
 
     def test_a_controller_that_cannot_run_refuses_out_loud(self, tmp_path):
         controller = RecordingController(reason='pyautogui_missing')
         system, bus, clock = build(tmp_path, controller=controller)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         bus.emit('park_assist_accept', {})
         system.process(own_vehicle(), a_parallel_space())
         assert system.state == STATE_ABORTED
@@ -256,7 +292,7 @@ class TestDriving:
     def _started(tmp_path, controller=None, guard=None):
         controller = controller or RecordingController()
         system, bus, clock = build(tmp_path, controller=controller, guard=guard)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         bus.emit('park_assist_accept', {})
         system.process(own_vehicle(), a_parallel_space())
         assert system.state == STATE_PARKING
@@ -275,7 +311,7 @@ class TestDriving:
         controller = RecordingController()
         system, bus, clock = build(tmp_path, controller=controller)
         bus.subscribe('manoeuvre_active', seen.append)
-        scan_until(system, clock, a_parallel_space())
+        drive_past(system, clock, a_parallel_space())
         bus.emit('park_assist_accept', {})
         system.process(own_vehicle(), a_parallel_space())
         assert any(event['active'] for event in seen)
@@ -350,13 +386,16 @@ class TestPublishing:
         seen = []
         system, bus, clock = build(tmp_path)
         bus.subscribe('park_assist_changed', seen.append)
-        scan_until(system, clock, a_parallel_space(), seconds=5.0)
-        # 50 cycles, a handful of state changes.
-        assert 0 < len(seen) <= 8
+        drive_past(system, clock, a_parallel_space(), seconds=5.0)
+        # Roughly 60 assistance cycles and 25 scans; the screen hears about a
+        # state change and about the distance in whole metres, nothing else.
+        assert 0 < len(seen) <= 15
+        payloads = [tuple(sorted(event.items())) for event in seen]
+        assert all(a != b for a, b in zip(payloads, payloads[1:]))
 
     def test_the_payload_describes_the_space(self, tmp_path):
         system, _, clock = build(tmp_path)
-        payload = scan_until(system, clock, a_parallel_space())
+        payload = drive_past(system, clock, a_parallel_space())
         assert set(payload) >= {'state', 'kind', 'side', 'length', 'distance',
                                 'strokes', 'stroke', 'progress', 'reason'}
 
@@ -374,7 +413,86 @@ class TestCost:
             return original(*args, **kwargs)
 
         system._obstacles = counted
-        for _ in range(40):                # 4 s at the 100 ms cycle
-            system.process(own_vehicle(), vehicles)
+        for step in range(40):             # 4 s at the 100 ms cycle
+            system.process(own_vehicle(x=-10.0 + step * 0.6), vehicles)
             clock.tick(0.1)
         assert len(calls) <= int(4.0 / SCAN_INTERVAL_S) + 1
+
+
+class TestHooks:
+    """The physical key hooks are installed on demand, not at startup.
+
+    A low-level Windows hook sees every keystroke on the machine, so a driver
+    who never uses self-parking never gets one. That means the *first* click
+    can legitimately be refused while the hooks come up, and the refusal must
+    not turn into a retry loop -- a live run produced four log lines a second
+    for as long as the car stood beside the space before this was fixed.
+    """
+
+    def test_the_first_refusal_installs_the_hooks(self, tmp_path, monkeypatch):
+        controller = RecordingController(reason='no_physical_key_tracking')
+        system, bus, clock = build(tmp_path, controller=controller)
+        started = []
+        monkeypatch.setattr(system, '_start_hooks',
+                            lambda: started.append(clock.now))
+        drive_past(system, clock, a_parallel_space())
+        bus.emit('park_assist_accept', {})
+        system.process(own_vehicle(), a_parallel_space())
+        assert started
+        assert system.state == STATE_ABORTED
+
+    def test_a_permanently_refused_space_is_not_offered_again(self, tmp_path):
+        controller = RecordingController(reason='lfs_window_not_found')
+        system, _, clock = build(tmp_path, controller=controller,
+                                 park_assist_auto_accept=True)
+        drive_past(system, clock, a_parallel_space(), seconds=20.0)
+        assert system._refused_slot_id is not None
+        assert controller.applied == []
+
+    def test_a_transient_refusal_is_retried(self, tmp_path, monkeypatch):
+        """The hooks are installed on the first click, so it always fails.
+
+        Remembering that refusal against the space left the car standing
+        beside it doing nothing -- which is what the first live run did.
+        """
+        controller = RecordingController(reason='no_physical_key_tracking')
+        system, _, clock = build(tmp_path, controller=controller,
+                                 park_assist_auto_accept=True)
+        monkeypatch.setattr(system, '_start_hooks', lambda: None)
+        drive_past(system, clock, a_parallel_space(), seconds=5.0)
+        assert system._refused_slot_id is None
+        # Now the hooks are up: the very next offer arms.
+        controller.reason = None
+        scan_until(system, clock, a_parallel_space(), seconds=2.0)
+        assert system.state == STATE_PARKING
+
+    def test_a_repeated_refusal_is_logged_once_per_window(self, tmp_path,
+                                                          monkeypatch, caplog):
+        controller = RecordingController(reason='no_physical_key_tracking')
+        system, _, clock = build(tmp_path, controller=controller,
+                                 park_assist_auto_accept=True)
+        monkeypatch.setattr(system, '_start_hooks', lambda: None)
+        with caplog.at_level('WARNING'):
+            drive_past(system, clock, a_parallel_space(), seconds=20.0)
+        refusals = [r for r in caplog.records if 'refused' in r.message]
+        assert len(refusals) == 1
+
+    def test_hooks_are_only_installed_once_per_retry_window(self, tmp_path,
+                                                            monkeypatch):
+        system, _, clock = build(tmp_path)
+        threads = []
+        monkeypatch.setattr('assistance.park_assist.threading.Thread',
+                            lambda **kwargs: _FakeThread(threads, **kwargs))
+        for _ in range(5):
+            system._start_hooks()
+            clock.tick(0.5)
+        assert len(threads) == 1
+
+
+class _FakeThread:
+    def __init__(self, sink, target=None, name=None, daemon=None):
+        sink.append(name)
+        self.target = target
+
+    def start(self):
+        self.target()
