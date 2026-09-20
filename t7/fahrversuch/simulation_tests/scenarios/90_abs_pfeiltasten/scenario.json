@@ -1,0 +1,45 @@
+{
+  "name": "90_abs_pfeiltasten",
+  "description": "5 test Scenarios in one test for abs. Aus 90_abs_tests auf Pfeiltasten umgebaut.",
+  "created_utc": "2026-09-20T15:22:49Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [
+    "ontrack",
+    "relevant_section1",
+    "relevant_section2",
+    "relevant_section3",
+    "relevant_section4",
+    "relevant_section5"
+  ],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 50,
+    "outgauge_interval_ms": 0,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 147.6956
+}

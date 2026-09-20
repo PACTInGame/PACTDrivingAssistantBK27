@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+# Maschinenabhaengig: die eingemessene Maus-Achse gehoert zum Rechner, nicht
+# zum Task. Sie darf auch nie in workspace/ landen — dann bekaeme sie das
+# Modell mit ausgeliefert.
+kalibrierung.json
+
+# Einzelne Fahrversuche
+fahrversuch/simulation_tests/runs/*
+!fahrversuch/simulation_tests/runs/.gitkeep

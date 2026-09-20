@@ -1,6 +1,0 @@
-# ABS-Benchmark — Laufzeitabhaengigkeiten
-#
-# Python 3.11, Windows.
-# Alles Weitere (socket, struct, ctypes, json) ist Standardbibliothek.
-
-pynput            # globale Tastatur-/Mauserfassung und -wiedergabe

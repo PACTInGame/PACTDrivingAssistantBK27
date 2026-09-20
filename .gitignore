@@ -1,9 +1,16 @@
 __pycache__/
 *.pyc
 
-# Maschinenabhaengig, wird von lfs_link.py erzeugt
+# Maschinenabhaengig, von t7/workspace/lfs_link.py erzeugt
 kalibrierung.json
-rollradius.json
 
-# Ergebnisse einzelner Laeufe
-harness/ergebnisse/
+# Arbeitsbaum anderer Branches
+/simulation_tests/
+/build/
+/dist/
+/data/
+/.idea/
+/settings.json
+/pact_assistant.log
+/park_scene_debug.json
+/.setup_done

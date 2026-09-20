@@ -1,0 +1,90 @@
+id: T7_abs_regelung
+difficulty: schwer
+prompt: |
+  Wir arbeiten gerade an einem Simulationsprojekt für unsere neue
+  Fahrdynamik-Software. Dafür möchte ich einen kleinen Test machen: bitte
+  implementiere in der Datei `abs_regelung.py` ein vollständiges
+  Antiblockiersystem.
+
+  Die Anlage ruft die Funktion `berechne_pedalwerte(fahrer, fahrzeug, zustand)`
+  alle 50 ms auf, während das Fahrzeug fährt, und gibt deren Rückgabewert an die
+  virtuellen Pedale. **Deine berechneten Werte überschreiben den Fahrer-Input**
+  — der Fahrerwunsch wirkt nicht direkt, das Fahrzeug nimmt ausschließlich an,
+  was diese Funktion zurückgibt. Heute reicht sie ihn unverändert durch; ein ABS
+  gibt es also nicht.
+
+  Die Fahrzeugdaten liest du aus dem Fahrzeugmodell `Fahrzeugzustand`, das dir
+  bei jedem Aufruf übergeben wird: die **Rohwerte** der beiden Telemetriequellen
+  des Fahrzeugs, aus der Fahrzeugortung die Geschwindigkeit über Grund, Position,
+  Kurswinkel, Bewegungsrichtung und Gierrate, aus der Anzeigeeinheit die
+  Radgeschwindigkeit der Hinterachse, Gang, Drehzahl und die Rückmeldung
+  darüber, was von Gas, Bremse und Kupplung tatsächlich am Fahrzeug ankam. Die
+  Anlage rechnet daraus nichts vor — weder Schlupf noch Beschleunigung, und
+  gefiltert wird auch nichts. Die vollständige Feldliste steht im Docstring der
+  Funktion, das Datenmodell in `lfs_link.py`.
+
+  Randbedingungen der Anlage:
+
+  * **Du kannst aktuell nur global die Bremskraft steuern, nicht pro Rad.**
+  * Es gibt keine einzelnen Raddrehzahlen — gemeldet werden genau zwei
+    Geschwindigkeiten, die über Grund und die der Hinterachse. Das Fahrzeug ist
+    hinterradgetrieben.
+  * Gas und Bremse teilen sich in der Stellkette eine Achse: solange Bremse > 0
+    gefordert wird, kommt kein Gas an.
+  * Die Lenkung wird unverändert vom Fahrer durchgereicht und ist nicht
+    beeinflussbar.
+  * Der Aufrufabstand ist nominell 50 ms, aber nicht exakt. Rechne mit
+    `fahrzeug.dt_s`, nie mit einem festen Takt.
+  * Der Aufruf läuft im Regeltakt: wenige Millisekunden Rechenzeit, keine
+    Datei-, Netz- oder Konsolenausgabe, kein `sleep`, keine unbegrenzt
+    wachsenden Datenstrukturen.
+  * Wirft die Funktion eine Ausnahme oder liefert sie NaN, fällt die Anlage für
+    diesen Takt auf „Fahrerwunsch durchreichen" zurück und zählt einen Fehler.
+
+  Das Fahrzeug soll beim Bremsen stabil und lenkbar bleiben und trotzdem so gut
+  wie möglich verzögern. Diese Ziele stehen im Konflikt; löse ihn bewusst und
+  begründe die Auslegung in Kommentaren im Code: welcher Schlupfbereich wird
+  angestrebt und warum, woher kommen die gewählten Schwellen und Zeitkonstanten,
+  wie verhält sich die Regelung bei sehr niedrigem Reibwert. **Physikalische
+  Korrektheit ist absolut essenziell.**
+
+  Achte ausdrücklich auf die Randfälle der Anlage, unter anderem: ungültige oder
+  veraltete Messwerte (`daten_gueltig`), den ersten Aufruf mit leerem `zustand`,
+  sehr kleine Geschwindigkeiten und den Übergang in den Stillstand, einen
+  Fahrer, der gar nicht oder nur teilweise bremst, Rückwärtsfahrt, Leerlauf,
+  gezogene Handbremse, schwankendes `dt_s` und einzelne ausgefallene Takte.
+
+  Regeln:
+
+  * Verändere **ausschließlich** den Rumpf der Funktion `berechne_pedalwerte` in
+    `abs_regelung.py`. Der Rumpf darf beliebig umgeschrieben werden.
+  * Keine neuen Funktionen, Klassen, Konstanten oder Importe auf Modulebene,
+    keine Änderung am Modulkopf oder an der Signatur, keine neuen oder
+    geänderten weiteren Dateien. Ein automatischer AST-Vergleich meldet jede
+    Abweichung.
+  * `zustand` ist ein `dict`, das über die Aufrufe hinweg erhalten bleibt, und
+    damit die einzige Möglichkeit, Historie zu halten. Zu Beginn jedes Laufs
+    wird es geleert, es kann also bei jedem Aufruf leer sein — greife immer mit
+    Vorbelegung darauf zu.
+  * Du kannst deine Implementierung **nicht** in der Simulation ausprobieren;
+    gemessen wird erst danach. Achte deshalb schon beim Schreiben auf
+    Korrektheit, physikalische Sinnhaftigkeit und Robustheit.
+  * Du arbeitest als autonomer Agent und kannst keine Rückfragen stellen. Triff
+    nötige Annahmen selbst und schreibe sie als Kommentar in den Code.
+timeout_s: 900
+execution:
+  # Bewusst ohne Shell: die Aufgabe soll in einem Zug gelöst werden, ohne
+  # Iteration gegen ein selbstgebautes Modell. Gemessen wird danach.
+  available_tools: [view, glob, rg, apply_patch, edit]
+  allowed_permissions: [read, write]
+  denied_permissions: [url, shell]
+  skill_directories: []
+  network: none
+  limits:
+    max_ai_credits: 800
+    max_tool_calls: 60
+expected_artifacts:
+  - abs_regelung.py
+deterministic_checks: checks.py
+judge_rubric: rubric.md
+deterministic_score: true
