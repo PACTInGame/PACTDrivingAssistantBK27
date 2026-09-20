@@ -51,21 +51,35 @@ result is observed rather than assumed.
 """
 
 import logging
+import time
 from typing import Optional
 
 from Controls.brake_key import KeyBrakeOutput
-from misc import window_geometry
+from misc import mouse_input, window_geometry
 from misc.key_names import is_mouse_button, spelling_for
 from misc.key_tap import get_key_tapper
 from misc.platform_shim import instant_input, is_available
 
 logger = logging.getLogger(__name__)
 
-# How much of the LFS window's half width a full steering command uses. Only
-# the resolution of the command depends on this -- what it is worth in
-# curvature is measured (see the module docstring). A quarter of the half width
-# is roughly what the recorded scenarios' steering sweeps cover.
-DEFAULT_SPAN_FRACTION = 0.25
+# How much of the LFS window's half width a full steering command uses.
+#
+# This was a quarter, on the reasoning that only the *resolution* of the
+# command depends on it and what it is worth in curvature gets measured. That
+# reasoning is sound right up to the point where the command saturates, and a
+# quarter saturates long before the car turns: measured in game, a full +1.00
+# command put the cursor 240 px from the centre of a 1920 px window -- exactly
+# where it was asked to go -- and the car's path curvature came back at
+# 0.002 1/m. A 500 m radius. The manoeuvre left its path within three strokes
+# every time, and the learned gain sank to its floor, which is the model
+# correctly reporting that steering was doing nothing.
+#
+# LFS's mouse steering uses very nearly the whole window width: the recorded
+# scenarios show the driver's own cursor sweeping from x 460 to 1690 of 1920.
+# So a full command has to mean very nearly the whole half width. Slightly
+# under it rather than exactly, to stay off the screen edge -- pyautogui's
+# own corner failsafe lives there, and clamping is the game's job, not ours.
+DEFAULT_SPAN_FRACTION = 0.95
 # Below this the window is not believable and the output refuses rather than
 # aiming at coordinates that are not on any screen.
 MIN_WINDOW_WIDTH_PX = 320
@@ -86,6 +100,7 @@ class MouseSteeringOutput:
         self.geometry = geometry
         self._held = False
         self._last_x = None
+        self._last_trace = 0.0
 
     # ─── Availability ─────────────────────────────────────────────────
 
@@ -127,7 +142,28 @@ class MouseSteeringOutput:
             return False
         self._held = True
         self._last_x = x
+        self._trace(value, x, span, width)
         return True
+
+    def _trace(self, value, wanted_x, span, width):
+        """Did the cursor actually go where we put it? DEBUG, once a second.
+
+        The one question the car's own telemetry cannot answer. A live run
+        commanded full lock for ten seconds and measured no curvature at all,
+        and from the outside that looks the same whether the cursor never
+        moved, moved somewhere useless, or moved exactly as intended and the
+        span is simply far too small to steer with. This line separates the
+        three. Costs nothing unless DEBUG is on.
+        """
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        now = time.monotonic()
+        if now - self._last_trace < 1.0:
+            return
+        self._last_trace = now
+        logger.debug("Steering: command %+.2f -> x %d (span %.0f px of a "
+                     "%.0f px window); cursor is at %s",
+                     value, wanted_x, span, width, mouse_input.cursor_position())
 
     def release(self):
         """Put the cursor back on the centre line and stop steering.

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Dateiversion. Wird beim Laden geprueft; aeltere Dateien laufen durch
 # ``_migrate`` und werden danach mit der aktuellen Version zurueckgeschrieben.
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
 VERSION_KEY = '_version'
 
 # Menueklicks kommen aus dem Paket-Thread. Jeder ``set()`` schrieb frueher die
@@ -85,7 +85,7 @@ _SCHEMA: Dict[str, Setting] = {
     # Anteil der halben LFS-Fensterbreite, den ein voller Lenkbefehl auf dem
     # Bildschirm zuruecklegt. Bestimmt nur die Aufloesung des Befehls - was er
     # an Kruemmung wert ist, wird gemessen (Controls/vehicle_control.py).
-    'park_assist_mouse_span': Setting(0.25, float, minimum=0.05, maximum=1.0),
+    'park_assist_mouse_span': Setting(0.95, float, minimum=0.05, maximum=1.0),
 
     # ─── Darstellung ──────────────────────────────────────────────────
     'language': Setting('de', str, choices=SUPPORTED_LANGUAGES),
@@ -388,12 +388,29 @@ class SettingsManager:
 
         if version < 1:
             self._migrate_pdc_to_mode(data)
+        if version < 2:
+            self._migrate_mouse_span(data)
         if data:
             # Eine leere/fehlende Datei ist keine Migration, sondern ein
             # Erstlauf - dafuer gibt es keine Meldung.
             logger.info("Migrated settings from version %d to %d.",
                         version, SETTINGS_VERSION)
         data[VERSION_KEY] = SETTINGS_VERSION
+        return True
+
+    @staticmethod
+    def _migrate_mouse_span(data: Dict[str, Any]) -> bool:
+        """v1 → v2: der alte Lenk-Ausschlag konnte das Auto nicht lenken.
+
+        0.25 war kein Geschmackswert, sondern ein Fehler: ein voller
+        Lenkbefehl kam damit 240 px vom Fensterzentrum weg, und das Auto fuhr
+        gemessen einen 500-m-Radius (Controls/manoeuvre_outputs.py). Wer die
+        Voreinstellung nie angefasst hat, bekommt die neue; wer sie selbst
+        gesetzt hat, behaelt seinen Wert.
+        """
+        if data.get('park_assist_mouse_span') != 0.25:
+            return False
+        data['park_assist_mouse_span'] =             _SCHEMA['park_assist_mouse_span'].default
         return True
 
     @staticmethod

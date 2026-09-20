@@ -119,6 +119,15 @@ OFFER_SETTLE_S = 0.6
 # which is where the driver is sitting and where a space stops being something
 # to drive towards and starts being something to reverse into.
 PASSED_MARGIN_M = 2.0
+# And how long that flag survives. It used to be dropped the moment the space
+# left the scan, which sounded tidy and was wrong: an open-ended space is
+# measured from whichever cars happen to be in range, so it drops out of a
+# scan and comes back a second later as a matter of course. A live run drove
+# past a space, watched it blink out for one cycle, and was never offered it
+# again -- the assistant had forgotten having driven past it. Expiring by
+# time instead keeps the record across that and still bounds the dictionary:
+# nothing can stay in it longer than this.
+PASSED_TTL_S = 30.0
 
 # ─── Limits ───────────────────────────────────────────────────────────────
 
@@ -260,8 +269,8 @@ class ParkAssist(AssistanceSystem):
         # the driver was beside the space.
         self._refused_slot_id = None
         self._refusal_logged = {}
-        # slot_id -> True once the car has driven past that space.
-        self._passed: Dict[Any, bool] = {}
+        # slot_id -> when the car was last seen to have driven past it.
+        self._passed: Dict[Any, float] = {}
         # slot_id -> when planning last failed for it. See UNPLANNABLE_TTL_S.
         # Bounded the same way ``_passed`` is: pruned with the spaces in range.
         self._unplannable: Dict[Any, float] = {}
@@ -393,7 +402,7 @@ class ParkAssist(AssistanceSystem):
 
         if self._accept_requested:
             self._accept_requested = False
-            self._begin(own_vehicle)
+            self._begin(own_vehicle, own, vehicles)
         return self._publish()
 
     # ─── Gates ────────────────────────────────────────────────────────
@@ -424,6 +433,10 @@ class ParkAssist(AssistanceSystem):
         if self._last_scan is not None and now - self._last_scan < SCAN_INTERVAL_S:
             return
         self._last_scan = now
+        # Unconditionally, before any early return: an empty road is exactly
+        # when these records should be ageing out, and it is the one case
+        # that never reaches the code below.
+        self._expire_records(now)
 
         shape = self._ensure_shape(own.cname)
         ego = pose_from_mci(own.x, own.y, own.heading)
@@ -435,7 +448,7 @@ class ParkAssist(AssistanceSystem):
             self._set_state(STATE_SCANNING)
             return
 
-        self._note_passing(slots)
+        self._note_passing(slots, now)
         passed = [slot for slot in slots
                   if self._passed.get(slot.slot_id)
                   and slot.ahead_of_ego < PASSED_MARGIN_M]
@@ -521,23 +534,24 @@ class ParkAssist(AssistanceSystem):
         self._last_trace = now
         logger.debug("Parking scan: " + message, *args)
 
-    def _note_passing(self, slots: List[ParkingSlot]):
+    def _note_passing(self, slots: List[ParkingSlot], now: float):
         """Remember which spaces the car has driven past. See PASSED_MARGIN_M.
 
-        Bounded by construction: only spaces currently in range can be added,
-        and the record is dropped when a space leaves range, so this cannot
-        grow over a session.
+        Bounded by time rather than by visibility (:data:`PASSED_TTL_S`), and
+        the two records are pruned together because they answer the same kind
+        of question about the same spaces.
         """
-        visible = set()
         for slot in slots:
-            visible.add(slot.slot_id)
             if slot.ahead_of_ego > PASSED_MARGIN_M:
-                self._passed[slot.slot_id] = True
-        for known in list(self._passed):
-            if known not in visible:
+                self._passed[slot.slot_id] = now
+
+    def _expire_records(self, now: float):
+        """Age out both per-space records. See PASSED_TTL_S."""
+        for known, seen_at in list(self._passed.items()):
+            if now - seen_at > PASSED_TTL_S:
                 del self._passed[known]
-        for known in list(self._unplannable):
-            if known not in visible:
+        for known, failed_at in list(self._unplannable.items()):
+            if now - failed_at > UNPLANNABLE_TTL_S:
                 del self._unplannable[known]
 
     def _rank(self, slots: List[ParkingSlot]) -> List[ParkingSlot]:
@@ -660,9 +674,11 @@ class ParkAssist(AssistanceSystem):
 
     # ─── Driving ──────────────────────────────────────────────────────
 
-    def _begin(self, own_vehicle: OwnVehicle):
+    def _begin(self, own_vehicle: OwnVehicle, own, vehicles):
         """Take the car over. Refuses out loud rather than half-starting."""
         if self.state != STATE_OFFERED or self.trajectory is None:
+            return
+        if not self._replan_from_here(own, vehicles):
             return
         # Push the key bindings *first*. ``KeyBrakeOutput`` refuses with
         # ``binding_not_pushed`` until ``/key <key> brake`` has been sent for
@@ -704,6 +720,38 @@ class ParkAssist(AssistanceSystem):
                     "%d stroke(s), planned at a %.1f m radius.",
                     self.slot.kind, self.slot.side, self.trajectory.length,
                     len(self.trajectory.segments), self.trajectory.radius)
+
+    def _replan_from_here(self, own, vehicles) -> bool:
+        """Plan again from where the car is *now*. Answer whether one exists.
+
+        The offered plan was made when the space was found, and the driver
+        clicks some seconds later -- during which they have usually rolled on
+        a little, or stopped somewhere other than where the plan begins. The
+        follower is then off its own path from the first cycle, pure pursuit
+        winds up trying to get back to it, and the manoeuvre swings hard one
+        way and then the other. That is what a live run did, into the parked
+        car it was supposed to be avoiding.
+
+        So the plan the car drives is always one made from the pose it is
+        actually in. It costs one planning pass -- up to about 20 ms -- on the
+        single cycle that accepts the offer, which is the one cycle in a
+        manoeuvre with no control work to do, and it never lands on a cycle
+        that is driving the car (``AGENTS.md`` §1).
+        """
+        ego = pose_from_mci(own.x, own.y, own.heading)
+        obstacles = self._obstacles(ego, own, vehicles)
+        result = self._planner.plan(ego, self.slot,
+                                    [obstacle.box for obstacle in obstacles])
+        if not result.ok:
+            # Between the offer and the click the space stopped being usable
+            # -- the car rolled past it, or something moved into it.
+            self.reason = result.reason
+            self._unplannable[self.slot.slot_id] = self.clock()
+            self._report_refusal(result.reason or 'no_plan')
+            self._finish(STATE_ABORTED, result.reason or 'no_plan')
+            return False
+        self.trajectory = result.trajectory
+        return True
 
     def _report_refusal(self, reason: str):
         """One line per distinct reason per window, not one per attempt.
@@ -825,7 +873,7 @@ class ParkAssist(AssistanceSystem):
                     if state.speed_mps > 0.2 else 0.0)
         logger.info("Parking: stroke %d/%d %s %.0f%%, v %.2f/%.2f m/s, "
                     "gear %d/%d%s, kappa %+.3f/%+.3f 1/m, steer %+.2f "
-                    "(gain %.3f), thr %.0f brk %.0f",
+                    "(gain %.3f), thr %.2f brk %.2f",
                     demand.stroke + 1, len(self.trajectory.segments),
                     'rev' if demand.direction < 0 else 'fwd',
                     100.0 * demand.progress, state.speed_mps, demand.speed,

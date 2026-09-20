@@ -15,7 +15,7 @@ from assistance.park_assist import (BTN_PARK_CANCEL, BTN_PARK_OFFER,
                                     STATE_ABORTED, STATE_DONE, STATE_OFF,
                                     STATE_OFFERED, STATE_PARKING,
                                     STATE_SCANNING, UNPLANNABLE_TTL_S,
-                                    BRAKE_SETTLE_S)
+                                    BRAKE_SETTLE_S, PASSED_TTL_S)
 from assistance.parking.slot_detection import ParkingSlot
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
@@ -225,6 +225,32 @@ class TestScanning:
         assert payload['length'] > CAR_L
         assert payload['strokes'] >= 1
 
+    def test_a_space_that_blinks_out_of_one_scan_is_still_offered(self, tmp_path):
+        """Forgetting having driven past a space cost a whole live run.
+
+        An open-ended space is measured from whichever cars are in range, so
+        it leaves the scan and comes back as a matter of course. The record
+        used to be dropped the moment it did, and the space was then never
+        offered again however long the driver waited beside it.
+        """
+        system, _, clock = build(tmp_path)
+        vehicles = a_parallel_space()
+        drive_past(system, clock, vehicles, seconds=0.0)
+        # One scan in which the space is not visible at all.
+        system.process(own_vehicle(x=14.0), {})
+        clock.tick(SCAN_INTERVAL_S + 0.05)
+        payload = scan_until(system, clock, vehicles, own=own_vehicle(x=14.0))
+        assert payload['state'] == STATE_OFFERED
+
+    def test_the_record_does_not_outlive_its_welcome(self, tmp_path):
+        system, _, clock = build(tmp_path)
+        vehicles = a_parallel_space()
+        drive_past(system, clock, vehicles, seconds=0.0)
+        assert system._passed
+        clock.tick(PASSED_TTL_S + 1.0)
+        system.process(own_vehicle(x=14.0), {})
+        assert system._passed == {}
+
     def test_a_space_the_car_has_not_driven_past_is_not_offered(self, tmp_path):
         """Joining the track beside a gap is not the same as finding one.
 
@@ -389,6 +415,41 @@ class TestDriving:
         demand, state = controller.applied[-1]
         assert demand.total > 0.0
         assert state.gear == 2
+
+    def test_the_plan_driven_is_made_from_where_the_car_is_now(self, tmp_path):
+        """The offer is planned when the space is found, the click comes later.
+
+        A live run clicked several seconds after the offer, by which time the
+        car had rolled on; the follower started off its own path, pure pursuit
+        wound up, and the car swung into the parked car it was avoiding.
+        """
+        controller = RecordingController()
+        system, bus, clock = build(tmp_path, controller=controller)
+        vehicles = a_parallel_space()
+        drive_past(system, clock, vehicles)
+        offered = system.trajectory
+        assert offered is not None
+        # The driver rolls on a metre and then clicks.
+        moved = own_vehicle(x=15.0)
+        bus.emit('park_assist_accept', {})
+        system.process(moved, vehicles)
+        assert system.state == STATE_PARKING
+        assert system.trajectory is not offered, "drove a stale plan"
+        assert math.hypot(system.trajectory.start.x - moved.data.x / METRE,
+                          system.trajectory.start.y - moved.data.y / METRE) < 1.0
+
+    def test_a_space_that_went_away_between_offer_and_click_is_refused(self, tmp_path):
+        controller = RecordingController()
+        system, bus, clock = build(tmp_path, controller=controller)
+        vehicles = a_parallel_space()
+        drive_past(system, clock, vehicles)
+        assert system.state == STATE_OFFERED
+        # Somebody parks in it.
+        vehicles[4] = parked_car(4, 7.5, -3.2)
+        bus.emit('park_assist_accept', {})
+        system.process(own_vehicle(), vehicles)
+        assert system.state != STATE_PARKING
+        assert controller.applied == [], 'took the car over with no plan'
 
     def test_a_manoeuvre_stands_other_actuators_down(self, tmp_path):
         seen = []

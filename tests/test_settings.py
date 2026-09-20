@@ -104,6 +104,23 @@ def test_a_version_zero_pdc_pair_migrates_to_the_mode_alone(tmp_path):
     assert 'park_distance_control' not in json.loads(open(path).read())
 
 
+def test_the_unsteerable_mouse_span_is_migrated_away(tmp_path):
+    """v1 shipped a steering span that measurably could not steer the car."""
+    path = write_settings(tmp_path, {'_version': 1,
+                                     'park_assist_mouse_span': 0.25})
+
+    settings = SettingsManager(settings_file=path)
+
+    assert settings.get('park_assist_mouse_span') > 0.5
+
+
+def test_a_deliberately_chosen_mouse_span_survives(tmp_path):
+    path = write_settings(tmp_path, {'_version': 1,
+                                     'park_assist_mouse_span': 0.4})
+
+    assert SettingsManager(settings_file=path).get('park_assist_mouse_span') == 0.4
+
+
 def test_migration_keeps_a_deliberate_pdc_choice(tmp_path):
     path = write_settings(tmp_path, {'park_distance_control': True,
                                      'park_distance_control_mode': 2})

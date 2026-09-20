@@ -92,6 +92,19 @@ ABSOLUTE_MIN_LOOKAHEAD_M = 0.4
 # the manoeuvre itself uses.
 HEADING_GAIN = 0.6
 
+# How much tighter than the planned arc a correction may ask for. The plan's
+# own arcs are at the planning radius, so 1.0 would leave no authority to
+# correct at all and a large number leaves no authority to the *plan*: a live
+# run watched an uncorrected cross-track error wind pure pursuit up to
+# -0.757 1/m -- a 1.3 m radius, on a manoeuvre planned at 6 m -- and the car
+# swung hard one way, hit the parked car it was avoiding, and then swung hard
+# back. A demand no car can follow is not a correction, it is an oscillator.
+#
+# 1.4 is a third more lock than the manoeuvre itself uses, which is enough to
+# pull a car back onto a parking path at walking pace and still inside what a
+# real steering lock will give.
+MAX_CORRECTION_FACTOR = 1.4
+
 # How far off the path the car may be before the follower says so. Well beyond
 # anything it produces at these speeds, and inside the clearance the plan was
 # validated with, so "off track" means something really went wrong -- a kerb, a
@@ -269,10 +282,12 @@ class PathFollower:
                                 heading_error=heading_error)
 
         # Feedforward the arc the path is actually on, and let pure pursuit
-        # correct the error rather than reproduce the arc from scratch.
-        curvature = current.curvature + self._pursuit_curvature(
+        # correct the error rather than reproduce the arc from scratch. The
+        # sum is capped at something the car can actually steer; see
+        # MAX_CORRECTION_FACTOR.
+        curvature = self._capped(current.curvature + self._pursuit_curvature(
             pose, segment.direction, speed_mps, remaining_segment,
-            heading_error)
+            heading_error))
         speed = self._speed_limit(remaining_segment, remaining_total, segment)
         return self._demand(speed, segment.direction, curvature, current,
                             cross_track=cross_track,
@@ -286,6 +301,14 @@ class PathFollower:
             **kwargs)
 
     # ─── Lateral ──────────────────────────────────────────────────────
+
+    def _capped(self, curvature: float) -> float:
+        """Clamp a demand to what the planning radius says the car can do."""
+        radius = getattr(self.trajectory, 'radius', 0.0) or 0.0
+        if radius <= 0.0:
+            return curvature
+        limit = MAX_CORRECTION_FACTOR / radius
+        return max(-limit, min(limit, curvature))
 
     def _lookahead(self, speed_mps: float, remaining_segment: float) -> float:
         """How far ahead to aim: speed-scaled, but never past this stroke."""

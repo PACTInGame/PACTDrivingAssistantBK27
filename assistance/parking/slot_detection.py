@@ -203,11 +203,25 @@ class ParkingSlot:
     # moment it was measured. Negative means the car has already driven past
     # it, which is the state a reverse manoeuvre needs.
     ahead_of_ego: float
+    # For an open-ended slot, which side of its single neighbour it lies on:
+    # ``'ahead'`` for the space in front of that car, ``'behind'`` for the one
+    # behind it. ``None`` when both ends are closed. See :attr:`slot_id`.
+    open_side: Optional[str] = None
 
     @property
     def slot_id(self) -> Tuple:
-        """Stable identity: kind, side and the obstacles that bound it."""
-        return (self.kind, self.side) + tuple(sorted(map(repr, self.bounded_by)))
+        """Stable identity: kind, side, the bounding obstacles -- and, for an
+        open-ended slot, which side of its neighbour it is on.
+
+        That last part is not a detail. A single parked car bounds **two**
+        spaces, one in front of it and one behind, and both are reported with
+        the same ``bounded_by``. Without the side they shared an identity, so
+        driving past the space in front of a car marked the space behind it
+        as driven past as well -- and the assistant would offer to reverse
+        into a space the car had never been near.
+        """
+        return ((self.kind, self.side, self.open_side)
+                + tuple(sorted(map(repr, self.bounded_by))))
 
 
 def _orientation_class(box_yaw: float, road_yaw: float) -> Optional[str]:
@@ -382,6 +396,12 @@ class ParkingSlotDetector:
         required_depth = self.required_depth(kind)
 
         open_ended = first is None or second is None
+        # Which side of the lone neighbour this space is on; see slot_id.
+        open_side = None
+        if first is None and second is not None:
+            open_side = 'ahead'
+        elif second is None and first is not None:
+            open_side = 'behind'
         if first is None:
             start = second.ahead_min - (required_length + OPEN_END_EXTRA_M)
             end = second.ahead_min
@@ -415,7 +435,8 @@ class ParkingSlotDetector:
 
         neighbour_depth = max(p.lat_max for p in present) - near_lat
         return self._build_slot(ego, side, sign, kind, start, end, near_lat,
-                                depth, neighbour_depth, present, open_ended)
+                                depth, neighbour_depth, present, open_ended,
+                                open_side)
 
     def _free_depth(self, near_lat: float, start: float, end: float,
                     all_projections: Sequence[_Projection],
@@ -467,7 +488,8 @@ class ParkingSlotDetector:
     def _build_slot(self, ego: Pose, side: str, sign: float, kind: str,
                     start: float, end: float, near_lat: float, depth: float,
                     neighbour_depth: float, boundaries: Sequence[_Projection],
-                    open_ended: bool) -> ParkingSlot:
+                    open_ended: bool,
+                    open_side: Optional[str] = None) -> ParkingSlot:
         """Turn the measured gap into world poses.
 
         The entry pose sits at the centre of the slot mouth, pointing the way
@@ -523,4 +545,5 @@ class ParkingSlotDetector:
             bounded_by=tuple(p.obstacle.key for p in boundaries),
             open_ended=open_ended,
             ahead_of_ego=centre_ahead,
+            open_side=open_side,
         )
