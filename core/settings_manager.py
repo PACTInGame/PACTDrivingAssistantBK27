@@ -5,7 +5,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from misc.helpers import resolve_path
+from misc.helpers import resolve_data_path as resolve_path
 from misc.language import SUPPORTED_LANGUAGES
 
 logger = logging.getLogger(__name__)
@@ -189,6 +189,7 @@ class SettingsManager:
         }
         self._settings: Dict[str, Any] = {}
         self._lock = threading.RLock()
+        self._write_lock = threading.Lock()
         self._save_timer: Optional[threading.Timer] = None
         self._dirty = False
         self.load()
@@ -295,6 +296,11 @@ class SettingsManager:
         gueltigen Wert, plus alles, was die Datei sonst noch enthielt.
         """
         stored = self._read_file()
+        version = stored.get(VERSION_KEY, 0)
+        if isinstance(version, int) and version > SETTINGS_VERSION:
+            raise RuntimeError(
+                f'Settings {self.settings_file} were written by a newer PACT version. '
+                'Install that version or newer; this file has not been changed.')
         changed = self._migrate(stored)
 
         merged: Dict[str, Any] = dict(self._defaults)
@@ -415,19 +421,21 @@ class SettingsManager:
 
     def flush(self):
         """Schreibt ausstehende Aenderungen sofort"""
-        with self._lock:
-            if not self._dirty:
-                return
-            self._dirty = False
-            snapshot = dict(self._settings)
-        self._write(snapshot)
+        with self._write_lock:
+            with self._lock:
+                if not self._dirty:
+                    return
+                self._dirty = False
+                snapshot = dict(self._settings)
+            self._write(snapshot)
 
     def save(self):
         """Speichert Einstellungen in Datei (sofort)"""
-        with self._lock:
-            self._dirty = False
-            snapshot = dict(self._settings)
-        self._write(snapshot)
+        with self._write_lock:
+            with self._lock:
+                self._dirty = False
+                snapshot = dict(self._settings)
+            self._write(snapshot)
 
     def _write(self, snapshot: Dict[str, Any]):
         """Schreibt atomar: erst in eine temporaere Datei, dann umbenennen
@@ -446,6 +454,8 @@ class SettingsManager:
                 os.fsync(handle.fileno())
             os.replace(tmp_path, self.settings_file)
         except Exception as e:
+            with self._lock:
+                self._dirty = True
             logger.error("Error saving settings to %s: %s: %s",
                          self.settings_file, type(e).__name__, e)
             try:

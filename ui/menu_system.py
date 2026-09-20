@@ -36,6 +36,9 @@ Button = Tuple[int, int, int, int, int, str, int]
 # fehlt, faellt auf den allgemeinen Text zurueck - eine unbekannte Ursache
 # darf die Zeile nicht verschwinden lassen, sondern nur weniger genau machen.
 AEB_REASON_TEXTS = {
+    'control_mode_unknown': "Join the track before enabling braking",
+    'vjoy_loading': "Checking vJoy - try again shortly",
+    'guardian_not_ready': "Brake watchdog is not ready",
     'vjoy_not_installed': "vJoy is not installed",
     'vjoy_driver_disabled': "vJoy is not ready",
     'vjoy_device_not_configured': "vJoy is not ready",
@@ -149,6 +152,16 @@ class MenuSystem:
                                             self._on_throttle_availability)
         self.ui_manager.event_bus.subscribe('gearbox_availability',
                                             self._on_gearbox_availability)
+        self.ui_manager.event_bus.subscribe('emergency_brake_enable_refused',
+                                            self._on_aeb_enable_refused)
+
+    def _on_aeb_enable_refused(self, data):
+        self._notify('^1', AEB_REASON_TEXTS.get(data.get('reason'), "Braking unavailable"))
+
+    def _toggle_aeb(self):
+        self.ui_manager.event_bus.emit('emergency_brake_mode_requested', {
+            'enabled': self.settings.get('automatic_emergency_brake') != AEB_MODE_BRAKE})
+        self.open_driving_menu()
 
     # ─── Sprache ──────────────────────────────────────────────────────
 
@@ -712,7 +725,7 @@ class MenuSystem:
                 31: lambda: self._cycle('cross_traffic_warning_distance', (0, 1, 2), driving),
                 # Nur zwischen 1 und 2: "aus" ist der Schalter der
                 # Kollisionswarnung selbst (Button 22), nicht dieser hier.
-                32: lambda: self._cycle('automatic_emergency_brake', (1, 2), driving),
+                32: self._toggle_aeb,
             },
             'parking': {
                 22: self._toggle_pdc,

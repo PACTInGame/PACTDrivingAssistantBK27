@@ -448,3 +448,13 @@ recognition policy: `simulation_tests/README.md` §3.
 
 The replay preflight test simulates the unavailable Windows screen API instead
 of skipping on Windows; it tests the refusal path without accessing the desktop.
+
+## Release regressions
+
+`tests/test_release_setup.py` covers non-UTF-8 configuration preservation,
+duplicate keys, LFS-closed enforcement, conflicting/commented InSim commands,
+wizard cancellation, frozen user-data persistence, guardian launch/dispatch and
+failed-save retry. The invalid-vJoy-DLL test now mocks the native loader error
+rather than loading a corrupt binary (avoids Windows loader dialogs/stalls).
+`RELEASE.md` lists the packaged smoke command and remaining clean-machine/live
+acceptance checks. Test scanners must exclude `build`/`dist` output folders.

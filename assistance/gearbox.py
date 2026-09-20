@@ -11,7 +11,7 @@ from vehicles.own_vehicle import OwnVehicle
 from vehicles.vehicle import Vehicle
 import json
 from pathlib import Path
-from misc.helpers import resolve_path
+from misc.helpers import resolve_data_path as resolve_path
 from vehicles.car_profiles import (automatic_gearbox_allowed,
                                    automatic_gearbox_by_default, car_key,
                                    stock_profile)

@@ -95,14 +95,13 @@ def test_what_the_marker_writes_is_what_the_guardian_replays(marker):
                                                  '/axis 9 throttle']
 
 
-def test_an_unwritable_marker_does_not_stop_anything(tmp_path):
-    """Without the marker the guardian does nothing, which is where we were
-    before it existed -- not a reason to refuse to intervene."""
+def test_an_unwritable_marker_refuses_the_claim(tmp_path):
+    """Recovery information must exist before an axis can be taken."""
     marker = HandoverMarker(str(tmp_path / 'nope' / 'marker'))
 
-    marker.claim('brake', '/axis 12 brake')      # must not raise
+    assert marker.claim('brake', '/axis 12 brake') is False
 
-    assert marker.holds_anything() is True
+    assert marker.holds_anything() is False
 
 
 # ─── mouse_kb: the key path ──────────────────────────────────────────────────
@@ -327,7 +326,7 @@ def test_the_marker_is_claimed_before_the_throttle_is_taken(
     class WatchingMarker(HandoverMarker):
         def claim(self, owner, commands):
             order.append('marker')
-            super().claim(owner, commands)
+            return super().claim(owner, commands)
 
     class WatchingBus:
         def emit(self, name, payload=None):

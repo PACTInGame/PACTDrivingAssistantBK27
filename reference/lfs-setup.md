@@ -1,7 +1,6 @@
 # LFS-side setup and prerequisites
 
-The add-on cannot work unless LFS itself is configured to talk to it. Three separate
-things must be right: **InSim**, **OutGauge**, and **OutSim**. They are enabled in
+The add-on cannot work unless LFS itself is configured to talk to it. Two interfaces are required: **InSim** and **OutGauge**. **OutSim** is optional and currently unused. They are enabled in
 different places and fail in different ways.
 
 Start here when the symptom is "nothing happens", "no HUD", "no warnings", or
@@ -15,7 +14,7 @@ Start here when the symptom is "nothing happens", "no HUD", "no warnings", or
 |---|---|---|
 | **InSim** (TCP 29999) | `/insim 29999` typed in game, or a line in `autoexec.lfs` | everything — connection, buttons, all car positions, commands |
 | **OutGauge** (UDP 30000) | `cfg.txt` in the LFS root folder | **own-car data: speed, rpm, gear, pedals, dashboard lights** |
-| **OutSim** (UDP 29998) | `cfg.txt` in the LFS root folder | currently connected but unused (G-forces, per-wheel data) |
+| **OutSim** (UDP 29998) | `cfg.txt` in the LFS root folder | optional, unused (receiver is not started) |
 | *(TCP 29997)* | nothing — the add-on binds it itself | the single-instance lock, §2.1. LFS is not involved |
 
 ### `cfg.txt` (LFS root folder, e.g. `C:\LFS\cfg.txt`)
@@ -50,7 +49,7 @@ LFS runs every line in this script at startup. It must contain:
 
 Without it the user has to type `/insim 29999` in the chat manually on every launch,
 or the app never connects. `core/setup_wizard.py:add_insim_autoexec()` appends the line
-if it is not already present (it does not deduplicate beyond a substring check).
+if it is not already present by matching active commands, replacing conflicting ports and preserving comments and unrelated commands.
 
 There is a `TODO` in that function about also adding an `/exec` line so LFS launches
 the assistant itself.
@@ -63,7 +62,7 @@ This path is fine.
 
 **OutGauge off → missing gauge telemetry.** MCI still publishes the car and
 warning-only systems can run. The startup validator reports saved configuration
-differences; the live HUD warns when expected gauge packets are missing, and
+differences in the log and a startup dialog explaining that LFS must be closed; the live HUD warns when expected gauge packets are missing, and
 `InputGuard` refuses actuation with `no_outgauge`. A working InSim connection
 alone does not prove that OutGauge works.
 
@@ -112,16 +111,19 @@ socket dying, not a fix for it never being configured.
 
 **OutSim off** — currently harmless; the app does not start its unused OutSim receiver.
 
-## 3. The setup wizard runs once, and only once
+## 3. First-run setup and repair
 
-`core/setup_wizard.py:run_setup_if_needed()` is called first thing in
-`LFSAssistantApp.__init__`. It is skipped entirely if a `.setup_done` file exists next
-to the executable / project root.
+`core/setup_wizard.py:run_setup_if_needed()` runs after settings are loaded in
+`LFSAssistantApp.__init__`. It is skipped when `.setup_done` contains `true`
+in the persistent user-data directory (repository root for source runs).
 
 Wizard steps: wait for LFS to close → locate `cfg.txt` (defaults to `C:\LFS\cfg.txt`,
 otherwise a file dialog) → confirm and patch `cfg.txt` → optionally append `/insim 29999`
-to `autoexec.lfs` → optionally copy `layouts/*.lyt` into `<LFS>/data/layout/` → write
-`.setup_done`.
+to `autoexec.lfs` → optionally copy `layouts/*.lyt` into `<LFS>/data/layout/` → persist the selected LFS directory and write
+`.setup_done`. Cancelling the wizard aborts startup. The final page lists the
+remaining manual control/gearbox checks; `--setup` reruns it. Config writes
+recheck that LFS is closed, preserve original backups and replace atomically.
+Duplicate telemetry keys are removed and unrelated non-UTF-8 text is preserved.
 
 **Startup validation runs independently of `.setup_done`.**
 `core/outgauge_config.py` checks saved OutGauge settings before the main InSim
@@ -167,3 +169,10 @@ see `testing.md`, "If a driving trace has no OutGauge". Keep the validated cfg.t
 path until the replacement has been exercised against the running game.
 OutSim has an InSim-side request too (`SMALL_SSP`); the add-on does not currently
 need OutSim.
+
+## Release packaging
+
+See `../RELEASE.md` and `../PACTDrivingAssistant.spec`. Frozen resources use
+`sys._MEIPASS`; settings and setup state use `%LOCALAPPDATA%/PACTDrivingAssistant`
+so installing an update cannot overwrite them. Guardian uses a separate entry
+mode of the executable with explicit persistent paths.

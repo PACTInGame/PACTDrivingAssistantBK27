@@ -1,0 +1,38 @@
+{
+  "name": "26_foward_collision_warning_hard_scenario",
+  "description": "two leading cars, first leading car stops, second rear Ends first. Collision warning should detect first car, and brake even though the car Right in front still accelerates. For a pass, a small tap is acceptable, but significantly reduced Impact is necessary.",
+  "created_utc": "2026-09-19T14:01:03Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 46.488
+}

@@ -193,16 +193,14 @@ needs `STANDSTILL_EXIT_KMH` (2.0 km/h). That number separates settling from
 rolling away physically: on a 5 % gradient a ≈ 0.49 m/s², so a car that really
 rolls is past 1.8 km/h within the hold window, and rebound never is.
 
-`known-issues.md`: the **throttle cut did not stay effective** (#46 — LFS went
-back to reading the held left button despite `/key -1 throttle`), and the
-**automatic gearbox upshifted into the stop** (#47, fixed 2026-09-19). Neither
-prevented the stop, but neither is the behaviour the design above assumes.
-
-Note what #46's measurement rested on: the cut "cost no deceleration only
-because the clutch happened to be open" — and that open clutch was #47's
-doing. With the gearbox no longer holding it, **#46 has to be re-measured**;
-the drivetrain is now closed during an intervention, which is the condition
-under which a leaked throttle actually fights the brake.
+Throttle suppression must be verified independently of braking: an open clutch
+can hide a throttle that is still applied. The old `/key -1 throttle` command
+was invalid and has been replaced by tracked input release for keys/mouse.
+For `wheel_js`, the user confirmed on 2026-09-20 that the held pedal's throttle
+reading falls to zero during intervention and normal pedal control returns
+afterwards. This check followed saving the actual controller configuration and
+restarting LFS and the add-on; the previous missing throttle assignment was a
+stale disk snapshot (`lfs-config-files.md`). No axis number is a portable default.
 
 ### 2.3 OutGauge closes the loop
 
@@ -220,6 +218,21 @@ everything on `own_vehicle.is_local_driver` before believing it.
 ---
 
 ## 3. The two actuation paths
+
+Release gates: the menu requests braking over `emergency_brake_mode_requested`,
+including while AEB is off; an axis-mode driver without ready vJoy/calibration
+cannot select mode 2. This capability check does not acquire a device or change
+an LFS assignment. Enabling the setting does not bypass runtime guards.
+Runtime axis output requires a live guardian (one nonblocking process status
+query per pass). A failed vJoy write refuses takeover or hands back an existing
+one. Brake and throttle refuse a takeover if its durable recovery marker cannot
+be written; marker replacement is atomic so a failed update retains prior claims.
+Marker writes still occur on takeover/handback, not every steady-state cycle;
+moving that existing filesystem work out of the assistance thread remains open.
+
+Pedal-learning diagnostics are rate-limited by pedal, even when sample counts
+change. They describe physical-pedal arbitration, not whether the virtual brake
+can actuate; a missing fit still invokes full-brake fallback.
 
 ### 3.1 mouse_kb — key injection, bound to the driver's own key
 
@@ -270,7 +283,7 @@ Rules that follow, all resting on the physical-state tracking above:
   driver commanded*, which is precisely what a throttle cut is for. The
   throttle path therefore does exactly what this line forbids, on purpose, and
   presses the input again on handback only if the driver never let go
-  (`Controls/throttle_cut.py`, `known-issues.md` #46). Before copying either
+  (`Controls/throttle_cut.py`). Before copying either
   rule to a new function, work out which way its sign points.
 - **Re-press when the driver releases during an intervention.** The inverse case: the
   driver lets go while AEB still wants brake — LFS gets the genuine keyup, so we must

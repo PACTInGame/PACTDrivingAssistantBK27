@@ -123,6 +123,9 @@ grep before editing. Keys may be added, never removed or renamed.
 | `pdc_beep_allowed` | `{allowed: bool}` — **on change only**, `False` after 1 s at a standstill | `ParkDistanceControl` | `UIManager` |
 | `needed_deceleration_update` | `{deceleration: float, source: str}` m/s² | `ForwardCollisionWarning`, `CrossTrafficWarning`, `BlindSpotWarning` | `EmergencyBrake` |
 | `emergency_brake_changed` | `{active: bool, source: str\|None}` — which warning asked for it | `EmergencyBrake` | `UIManager` |
+| `emergency_brake_availability` | `{reason: str\|None}` — output readiness, including `guardian_not_ready`; on change | `EmergencyBrake` | `MenuSystem` |
+| `emergency_brake_mode_requested` | `{enabled: bool}` — request mode 2 or warning-only; actuator validates hardware before enabling | `MenuSystem` | `EmergencyBrake` |
+| `emergency_brake_enable_refused` | `{reason: str}` — per-click guidance, including missing/loading vJoy or unknown control mode; setting unchanged | `EmergencyBrake` | `MenuSystem` |
 | `gearbox_availability` | `{reason: str\|None}` — `None` = available for shifting; `lfs_auto_gears`, `car_not_supported`, `not_calibrated` | `Gearbox` | `MenuSystem` |
 | `ai_traffic_state_changed` | `{active: bool}` | `AIDriver` | `MenuSystem` |
 

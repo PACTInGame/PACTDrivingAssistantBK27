@@ -110,16 +110,20 @@ def test_close_from_the_main_menu_closes_everything(menu, fake_connector):
 
 # ─── Emergency braking sits next to the warning distance ─────────────────────
 
-def test_the_aeb_button_only_cycles_between_warn_and_brake(menu, settings):
-    """0 (off) belongs to the warning switch itself, not to this button."""
+def test_the_aeb_button_requests_enable_before_changing_settings(menu, settings, bus):
+    """The actuator validates requests; an absent subscriber cannot arm it."""
+    requests = []
+    bus.subscribe('emergency_brake_mode_requested', requests.append)
     menu.open_driving_menu()
     settings.set('automatic_emergency_brake', 1)
 
     menu._handle_menu_click(32)
-    assert settings.get('automatic_emergency_brake') == 2
-
-    menu._handle_menu_click(32)
     assert settings.get('automatic_emergency_brake') == 1
+    assert requests == [{'enabled': True}]
+
+    settings.set('automatic_emergency_brake', 2)
+    menu._handle_menu_click(32)
+    assert requests[-1] == {'enabled': False}
 
 
 def test_the_aeb_button_is_red_while_braking_cannot_be_armed(menu, settings, bus):

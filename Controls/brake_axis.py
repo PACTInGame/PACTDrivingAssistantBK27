@@ -64,7 +64,7 @@ import time
 from typing import Optional
 
 from Controls.handover_marker import HandoverMarker
-from misc.helpers import resolve_path
+from misc.helpers import resolve_path, resolve_data_path
 from misc.vjoy_device import VJoyDevice
 
 logger = logging.getLogger(__name__)
@@ -192,17 +192,27 @@ class AxisBrakeOutput:
         finally:
             self._guardian_pending = False
 
+    def guardian_ready(self):
+        """Nonblocking process-status check; no spawn or wait on the cycle thread."""
+        return self._guardian is not None and self._guardian.poll() is None
+
     def apply(self, fraction: float) -> bool:
         """Command *fraction* (0..1) of full braking. Returns True while engaged."""
         fraction = max(0.0, min(1.0, float(fraction)))
         if not self.device.acquire():
             return False
 
-        self.device.set_raw(self._raw_for(fraction))
+        if not self.device.set_raw(self._raw_for(fraction)):
+            # A disconnected device retains its last value. Never switch LFS
+            # onto an axis we cannot feed; hand back an existing intervention.
+            self.release()
+            return False
         if not self._holds_axis:
             # Value first, then the swap: the local write is instant, the
             # command is a TCP round trip away.
-            self.marker.claim(MARKER_OWNER, f"/axis {self.driver_axis} brake")
+            if not self.marker.claim(MARKER_OWNER, f"/axis {self.driver_axis} brake"):
+                self.device.set_raw(self._raw_for(0.0))
+                return False
             self.event_bus.emit('send_command_to_lfs',
                                 f"/axis {self.lfs_axis} brake")
             self._holds_axis = True
@@ -259,17 +269,23 @@ class AxisBrakeOutput:
 
 def _spawn_guardian(watched_pid: int):
     """Start ``guardian.py`` as a detached process. Returns the Popen or None."""
-    script = resolve_path('guardian.py')
-    if not os.path.isfile(script):
-        logger.error("guardian.py is missing - the brake axis has no watchdog.")
-        return None
+    if getattr(sys, 'frozen', False):
+        command = [sys.executable, '--guardian']
+    else:
+        script = resolve_path('guardian.py')
+        if not os.path.isfile(script):
+            logger.error("guardian.py is missing - the brake axis has no watchdog.")
+            return None
+        command = [sys.executable, script]
+    command += [str(watched_pid), resolve_data_path('settings.json'),
+                resolve_data_path('brake_axis_held.marker')]
     # No console window, and not part of our process group: it has to survive
     # a Ctrl+C or a kill that takes us down.
     flags = 0
     if sys.platform.startswith('win'):
         flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) |             getattr(subprocess, 'DETACHED_PROCESS', 0)
     try:
-        process = subprocess.Popen([sys.executable, script, str(watched_pid)],
+        process = subprocess.Popen(command,
                                    creationflags=flags,
                                    stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL,

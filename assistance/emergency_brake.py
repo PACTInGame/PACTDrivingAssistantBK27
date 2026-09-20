@@ -287,12 +287,40 @@ class EmergencyBrake(AssistanceSystem):
         # intervention.
         self._throttle_reason_reported: Any = _UNKNOWN
         self._blind_arbitration_reported = False
+        self._driver_mode = None
 
         self.event_bus.subscribe('needed_deceleration_update', self._on_deceleration)
         self.event_bus.subscribe('lfs_connected', self._on_connection_changed)
         self.event_bus.subscribe('new_keybinding', self._on_keybinding_changed)
         self.event_bus.subscribe('state_data', self._on_state_data)
         self.event_bus.subscribe('player_name_changed', self._on_player_changed)
+        self.event_bus.subscribe('emergency_brake_mode_requested', self._on_mode_requested)
+
+    def on_own_vehicle_updated(self, own_vehicle):
+        # O(1); metadata follows NPL/PFL independently of the camera.
+        self._driver_mode = own_vehicle.data.control_mode
+
+    def _on_mode_requested(self, data):
+        """Validate a menu request even while warning-only mode skips process()."""
+        if not isinstance(data, dict):
+            return
+        if not data.get('enabled'):
+            self.settings.set('automatic_emergency_brake', 1)
+            return
+        reason = None
+        if self._driver_mode is None:
+            reason = 'control_mode_unknown'
+        elif self._driver_mode not in MOUSE_KB_MODES:
+            device = self.axis_output.device
+            reason = (device.unavailable_reason() if device.prepare()
+                      else REASON_LOADING)
+            if reason is None:
+                reason = self.axis_output.unavailable_reason()
+        if reason is not None:
+            self._publish_availability(reason)
+            self.event_bus.emit('emergency_brake_enable_refused', {'reason': reason})
+            return
+        self.settings.set('automatic_emergency_brake', AEB_MODE_BRAKE)
 
     def _read_lfs_axes(self):
         """LFS's own axis assignments, anchored on the brake axis we know.
@@ -403,9 +431,12 @@ class EmergencyBrake(AssistanceSystem):
         Laeuft auf dem Paket-Thread, aber nur bei IS_NPL - ein paar Mal pro
         Sitzung, nicht pro Zyklus.
         """
-        if not isinstance(data, dict) or not self._armed():
+        if not isinstance(data, dict):
             return
         control_mode = data.get('control_mode')
+        self._driver_mode = control_mode
+        if not self._armed():
+            return
         if control_mode is None:
             return
         self._output_for(control_mode)
@@ -666,11 +697,14 @@ class EmergencyBrake(AssistanceSystem):
             # single startup (known-issues #56).
             return None
         if reason is None:
-            self._publish_availability(None)
             # Start the watchdog now, not at the first intervention: by then it
             # is too late to pay for process creation, and it only helps if it
             # is already running when we die.
             self.axis_output.start_guardian()
+            if not self.axis_output.guardian_ready():
+                self._publish_availability('guardian_not_ready')
+                return None
+            self._publish_availability(None)
             # Both are idempotent and both have to be up *before* the first
             # intervention: the guardian because process creation is too slow
             # to pay for at that moment, the pedal watch because it needs a

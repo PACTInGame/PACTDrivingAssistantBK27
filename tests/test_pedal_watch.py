@@ -699,3 +699,15 @@ def test_nothing_is_said_before_the_driver_has_touched_the_pedal(
 
     assert [r for r in caplog.records
             if 'not identified yet' in r.getMessage()] == []
+
+
+def test_changing_sample_counts_cannot_bypass_log_throttle(bus, settings, caplog):
+    watch = PedalWatch(bus, settings)
+    watch.clock = lambda: 5.0
+    learner = watch._learners['brake']
+    learner.add((0.0,), 0.5)
+    with caplog.at_level(logging.INFO, logger='misc.pedal_watch'):
+        for count in range(40):
+            learner.refusal = f'only {count} usable samples'
+            watch._report_refusal('brake', learner)
+    assert sum('not identified yet' in r.getMessage() for r in caplog.records) == 1

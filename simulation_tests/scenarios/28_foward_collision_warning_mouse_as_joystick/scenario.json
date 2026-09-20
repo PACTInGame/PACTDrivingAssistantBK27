@@ -1,0 +1,38 @@
+{
+  "name": "28_foward_collision_warning_mouse_as_joystick",
+  "description": "Collision Warning Scenario with LFS in Wheel/Joystick mode. Vjoy needs to brake with virtual axes, Setting the brake to a Keyboard key is not possible in this mode. Difference to a normal racing Wheel: lfs uses a combined brake/throttle axis in this Scenario. The user Needs to set this in the Settings and then the addon Needs to brake correctly. More difficult Scenario with steering and a bit of Manual braking.",
+  "created_utc": "2026-09-19T16:02:18Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 59.625
+}

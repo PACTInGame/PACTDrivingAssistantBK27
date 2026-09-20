@@ -1,0 +1,36 @@
+{
+  "name": "12_high_speed_collision_warning",
+  "description": "Mouse/Keyboard driving: highest speed, where the collision warning brake intervention should prevent a collision",
+  "created_utc": "2026-09-19T10:04:42Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 56.92
+}

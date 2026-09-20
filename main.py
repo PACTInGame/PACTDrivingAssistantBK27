@@ -8,7 +8,7 @@ import pyinsim
 from assistance.manager import AssistanceManager
 from core.connection_test import LfsConnectionTest
 from core.event_bus import EventBus
-from core.outgauge_config import validate_startup
+from core.outgauge_config import validate_startup, show_startup_warning
 from core.settings_manager import SettingsManager
 from core.setup_wizard import run_setup_if_needed
 from core.single_instance import SingleInstance
@@ -61,11 +61,11 @@ class LFSAssistantApp:
             sys.exit("Already running")
 
         # --- First-time setup (blocks until wizard is closed) ---
-        run_setup_if_needed()
+        self.settings = SettingsManager()
+        run_setup_if_needed(self.settings)
 
         # Core-Komponenten
         self.event_bus = EventBus()
-        self.settings = SettingsManager()
         self.thread_manager = ThreadManager(self.event_bus)
         self._shutdown_done = False
 
@@ -194,7 +194,8 @@ class LFSAssistantApp:
 
         self.install_signal_handlers()
         try:
-            validate_startup(self.event_bus, self.settings.get('lfs_directory'))
+            show_startup_warning(validate_startup(
+                self.event_bus, self.settings.get('lfs_directory')))
             # LFS-Verbindung herstellen
             self.lfs_connector.connect()
 

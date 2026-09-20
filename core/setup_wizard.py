@@ -7,17 +7,18 @@ import glob
 import os
 import re
 import shutil
+import tempfile
 
 import psutil
 
-from misc.helpers import resolve_path
+from misc.helpers import resolve_path, resolve_data_path
 from misc.platform_shim import get_tkinter
 
 # --- Constants ---
 
 def _get_flag_file_path() -> str:
-    """Returns the path to the setup flag file, next to the executable or project root."""
-    return resolve_path('.setup_done')
+    """Return the persistent per-user setup flag (repository for source runs)."""
+    return resolve_data_path('.setup_done')
 
 DEFAULT_LFS_CFG_PATH = r"C:\LFS\cfg.txt"
 
@@ -78,13 +79,30 @@ def _is_lfs_running() -> bool:
 # ---------------------------------------------------------------------------
 
 def _read_cfg(path: str) -> list[str]:
-    with open(path, 'r', encoding='utf-8') as f:
+    # LFS may contain local ANSI text. Preserve every unrelated byte.
+    with open(path, 'r', encoding='utf-8', errors='surrogateescape', newline='') as f:
         return f.readlines()
 
 
 def _write_cfg(path: str, lines: list[str]):
-    with open(path, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
+    """Keep the original backup and replace atomically on the same volume."""
+    if _is_lfs_running():
+        raise RuntimeError('Close LFS before changing cfg.txt; LFS overwrites it on exit.')
+    backup = path + '.pact-backup'
+    if os.path.exists(path) and not os.path.exists(backup):
+        shutil.copy2(path, backup)
+    fd, temporary = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8', errors='surrogateescape', newline='') as f:
+            f.writelines(lines)
+            f.flush()
+            os.fsync(f.fileno())
+        if _is_lfs_running():
+            raise RuntimeError('LFS was started during setup. Close it and retry.')
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
 
 
 def apply_cfg_settings(cfg_path: str):
@@ -100,12 +118,12 @@ def apply_cfg_settings(cfg_path: str):
     for line in lines:
         stripped = line.rstrip('\n').rstrip('\r')
         matched = False
-        for key in list(remaining_keys.keys()):
+        for key in REQUIRED_CFG_SETTINGS:
             # Match lines like "OutSim Mode 2" — key at start, then whitespace, then value
-            pattern = rf'^{re.escape(key)}\s+'
+            pattern = rf'^\s*{re.escape(key)}(?:\s|$)'
             if re.match(pattern, stripped):
-                new_lines.append(f"{key} {remaining_keys[key]}\n")
-                del remaining_keys[key]
+                if key in remaining_keys:
+                    new_lines.append(f"{key} {remaining_keys.pop(key)}\r\n")
                 matched = True
                 break
         if not matched:
@@ -126,17 +144,16 @@ def add_insim_autoexec(lfs_dir: str):
 
     existing = ""
     if os.path.isfile(autoexec_path):
-        with open(autoexec_path, 'r', encoding='utf-8') as f:
-            existing = f.read()
+        existing = ''.join(_read_cfg(autoexec_path))
 
-    if INSIM_AUTOEXEC_LINE in existing:
-        return  # already present
-
-    with open(autoexec_path, 'a', encoding='utf-8') as f:
-        # Ensure we start on a new line
-        if existing and not existing.endswith('\n'):
-            f.write('\n')
-        f.write(INSIM_AUTOEXEC_LINE + '\n')
+    # Comments and /insim 299990 are not a working startup command. Replace
+    # active assignments so a later /insim 0 cannot undo the desired port.
+    lines = [line for line in existing.splitlines(keepends=True)
+             if not re.match(r'^\s*/insim(?:\s|$)', line, re.IGNORECASE)]
+    if lines and not lines[-1].endswith('\n'):
+        lines[-1] += '\n'
+    lines.append(INSIM_AUTOEXEC_LINE + '\n')
+    _write_cfg(autoexec_path, lines)
 
 
 def copy_layout_files(lfs_dir: str) -> int:
@@ -166,11 +183,13 @@ def copy_layout_files(lfs_dir: str) -> int:
 class SetupWizard:
     """A simple, step-by-step Tkinter wizard for first-time LFS configuration."""
 
-    def __init__(self):
+    def __init__(self, settings=None):
+        self.settings = settings
+        self.completed = False
         tk = get_tkinter()
         self.root = tk.Tk()
         self.root.title("LFS Assistant – First-Time Setup")
-        self.root.geometry("520x260")
+        self.root.geometry("560x480")
         self.root.resizable(False, False)
 
         self.cfg_path: str | None = None
@@ -236,9 +255,11 @@ class SetupWizard:
         self.info_label.config(text="")
         self._clear_buttons()
 
-        if os.path.isfile(DEFAULT_LFS_CFG_PATH):
-            self.cfg_path = DEFAULT_LFS_CFG_PATH
-            self.lfs_dir = os.path.dirname(DEFAULT_LFS_CFG_PATH)
+        saved_cfg = (os.path.join(self.settings.get('lfs_directory'), 'cfg.txt')
+                     if self.settings is not None else DEFAULT_LFS_CFG_PATH)
+        if os.path.isfile(saved_cfg):
+            self.cfg_path = saved_cfg
+            self.lfs_dir = os.path.dirname(saved_cfg)
             self.status_label.config(text="LFS installation found!")
             self.path_var.set(self.cfg_path)
             self.root.after(400, self._step_show_apply_button)
@@ -275,6 +296,9 @@ class SetupWizard:
         )
         btn.pack()
 
+        get_tkinter().Button(self.button_frame, text="Choose another LFS folder…",
+                             command=self._browse_cfg).pack()
+
     def _confirm_apply_cfg(self):
         """Ask for confirmation, then apply."""
         messagebox = get_tkinter().messagebox
@@ -307,6 +331,9 @@ class SetupWizard:
                 add_insim_autoexec(self.lfs_dir)
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to update autoexec.lfs:\n{e}")
+                get_tkinter().Button(self.button_frame, text="Retry InSim setup",
+                                     command=self._step_ask_insim_autostart).pack()
+                return
         self._step_copy_layouts()
 
     def _step_copy_layouts(self):
@@ -344,14 +371,31 @@ class SetupWizard:
     def _step_done(self):
         """Final step: inform user and let them close the window."""
         self._clear_buttons()
-        self.status_label.config(text="Alright, you are all set!")
-        self.info_label.config(text="Close this window to start the LFS Assistant.")
+        self.status_label.config(text="LFS connection setup completed")
+        self.info_label.config(text=(
+            "Start LFS after closing this window.\n\n"
+            "In PACT's Keys menu, match brake, throttle, clutch and shift keys "
+            "to your own LFS bindings. Calibrate the automatic gearbox per car.\n\n"
+            "Wheel/joystick (including mouse axes): warnings work without vJoy. "
+            "Braking requires vJoy and verified driver/virtual brake axes and "
+            "polarity. Never copy another user's axis numbers. See RELEASE.md.\n\n"
+            "Updates keep your settings in your Windows user profile."))
         btn = get_tkinter().Button(
             self.button_frame, text="Close", width=14,
             command=self.root.destroy
         )
         btn.pack()
-        mark_setup_done()
+        try:
+            if self.settings is not None:
+                self.settings.set('lfs_directory', self.lfs_dir)
+                self.settings.flush()
+                if self.settings._dirty:
+                    raise OSError('Cannot save the LFS folder. Check access to your user data folder.')
+            mark_setup_done()
+        except OSError as exc:
+            get_tkinter().messagebox.showerror('Setup incomplete', str(exc))
+            return
+        self.completed = True
 
     # --- Helpers ---
 
@@ -368,7 +412,7 @@ class SetupWizard:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_setup_if_needed() -> bool:
+def run_setup_if_needed(settings=None) -> bool:
     """
     If this is the first run, show the setup wizard (blocking).
     Returns True if setup was performed, False if it was skipped.
@@ -380,10 +424,11 @@ def run_setup_if_needed() -> bool:
         # No Tk on this machine: the wizard cannot be shown. Say so instead of
         # silently doing nothing -- LFS still has to be configured by hand
         # (reference/lfs-setup.md).
-        print("Setup wizard unavailable: tkinter could not be imported. "
-              "Configure LFS manually, see reference/lfs-setup.md.")
-        return False
+        raise SystemExit("Setup wizard unavailable: tkinter could not be imported. "
+                         "Configure LFS manually, see RELEASE.md.")
 
-    wizard = SetupWizard()
+    wizard = SetupWizard(settings)
     wizard.run()
+    if not wizard.completed:
+        raise SystemExit('Setup cancelled. Start the assistant again to complete setup.')
     return True

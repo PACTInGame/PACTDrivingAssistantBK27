@@ -134,7 +134,8 @@ class _ThrottleCut:
         commands = self._restore_commands()
         if not commands:
             return False
-        self.marker.claim(MARKER_OWNER, commands)
+        if not self.marker.claim(MARKER_OWNER, commands):
+            return False
         cut_command = self._cut_command()
         if cut_command is not None:
             self.event_bus.emit('send_command_to_lfs', cut_command)

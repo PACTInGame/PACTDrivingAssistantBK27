@@ -617,6 +617,22 @@ def demand(bus, deceleration: float, source: str = 'forward_collision'):
              {'deceleration': deceleration, 'source': source})
 
 
+@pytest.mark.parametrize('mode', [0, 1, 2])
+def test_enable_request_without_vjoy_only_allows_key_modes(bus, aeb_factory, mode):
+    system = aeb_factory(mode=1)
+    system._driver_mode = mode
+    class MissingDevice:
+        def prepare(self):
+            return True
+        def unavailable_reason(self):
+            return 'vjoy_not_installed'
+    system.axis_output.device = MissingDevice()
+    bus.emit('emergency_brake_mode_requested', {'enabled': True})
+    assert system.settings.get('automatic_emergency_brake') == (1 if mode == 2 else 2)
+    bus.emit('emergency_brake_mode_requested', {'enabled': False})
+    assert system.settings.get('automatic_emergency_brake') == 1
+
+
 def test_a_silent_outgauge_stream_refuses_to_arm(
         bus, aeb_factory, braking_car, keyboard, recorder):
     """The whole of known-issues #51, in one pass.
@@ -740,6 +756,7 @@ def wheel_aeb(bus, make_settings, physical, keyboard):
                                 pedals=pedals)
         system.axis_output.device = _AlwaysThereDevice()
         system.axis_output.start_guardian = lambda: None
+        system.axis_output.guardian_ready = lambda: True
         return system
 
     return _make
@@ -771,7 +788,7 @@ class _AlwaysThereDevice:
 
 def wheel_at(make_own_vehicle, speed=80.0, **kwargs):
     return make_own_vehicle(speed=speed, local_plid=1, plid=1, control_mode=2,
-                            **kwargs)
+                              **kwargs)
 
 
 def test_the_axis_path_never_commands_less_than_the_driver_is_braking(
@@ -1544,3 +1561,13 @@ def test_first_idle_cycle_clears_startup_throttle_binding_warning(aeb_factory, b
     count = seen.count('throttle_cut_availability')
     system.process(braking_car, {})
     assert seen.count('throttle_cut_availability') == count
+
+
+def test_dead_guardian_blocks_axis_takeover(wheel_aeb, make_own_vehicle, bus):
+    system = wheel_aeb(FakePedals())
+    system.axis_output.guardian_ready = lambda: False
+    own = make_own_vehicle(speed=80, local_plid=1, plid=1, control_mode=2)
+    demand(bus, 9.0)
+    system.process(own, {})
+    assert not system.axis_output.holds_axis()
+    assert system._reported_reason == 'guardian_not_ready'

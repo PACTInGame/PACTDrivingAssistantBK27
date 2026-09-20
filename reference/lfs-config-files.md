@@ -112,7 +112,14 @@ The user subsequently confirmed the live assignments for this installation:
 steer 8/invert 0, throttle 9/invert 1, brake 12/invert 1, clutch 13/invert 1.
 These agree with the older file after offset +1, but are not portable defaults
 and do not validate choosing an older file automatically on other machines.
-Next check: inspect which controller snapshot LFS updates after a normal exit.
+Confirmed after the user closed LFS normally: `FANATEC_Wheel_3.csf` was
+rewritten with steer 7/invert 0 and throttle 8/invert 1; brake 11/invert 1
+and clutch 12/invert 1 remained. The current reader resolves exactly the
+user-confirmed live assignments (8, 9, 12, 13). Combined remains 0xFFFE.
+This case was a stale saved snapshot; no legacy fallback or hardcoded axis
+is needed. The user then confirmed in a live wheel/joystick test that the held throttle
+pedal is suppressed during intervention and works normally after handback.
+This validates this installation, not arbitrary device-enumeration offsets.
 The meaning of `0xFFFD`/`0xFFFE` remains unknown. Never add an offset and pass
 these values to `/axis`: the reader now excludes assignments outside 0..31 and
 invalid polarity, and accepts only observed format versions 1, 6 and 7.

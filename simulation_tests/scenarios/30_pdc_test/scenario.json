@@ -1,0 +1,38 @@
+{
+  "name": "30_pdc_test",
+  "description": "PDC test, where the car approaches a parking vehicle in front and maneuvers around some objects. Small, angled guardrail behind the car in initial position. Cone on right side, Short barrier on left front, layout-car-object (not live-car) right before the end of the recording in front of ego-car.",
+  "created_utc": "2026-09-20T08:30:18Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 46.873
+}

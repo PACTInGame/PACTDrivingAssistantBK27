@@ -1,0 +1,38 @@
+{
+  "name": "20_at_traffic_test",
+  "description": "many vehicles on track. correct layout loaded. AI traffic started (during recording, add on was active). Difficult scenarios, including changing views and exiting the game.",
+  "created_utc": "2026-09-19T12:23:24Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 154.145
+}

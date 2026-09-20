@@ -16,7 +16,7 @@ from misc.language import LanguageManager
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP_DIRS = {'.git', '.claude', '__pycache__', 'pyinsim', 'tests',
-             'audio', 'layouts', 'track_data', 'Controls'}
+             'audio', 'layouts', 'track_data', 'Controls', 'build', 'dist'}
 
 
 @pytest.fixture(scope='module')

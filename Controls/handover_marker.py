@@ -40,7 +40,7 @@ import os
 import threading
 from typing import Dict, Optional
 
-from misc.helpers import resolve_path
+from misc.helpers import resolve_data_path as resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +87,16 @@ class HandoverMarker:
             restore_commands = list(restore_commands)
         with self._lock:
             if self._claims.get(owner) == restore_commands:
-                return
+                return True
+            previous = self._claims.get(owner)
             self._claims[owner] = restore_commands
-            self._write()
+            if self._write():
+                return True
+            if previous is None:
+                self._claims.pop(owner, None)
+            else:
+                self._claims[owner] = previous
+            return False
 
     def release(self, owner: str):
         """*owner* has given its part back; nothing to restore for it any more."""
@@ -113,15 +120,17 @@ class HandoverMarker:
     def _write(self):
         payload = json.dumps({'commands': self.commands()})
         try:
-            with open(self.path, 'w', encoding='utf-8') as handle:
+            with open(self.path + '.tmp', 'w', encoding='utf-8') as handle:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
+            os.replace(self.path + '.tmp', self.path)
+            return True
         except OSError as exc:
-            # Not fatal: without the marker the guardian simply does nothing,
-            # which is the behaviour we had before it existed.
+            # Callers must refuse takeover if recovery cannot be recorded.
             logger.warning("Could not write the handover marker: %s: %s",
                            type(exc).__name__, exc)
+            return False
 
     def _remove(self):
         try:

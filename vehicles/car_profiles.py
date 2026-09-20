@@ -65,7 +65,7 @@ import time
 from collections import deque
 from typing import Any, Dict, Optional
 
-from misc.helpers import resolve_path
+from misc.helpers import resolve_data_path as resolve_path
 
 logger = logging.getLogger(__name__)
 

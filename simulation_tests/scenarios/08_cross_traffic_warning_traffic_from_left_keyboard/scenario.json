@@ -1,0 +1,41 @@
+{
+  "name": "08_cross_traffic_warning_traffic_from_left_keyboard",
+  "description": "Mouse/Keyboard driving: Crossing Scenario with collision for Cross traffic warning testing",
+  "created_utc": "2026-09-19T09:25:58Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu",
+    "Starts with the 99_change_menu recording spliced in front, so the run does not depend on which menu page LFS was left on"
+  ],
+  "markers": [
+    "menu_change",
+    "on_track",
+    "collision_reference"
+  ],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 54.966
+}

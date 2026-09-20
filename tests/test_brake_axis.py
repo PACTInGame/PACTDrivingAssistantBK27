@@ -397,17 +397,17 @@ def test_shutdown_relinquishes_even_when_the_handback_raises(
     assert device.relinquished == 1
 
 
-def test_a_marker_that_cannot_be_written_does_not_stop_the_intervention(
+def test_a_marker_that_cannot_be_written_refuses_the_intervention(
         bus, axis_settings, log, tmp_path):
-    """Without the marker the guardian simply does nothing, which is where we
-    were before it existed -- not a reason to refuse to brake."""
+    """Do not take the pedal without durable crash-recovery information."""
     unwritable = str(tmp_path / 'no-such-directory' / 'brake_axis_held.marker')
     output = AxisBrakeOutput(bus, axis_settings, device=FakeVJoy(log),
                              marker_path=unwritable,
                              spawn=RecordingSpawn(object()))
 
-    assert output.apply(1.0) is True
-    assert ('command', '/axis 15 brake') in log
+    assert output.apply(1.0) is False
+    assert ('command', '/axis 15 brake') not in log
+    assert not output.holds_axis()
 
 
 def test_clearing_a_marker_that_is_already_gone_is_not_an_error(
@@ -828,9 +828,20 @@ def test_a_dll_that_will_not_load_is_reported_as_missing(monkeypatch, tmp_path):
     bogus = tmp_path / 'vJoyInterface.dll'
     bogus.write_bytes(b'not a dll')
     monkeypatch.setattr('misc.vjoy_device._find_dll', lambda: str(bogus))
+    # Simulate the loader failure; never invoke a native error dialog in CI.
+    def fail_load(path):
+        raise OSError('invalid DLL architecture')
+    monkeypatch.setattr('misc.vjoy_device.ctypes.CDLL', fail_load)
     device = VJoyDevice()
 
     assert device.unavailable_reason() == 'vjoy_not_installed'
+
+
+def test_a_failed_axis_write_never_takes_the_driver_brake(axis_output, device, log, monkeypatch):
+    monkeypatch.setattr(device, 'set_raw', lambda value: False)
+    assert axis_output.apply(1.0) is False
+    assert not axis_output.holds_axis()
+    assert log == []
 
 
 def test_an_unacquired_device_refuses_to_write(monkeypatch):

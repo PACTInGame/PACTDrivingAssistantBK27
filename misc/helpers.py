@@ -20,21 +20,30 @@ def get_base_dir() -> str:
 
 
 def resolve_path(*parts: str) -> str:
-    """Join *parts* to the project base directory and return the full path."""
-    return os.path.join(get_base_dir(), *parts)
+    """Read-only bundled resources (also inside PyInstaller's _internal)."""
+    return os.path.join(getattr(sys, '_MEIPASS', get_base_dir()), *parts)
+
+
+def resolve_data_path(*parts: str) -> str:
+    """Persistent per-user state, independent of release/extraction directory."""
+    if getattr(sys, 'frozen', False):
+        base = os.environ.get('LOCALAPPDATA') or os.path.join(
+            os.path.expanduser('~'), 'AppData', 'Local')
+        base = os.path.join(base, 'PACTDrivingAssistant')
+    else:
+        base = get_base_dir()
+    path = os.path.join(base, *parts)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
 
 
 def is_lfs_running():
-    for proc in psutil.process_iter():
+    for proc in psutil.process_iter(['name']):
         try:
-            if proc.name() == "LFS.exe":
-                print("LFS.exe seems to be running. Starting!\n\n")
+            if (proc.info.get('name') or '').lower() == 'lfs.exe':
                 return True
-
-        except psutil.AccessDenied:
-            print(
-                "It seems like you do not have sufficient permissions to check for System Apps. Cannot automatically detect if LFS is running!")
-            return True
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
 
     return False
 

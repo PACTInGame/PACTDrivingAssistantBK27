@@ -57,25 +57,27 @@ the geometry is already committed. A light tap there is acceptable; 44 km/h is n
 
 ## Outstanding live verification
 
-**#46 — Axis throttle cut against a held pedal (`wheel_js`).**
-The key/mouse path is fixed: release tracked input, restore only if still physically
-held. `/key -1 throttle` is invalid and is no longer sent. Still verify that the
-axis path actually suppresses a held throttle pedal and restores driver control.
-Do not infer `/axis -1 throttle` behaviour from the invalid key command.
-See `control-intervention.md` and `Controls/throttle_cut.py`.
+**#58 — Release acceptance on a clean Windows installation is pending.**
+The PyInstaller package has an offline import/asset smoke test, but clean-user
+wizard interaction, no-vJoy operation in game, update retention across released
+packages, audio and crash handback must be exercised on the packaged executable.
+See `RELEASE.md`. Development-machine tests do not establish this.
 
-The `throttle_axis_unknown` part of this entry is out of date. On 2026-09-20
-`FANATEC_Wheel_3.csf` read cleanly as `{steer: 8, throttle: 9, brake: 12,
-clutch: 13}` — the file had been saved again in between, so the missing
-assignment (0xFFFF) was a stale snapshot, not a parser fault. The parser's
-separate special-value bug is fixed too: 0xFFFD/0xFFFE no longer become huge
-axis numbers.
+**#59 — Guided axis commissioning and native mouse-joystick intervention are incomplete.**
+The setup wizard configures LFS telemetry and explains manual controls. It does
+not safely determine arbitrary global LFS axis assignments or verify an unused
+virtual axis and polarity. `vjoy_brake_calibrated` defaults false, so new axis
+users remain warning-only until manually commissioned. Native mouse-axis
+sentinels in controller files cannot be restored as ordinary `/axis` indices;
+full support needs live verification and a dedicated restoration path. Do not
+advertise automatic intervention for all controller configurations yet.
 
-What remains untested is the thing the entry is actually about: whether
-`/axis -1 throttle` suppresses a *held* pedal and gives it back. The key path
-does (measured the same day: `Throttle cut for the intervention (tracked input
-release)` followed by a clean handback). The axis path has not been run against
-a held pedal.
+**#60 — Recovery-marker persistence is synchronous during intervention transitions.**
+The marker is now atomic and takeover fails closed when it cannot be written,
+but its file write/fsync still runs on the assistance thread on engage/release.
+Slow storage can exceed the cycle budget. An acknowledged out-of-process or
+pre-recorded recovery protocol is needed to remove this I/O without opening a
+crash window. No steady-state marker write is performed.
 
 **#50 — Two AI-traffic sub-cases still unexercised.**
 The combined live check is done (`ai-traffic.md` §3, 2026-09-20): all 23 AI cars

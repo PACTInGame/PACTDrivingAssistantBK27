@@ -855,12 +855,16 @@ class PedalWatch:
             return
         now = self.clock()
         last_at = self._refusal_logged_at.get(which)
-        if self._last_refusal.get(which) == reason and last_at is not None \
-                and now - last_at < REFUSAL_LOG_INTERVAL_S:
+        # Counts in the diagnostic change with every sample. They must not
+        # bypass the throttle simply because the formatted text changed.
+        if last_at is not None and now - last_at < REFUSAL_LOG_INTERVAL_S:
             return
         self._last_refusal[which] = reason
         self._refusal_logged_at[which] = now
-        logger.info("The %s pedal is not identified yet: %s.", which, reason)
+        logger.info("The %s pedal is not identified yet: %s. "
+                    "This is physical-pedal learning, not a failed emergency "
+                    "brake; without a brake fit, axis interventions use full "
+                    "braking to avoid undercutting the driver.", which, reason)
 
     def _axis_index(self, which: str) -> Optional[int]:
         """The flat index this pedal's fit currently resolves to, if any."""

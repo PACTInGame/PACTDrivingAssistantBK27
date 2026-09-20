@@ -5,9 +5,9 @@
 ```
 setup_logging()                # console + rotating file handler, once, from __main__
 SingleInstance().acquire()     # TCP 127.0.0.1:29997; a second copy exits 1 here
-run_setup_if_needed()          # blocking Tkinter wizard on first run only (.setup_done flag)
+SettingsManager()              # loaded before setup so the chosen LFS folder is persisted
+run_setup_if_needed(settings)  # blocking Tkinter wizard; cancellation aborts startup
 EventBus()                     # created first, everything else receives it
-SettingsManager()              # loads settings.json, falls back to hardcoded defaults
 ThreadManager(event_bus)
 wait for LFS.exe process       # exponential backoff, sys.exit after ~60 s
 LfsConnectionTest().run_test() # fresh InSim conn per attempt, 5 s timeout, then closes all
@@ -41,6 +41,19 @@ goodbye.
 Component construction order matters: every subscriber must exist before the events it
 cares about are first emitted. Because subscription happens in `__init__`, adding a
 component late in `main.py` can silently miss early events (e.g. the first `IS_STA`).
+
+Frozen builds enter through `release_main.py`. Its `--guardian` dispatch occurs
+before app construction, setup or the single-instance lock; a frozen executable
+cannot run `guardian.py` by treating itself as a Python interpreter.
+`--smoke-test` validates bundled imports/assets without connecting or injecting input.
+`--setup` reruns setup, guarded by the same instance lock.
+
+`misc.helpers.resolve_path` is for read-only resources and uses `sys._MEIPASS`
+when frozen. `resolve_data_path` is for mutable state: frozen builds use
+`%LOCALAPPDATA%/PACTDrivingAssistant`, source runs use the repository. Settings,
+logs, setup state, car/gearbox profiles and guardian markers follow this rule.
+Guardian receives explicit settings and marker paths. Never ship local state
+as PyInstaller data; the spec includes only audio, layouts, routes and instructions.
 
 **Services may be passed by reference; subsystems may not.** The rule "the EventBus is
 the only interface between components" is about *subsystems* — one assistance system must

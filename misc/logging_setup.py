@@ -23,7 +23,7 @@ import threading
 import time
 from typing import Optional
 
-from misc.helpers import resolve_path
+from misc.helpers import resolve_data_path as resolve_path
 
 __all__ = [
     'DEFAULT_LOG_FILE',

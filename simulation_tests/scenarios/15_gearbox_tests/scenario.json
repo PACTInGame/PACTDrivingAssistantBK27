@@ -1,0 +1,38 @@
+{
+  "name": "15_gearbox_tests",
+  "description": "Mouse/Keyboard driving: accelerating and braking with different cars. The LFS-side gearbox mode is NOT set by this recording and decides what the run tests - always confirm it with the driver before starting.",
+  "created_utc": "2026-09-19T10:12:53Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu",
+    "LFS control mode is mouse/keyboard - this recording replays mouse input and steers with it; in wheel/joystick mode the car does not move",
+    "ASK THE DRIVER which gearbox mode is set (SHIFT+G) and record it with the run. Mouse/keyboard offers manual and automatic; wheel/joystick offers automatic, sequential and H-pattern. The add-on's automatic gearbox only acts in mouse/keyboard 'manual' or wheel/joystick 'sequential' - with PIF_AUTOGEARS set it stands down and the run tests nothing. Two live runs (2026-09-19, 2026-09-20) were wasted this way."
+  ],
+  "markers": [],
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 273.979
+}

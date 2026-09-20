@@ -1,0 +1,38 @@
+{
+  "name": "21_ai_traffic_started_from_another_car",
+  "description": "Scenario 20 with the camera moved to another car (one TAB) before AI traffic is started. Everything else is identical and every timestamp is unchanged, so the two traces can be compared line by line. Checks that the start does not depend on which car OutGauge is describing.",
+  "created_utc": "2026-09-19T14:40:00Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 154.145
+}

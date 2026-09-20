@@ -1,0 +1,38 @@
+{
+  "name": "31_perpendicular_parking_test",
+  "description": "Automatic-parking scenario. Recorded scenario drives by a parking-spot. System should detect and offer automated parking. Recording doesnt touch a thing, parking would need to take over. Recording is long enough for maneuver to be completed. Perpendicular Parking. Four possible spots, one behind another car, 3 between two cars.",
+  "created_utc": "2026-09-20T08:35:01Z",
+  "preconditions": [
+    "LFS is running with InSim enabled on port 29999",
+    "LFS is at the main menu"
+  ],
+  "markers": [],
+  "disabled": false,
+  "disabled_reason": "",
+  "tracer": {
+    "script": "insim_trace.py",
+    "packets": [
+      "STA",
+      "CIM",
+      "NPL",
+      "PLP",
+      "PLL",
+      "MCI",
+      "CON",
+      "OBH",
+      "MSO",
+      "BTC",
+      "RST",
+      "AXI"
+    ],
+    "mci_interval_ms": 100,
+    "outgauge_interval_ms": 50,
+    "outsim_interval_ms": 0
+  },
+  "run": {
+    "tail_s": 2.0,
+    "require_main_menu": true,
+    "menu_timeout_s": 20.0
+  },
+  "duration_s": 104.826
+}

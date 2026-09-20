@@ -18,6 +18,24 @@ class LanguageManager:
 
         # Translation dictionary - organized by English key, then by language code
         self.translations = {
+            "Join the track before enabling braking": {
+                "en": "Join the track before enabling braking", "de": "Zum Aktivieren erst auf die Strecke",
+                "it": "Entra in pista prima di attivare la frenata", "fr": "Entrez en piste avant d'activer le freinage",
+                "tr": "Frenlemeyi açmadan önce piste girin", "no": "Kjør ut på banen før bremsing aktiveres",
+                "dk": "Kør ud på banen før bremsning aktiveres", "se": "Kör ut på banan innan bromsning aktiveras"
+            },
+            "Checking vJoy - try again shortly": {
+                "en": "Checking vJoy - try again shortly", "de": "vJoy wird geprüft - gleich erneut versuchen",
+                "it": "Verifica vJoy - riprova tra poco", "fr": "Vérification vJoy - réessayez bientôt",
+                "tr": "vJoy denetleniyor - birazdan tekrar deneyin", "no": "Sjekker vJoy - prøv igjen snart",
+                "dk": "Kontrollerer vJoy - prøv igen snart", "se": "Kontrollerar vJoy - försök snart igen"
+            },
+            "Brake watchdog is not ready": {
+                "en": "Brake watchdog is not ready", "de": "Bremsüberwachung ist nicht bereit",
+                "it": "Sorveglianza freno non pronta", "fr": "Surveillance du frein non prête",
+                "tr": "Fren gözetimi hazır değil", "no": "Bremseovervåking er ikke klar",
+                "dk": "Bremseovervågning er ikke klar", "se": "Bromsövervakning är inte klar"
+            },
             "Check handbrake binding": {
                 "en": "Auto Hold: check handbrake key / axis in LFS",
                 "de": "Auto Hold: Handbremstaste / Achse in LFS prüfen",
