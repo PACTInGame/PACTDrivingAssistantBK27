@@ -17,9 +17,9 @@ detector that is *stricter* than the planner only means a space is missed,
 which is a disappointment rather than a defect.
 
 The one thing this cannot cover is the driver's lateral distance from the
-parked row. Below about 2.3 m there is no space of any length the car can
-swing into, and that is a property of where the driver stopped, not of the
-space; :data:`LATERAL_OFFSETS` therefore starts above it.
+parked row. Too close to it there is no space of any length the car can swing
+into, and that is a property of where the driver stopped, not of the space;
+:data:`LATERAL_OFFSETS` therefore starts above it.
 """
 
 import pytest
@@ -27,24 +27,26 @@ import pytest
 from assistance.parking.geometry import OrientedBox, Pose, VehicleShape
 from assistance.parking.slot_detection import (KIND_PARALLEL, Obstacle,
                                                ParkingSlotDetector)
-from assistance.parking.trajectory import ParkingPlanner
+from assistance.parking.trajectory import (ParkingPlanner,
+                                           planning_radius_for)
 
 # Smallest and largest the conservative size table produces, plus one between.
 CAR_SIZES = ((4.5, 1.8), (4.8, 1.9), (5.2, 2.0))
-# The one corner the length constant cannot cover, and does not claim to: the
-# largest car with the driver closest to the parked row needs up to 4.3 m of
-# slack, which no constant that also serves a 4.5 m car could promise. It is
-# excluded here and documented in ``slot_detection`` -- and it is *safe* to
-# exclude, because the planner refuses it and ``ParkAssist`` demotes it and
-# offers the next space (``TestRanking`` covers that half).
-UNCOVERED = {((5.2, 2.0), 2.6)}
-# The default setting (6.0) and two below it. The setting allows up to 12 m,
-# but a turning circle that large cannot enter a kerbside space at any length
-# from a normal road position -- that is the lateral limit the module
-# docstring describes, and it is the planner's to reject, not the detector's.
+# The default setting (6.0) and two below it. These are the *car's* radii at
+# full lock, exactly as the setting means them, and they go through
+# ``planning_radius_for`` here for the same reason ``ParkAssist`` does -- a
+# test that planned at the lock radius would be agreeing with a planner
+# production never runs. The setting allows up to 12 m, but a turning circle
+# that large cannot enter a kerbside space at any length from a normal road
+# position -- that is the lateral limit the module docstring describes, and it
+# is the planner's to reject, not the detector's.
 TURN_RADII = (4.0, 5.0, 6.0)
-# Centre-to-centre, ego to parked row. See the module docstring.
-LATERAL_OFFSETS = (2.6, 3.0, 3.6)
+# Centre-to-centre, ego to parked row. Starts at 3.0 m -- about 0.8 m of clear
+# air between the flanks -- because below that the manoeuvre is impossible at
+# any length and the planner is the one that has to say so, not the detector.
+# That refusal is not a hole: ``ParkAssist`` demotes the space and offers the
+# next one (``TestRanking`` covers that half).
+LATERAL_OFFSETS = (3.0, 3.6, 4.2)
 NEIGHBOUR = (4.5, 1.9)
 
 
@@ -71,11 +73,10 @@ def test_the_shortest_offered_space_can_be_planned(length, width, radius,
     went wrong in the game, and a margin that only works above it is not a
     margin.
     """
-    if ((length, width), lateral) in UNCOVERED:
-        pytest.skip("documented gap in what a length constant can promise")
     shape = shape_for(length, width)
     detector = ParkingSlotDetector(shape)
-    planner = ParkingPlanner(shape, min_turn_radius=radius)
+    planner = ParkingPlanner(shape,
+                             min_turn_radius=planning_radius_for(radius))
     ego = Pose(0.0, 0.0, 0.0)
 
     shortest = detector.required_length(KIND_PARALLEL)

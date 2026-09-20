@@ -82,17 +82,44 @@ GAIN_LEARNING_RATE = 0.08
 CURVATURE_TRIM_RATE = 1.2
 MAX_CURVATURE_TRIM = 0.6
 
-# Longitudinal control is bang-bang with hysteresis, because the throttle on a
-# mouse/keyboard driver's car is a key and a key has no travel. At the 1.1 m/s
-# a manoeuvre runs at, a +/-15 % band is +/-0.17 m/s and the resulting sawtooth
-# is smaller than the noise in the speed reading.
-SPEED_DEADBAND = 0.15
-# Below this fraction of the demand the brake comes in rather than just lifting
-# off. Coasting is enough for small overspeeds; a real overspeed needs braking.
-BRAKE_OVERSPEED = 1.45
-# And a demand of zero always brakes, whatever the speed: that is a stop, not a
-# coast.
-STOP_BRAKE_SPEED_MPS = 0.15
+# ─── Longitudinal ─────────────────────────────────────────────────────────
+#
+# A PI loop on speed, whose output is a **pedal fraction** that
+# ``Controls/pulse_modulator.py`` turns into a duty cycle on a key. It was
+# bang-bang with a 15 % hysteresis band, on the reasoning that a key has no
+# travel so the loop may as well switch. That reasoning has one hole and it is
+# a big one: LFS has auto-clutch and the car *creeps in gear with no throttle
+# at all*, which at 1.1 m/s is most of the demand already. A full cycle of
+# throttle on top of the creep overshoots, the only answer bang-bang has is a
+# full brake, and the next cycle is under again. A live run recorded the
+# result: ``thr 1.00`` on nearly every line and the speed sawing between 0.3
+# and 2.3 m/s against a 1.1 m/s demand.
+#
+# The integral is what makes the creep a non-problem: whatever the car does by
+# itself becomes the operating point the loop trims around, per gear, without
+# anybody having to measure it.
+
+# Pedal fraction per m/s of error. 1.2 turns the 0.2 m/s a creeping car is
+# typically short by into a 24 % pedal -- a 24 ms pulse in a 100 ms cycle.
+SPEED_KP = 1.2
+# And per m/s per second, so a standing error is gone in about a second.
+SPEED_KI = 0.8
+# The integral alone may never be more than this much pedal. It exists to sit
+# on the creep offset, not to drive the car.
+MAX_SPEED_INTEGRAL = 0.5
+# Inside this much pedal, neither pedal. Coasting is what a car does at
+# walking pace and it is smoother than trimming with 5 ms pulses.
+PEDAL_DEADBAND = 0.06
+# The brake at these speeds has far more authority than the throttle: a
+# stationary-car brake is sized for 50 m/s, and at 1 m/s a tenth of it stops
+# the car in its own length. Braking demands are scaled by this so that the
+# same loop gain does not produce a stab of the brake for every small
+# overspeed.
+BRAKE_AUTHORITY = 0.45
+# A demand of zero is a stop, not a coast, and a stop has to *hold*: the car
+# creeps in gear, a pulsed brake would let it walk forward between pulses, and
+# a gear change needs a genuine standstill. So a stop brakes continuously.
+STOP_BRAKE_DUTY = 1.0
 
 # ─── Gears ────────────────────────────────────────────────────────────────
 
@@ -198,6 +225,7 @@ class VehicleController:
         self.model = model or CurvatureModel()
         self.clock = clock
         self._trim = 0.0
+        self._speed_integral = 0.0
         self._last_command = 0.0
         self._last_update = None
         self._gear_requested_at = None
@@ -216,6 +244,7 @@ class VehicleController:
     def reset(self):
         """Forget the loop state, keep what has been learned about the car."""
         self._trim = 0.0
+        self._speed_integral = 0.0
         self._last_command = 0.0
         self._last_update = None
         self._gear_requested_at = None
@@ -250,7 +279,7 @@ class VehicleController:
         gear_ready = self._manage_gear(gear_wanted, state, now)
 
         steer = self._steer_command(demand, state, dt)
-        throttle, brake = self._pedal_commands(demand, state, gear_ready)
+        throttle, brake = self._pedal_commands(demand, state, gear_ready, dt)
 
         fault = None
         if not self.steering.set(steer):
@@ -285,8 +314,15 @@ class VehicleController:
             signed_speed = -state.speed_mps if state.reversing else state.speed_mps
             measured = state.yaw_rate / signed_speed
             error = demand.curvature - measured
-            self._trim = _clamp(self._trim + CURVATURE_TRIM_RATE * error * dt,
-                                -MAX_CURVATURE_TRIM, MAX_CURVATURE_TRIM)
+            # Anti-windup, and it matters more here than it looks: the
+            # steering *saturates* on every tight stroke, and an error
+            # integrated against a wheel that is already on the stop is a
+            # correction that will be applied later, pointing the wrong way.
+            at_stop = abs(command + self._trim) >= 1.0
+            if not (at_stop and error * (command + self._trim) > 0.0):
+                self._trim = _clamp(
+                    self._trim + CURVATURE_TRIM_RATE * error * dt,
+                    -MAX_CURVATURE_TRIM, MAX_CURVATURE_TRIM)
         elif state.speed_mps < LEARN_MIN_SPEED_MPS:
             # Standing still between strokes: let the trim decay rather than
             # carrying one stroke's correction into the next, which curves the
@@ -297,23 +333,48 @@ class VehicleController:
     # ─── Longitudinal ─────────────────────────────────────────────────
 
     def _pedal_commands(self, demand: ControlDemand, state: VehicleState,
-                        gear_ready: bool):
-        """Bang-bang with hysteresis; the throttle is a key, not a pedal.
+                        gear_ready: bool, dt: float):
+        """A PI loop on speed, in pedal fractions. See the constants above.
 
-        Three cases, in order of how much they matter:
+        Returns ``(throttle, brake)``, each 0..1 and never both non-zero.
+        They are *fractions of a pedal*, not switch positions: the output
+        below turns them into a duty cycle on a key
+        (``Controls/pulse_modulator.py``). A caller that can only switch is
+        still correct -- it just gets the old behaviour back.
 
-        * the gear is not in yet, or the demand is zero -- **brake**, because
-          both mean the car has to be still and neither is a coast;
-        * well over the demanded speed -- brake;
-        * under it -- throttle. In between, neither: coasting is what a car
-          does at walking pace and it is smoother than either pedal.
+        Two cases are not the loop's:
+
+        * the gear is not in yet, or the demand is zero. Both mean the car has
+          to be *still*, and a still car in gear is creeping, so this holds
+          the brake rather than trimming it;
+        * a demand the car is already meeting, within the deadband. Coasting
+          at walking pace is smoother than either pedal and costs nothing.
         """
         if not gear_ready or demand.speed <= 0.0:
-            return 0.0, (1.0 if state.speed_mps > STOP_BRAKE_SPEED_MPS else 0.35)
-        if state.speed_mps > demand.speed * BRAKE_OVERSPEED:
-            return 0.0, 0.5
-        if state.speed_mps < demand.speed * (1.0 - SPEED_DEADBAND):
-            return 1.0, 0.0
+            # No integral is carried through a stop: the next stroke is in the
+            # other gear, where the creep is a different number, and starting
+            # it with the last stroke's trim is how a manoeuvre lurches off.
+            self._speed_integral = 0.0
+            return 0.0, STOP_BRAKE_DUTY
+
+        error = demand.speed - state.speed_mps
+        pedal = SPEED_KP * error + self._speed_integral
+        # Anti-windup: stop integrating once the output is already hard
+        # against a stop and the error is pushing it further that way. Without
+        # it a car that simply cannot reach the demand -- a kerb, a wall, the
+        # driver on the brake -- banks a full pedal of integral and spends it
+        # the instant it comes free.
+        saturated = (pedal >= 1.0 and error > 0.0) or (pedal <= -1.0 and error < 0.0)
+        if dt > 0.0 and not saturated:
+            self._speed_integral = _clamp(
+                self._speed_integral + SPEED_KI * error * dt,
+                -MAX_SPEED_INTEGRAL, MAX_SPEED_INTEGRAL)
+            pedal = SPEED_KP * error + self._speed_integral
+
+        if pedal > PEDAL_DEADBAND:
+            return min(1.0, pedal - PEDAL_DEADBAND), 0.0
+        if pedal < -PEDAL_DEADBAND:
+            return 0.0, min(1.0, (-pedal - PEDAL_DEADBAND) * BRAKE_AUTHORITY)
         return 0.0, 0.0
 
     # ─── Gears ────────────────────────────────────────────────────────

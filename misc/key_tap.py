@@ -305,11 +305,25 @@ def get_key_tapper() -> KeyTapper:
     One instance, therefore one injecting thread for the whole process: two
     systems can never be inside ``instant_input()`` at the same time, and
     :meth:`KeyTapper.release_all` on shutdown really does cover every key.
+
+    It is wired to the shared :class:`~misc.physical_keys.PhysicalKeyState`,
+    so a tap never releases a key the driver is holding on the hardware. That
+    is not an optimisation, it is the key-release trap
+    (``control-intervention.md`` section 3.1) and it became reachable here the
+    moment the parking manoeuvre started *pulsing* the brake rather than
+    holding it: a pulse that ends while the driver is on the brake would take
+    their brake away, ten times a second. Asking costs a dict lookup, only on
+    release, and the tracker answers ``False`` harmlessly when its hooks were
+    never installed.
     """
     global _shared
     if _shared is not None:
         return _shared
     with _shared_lock:
         if _shared is None:
-            _shared = KeyTapper()
+            # Imported here rather than at module scope: the tracker pulls in
+            # the input-listener shim, and this module is imported by things
+            # that never tap a key.
+            from misc.physical_keys import get_physical_keys
+            _shared = KeyTapper(physical=get_physical_keys())
         return _shared

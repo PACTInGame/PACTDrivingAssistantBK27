@@ -192,17 +192,76 @@ class TestPedals:
     def test_under_speed_gives_throttle(self):
         control, (_, pedals, _), _ = controller()
         control.apply(demand(speed=1.2), state(speed=0.5))
-        assert pedals.calls[-1] == (1.0, 0.0)
+        throttle, brake = pedals.calls[-1]
+        assert 0.0 < throttle <= 1.0 and brake == 0.0
+
+    def test_the_throttle_is_proportional_rather_than_on_or_off(self):
+        """The whole reason the bang-bang loop was replaced.
+
+        A key has no travel, but the *demand* on it can, and
+        ``Controls/pulse_modulator.py`` turns a fraction into a duty cycle. A
+        controller that answers a 0.2 m/s shortfall and a 1.0 m/s shortfall
+        with the same full pedal is the one that sawed between full throttle
+        and full brake in the game.
+        """
+        control, (_, pedals, _), _ = controller()
+        control.apply(demand(speed=1.2), state(speed=1.0))
+        small = pedals.calls[-1][0]
+        control.reset()
+        control.apply(demand(speed=1.2), state(speed=0.2))
+        large = pedals.calls[-1][0]
+        assert 0.0 < small < large
 
     def test_on_speed_coasts(self):
         control, (_, pedals, _), _ = controller()
-        control.apply(demand(speed=1.2), state(speed=1.15))
-        assert pedals.calls[-1] == (0.0, 0.0)
+        control.apply(demand(speed=1.2), state(speed=1.19))
+        throttle, brake = pedals.calls[-1]
+        assert throttle == pytest.approx(0.0, abs=1e-6)
+        assert brake == pytest.approx(0.0, abs=1e-6)
 
     def test_well_over_speed_brakes(self):
         control, (_, pedals, _), _ = controller()
         control.apply(demand(speed=1.0), state(speed=2.0))
         assert pedals.calls[-1][1] > 0.0
+
+    def test_a_small_overspeed_brakes_less_than_a_large_one(self):
+        control, (_, pedals, _), _ = controller()
+        control.apply(demand(speed=1.0), state(speed=1.2))
+        gentle = pedals.calls[-1][1]
+        control.reset()
+        control.apply(demand(speed=1.0), state(speed=3.0))
+        hard = pedals.calls[-1][1]
+        assert 0.0 < gentle < hard
+
+    def test_the_integral_takes_out_a_standing_shortfall(self):
+        """What makes the car's own creep a non-problem rather than a bias."""
+        control, (_, pedals, _), clock = controller()
+        first = None
+        for _ in range(12):
+            control.apply(demand(speed=1.2), state(speed=1.0))
+            clock.tick(0.1)
+            if first is None:
+                first = pedals.calls[-1][0]
+        assert pedals.calls[-1][0] > first
+
+    def test_the_integral_does_not_wind_up_against_a_car_that_cannot_move(self):
+        """A car against a kerb must not bank a pedal it spends later."""
+        control, (_, pedals, _), clock = controller()
+        for _ in range(60):
+            control.apply(demand(speed=1.2), state(speed=0.0))
+            clock.tick(0.1)
+        from Controls.vehicle_control import MAX_SPEED_INTEGRAL
+        assert control._speed_integral <= MAX_SPEED_INTEGRAL
+
+    def test_a_stop_clears_the_integral(self):
+        """The next stroke is in the other gear, where the creep differs."""
+        control, (_, pedals, _), clock = controller()
+        for _ in range(10):
+            control.apply(demand(speed=1.2), state(speed=1.0))
+            clock.tick(0.1)
+        assert control._speed_integral > 0.0
+        control.apply(demand(speed=0.0), state(speed=0.0))
+        assert control._speed_integral == 0.0
 
 
 class TestSteering:

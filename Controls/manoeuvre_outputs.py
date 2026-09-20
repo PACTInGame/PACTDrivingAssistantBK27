@@ -29,17 +29,32 @@ idle window. Parking it on the centre line removes that input so the keys below
 are the only longitudinal command. It can only ever *remove* mouse throttle or
 mouse braking, never add either.
 
-### Throttle and brake: the driver's own keys
+### Throttle and brake: the driver's own keys, pulsed
 
-A key has no travel, so this is on-or-off and the controller above does the
-modulating by switching. The keys are the ones the driver configured and that
-the emergency brake already pushes bindings for, so nothing new is taken away
-from them -- and mouse buttons count as keys here, which is how a mouse driver
-is covered by the same mechanism (``control-intervention.md`` §2.2, measured).
+A key has no travel, so a fractional pedal is a **duty cycle**: the key is
+held for that fraction of the control period and released for the rest, which
+the car's inertia averages into a fractional pedal.
+:class:`~Controls.pulse_modulator.PulseModulator` does the arithmetic and
+:mod:`misc.key_tap` does the holding, on its own thread -- never on the
+assistance thread (``ui.md`` §1.6).
 
-Braking reuses :class:`~Controls.brake_key.KeyBrakeOutput` unchanged, including
-its arbitration against the driver's own key. That class exists because of the
-key-release trap and there is no second implementation of it.
+This used to be on-or-off, with the controller above modulating by switching
+between the two. It does not work, and the reason is specific to LFS: the car
+**creeps in gear with no throttle at all**, so at the 1.1 m/s a manoeuvre runs
+at, a whole cycle of throttle is far more than the loop asked for. The live
+trace is in ``pulse_modulator.py``; the symptom the driver sees is a car that
+alternates full throttle and full brake all the way into the space.
+
+The keys are the ones the driver configured and that the emergency brake
+already pushes bindings for, so nothing new is taken away from them -- and
+mouse buttons count as keys here, which is how a mouse driver is covered by
+the same mechanism (``control-intervention.md`` §2.2, measured).
+
+:class:`~Controls.brake_key.KeyBrakeOutput` is still here, but only as the
+authority on whether the brake key is *usable*: it owns ``/key <k> brake`` and
+the refusals that go with it, and there is no second implementation of that.
+The pressing is the modulator's, because a held press and a pulsed one cannot
+share a key.
 
 ### Gears: shift up and down until the right one is in
 
@@ -55,8 +70,9 @@ import time
 from typing import Optional
 
 from Controls.brake_key import KeyBrakeOutput
+from Controls.pulse_modulator import PulseModulator
 from misc import mouse_input, window_geometry
-from misc.key_names import is_mouse_button, spelling_for
+from misc.key_names import spelling_for
 from misc.key_tap import get_key_tapper
 from misc.platform_shim import instant_input, is_available
 
@@ -188,19 +204,43 @@ class MouseSteeringOutput:
 
 
 class KeyPedalOutput:
-    """Throttle and brake as keys, for an LFS mouse/keyboard driver."""
+    """Throttle and brake as pulsed keys, for an LFS mouse/keyboard driver."""
 
-    def __init__(self, event_bus, settings, physical_keys):
+    def __init__(self, event_bus, settings, physical_keys, tapper=None):
         self.event_bus = event_bus
         self.settings = settings
+        # Kept for what it owns -- the LFS brake binding and the refusals that
+        # come with it. Its ``apply`` is not used; see the module docstring.
         self.brake_output = KeyBrakeOutput(event_bus, settings, physical_keys)
         self.physical = physical_keys
-        self._throttle_down = False
+        tapper = tapper or get_key_tapper()
+        period = self._period_s()
+        self._throttle = PulseModulator(tapper, period, name='throttle')
+        self._brake = PulseModulator(tapper, period, name='brake')
+
+    # ─── Configuration ────────────────────────────────────────────────
 
     @property
     def throttle_key(self) -> str:
         """Read at press time, so a rebind in the menu takes effect at once."""
         return self.settings.get('user_throttle_key')
+
+    @property
+    def brake_key(self) -> str:
+        return self.brake_output.key
+
+    def _period_s(self) -> float:
+        """The control period the duty cycle is measured over.
+
+        Read from the setting rather than assumed, because
+        ``assistance_refresh_rate`` is adjustable (50-200 ms) and a duty cycle
+        against the wrong period is simply the wrong pedal.
+        """
+        try:
+            rate = float(self.settings.get('assistance_refresh_rate') or 100.0)
+        except (TypeError, ValueError):
+            rate = 100.0
+        return max(0.02, min(0.5, rate / 1000.0))
 
     def unavailable_reason(self) -> Optional[str]:
         reason = self.brake_output.unavailable_reason()
@@ -229,75 +269,33 @@ class KeyPedalOutput:
                             f"/key {spelling.lfs} throttle")
         return ok
 
+    # ─── Actuation ────────────────────────────────────────────────────
+
     def set(self, throttle: float, brake: float) -> bool:
-        """Apply both pedals. Either may be zero; both being zero is a coast."""
-        ok = True
-        if brake > 0.0:
-            self.brake_output.apply(1.0)
-        else:
-            self.brake_output.release()
-        if throttle > 0.0:
-            ok = self._press_throttle() and ok
-        else:
-            self._release_throttle()
-        return ok
+        """Apply both pedals as fractions, 0..1. Both zero is a coast.
+
+        Costs two float comparisons and at most two enqueues on the key
+        tapper; nothing here sleeps or touches pyautogui, so it is safe on the
+        assistance thread (``ui.md`` §1.6).
+        """
+        period = self._period_s()
+        self._throttle.period_s = period
+        self._brake.period_s = period
+        # Brake first. The two are never both non-zero, but if a caller ever
+        # asks for both, the brake is the one that should win.
+        ok = self._brake.apply(self.brake_key, brake)
+        return self._throttle.apply(self.throttle_key, throttle) and ok
 
     def release(self):
-        """Drop both. Always allowed, including on shutdown."""
-        self._release_throttle()
-        self.brake_output.release()
+        """Drop both. Always allowed, including on shutdown.
 
-    # ─── Throttle ─────────────────────────────────────────────────────
-
-    def _press_throttle(self) -> bool:
-        key = self.throttle_key
-        if self.physical.down_for_lfs(key):
-            # Already down -- either ours from last cycle or the driver's.
-            # Either way LFS sees throttle and a second press adds nothing.
-            self._throttle_down = True
-            return True
-        spelling = spelling_for(key)
-        if spelling is None:
-            return False
-        try:
-            with instant_input() as keyboard:
-                if is_mouse_button(key):
-                    keyboard.mouseDown(button=_MOUSE_BUTTONS[key])
-                else:
-                    keyboard.keyDown(spelling.pyautogui)
-        except Exception as exc:
-            logger.error("Throttle key press failed: %s: %s",
-                         type(exc).__name__, exc)
-            return False
-        self._throttle_down = True
-        return True
-
-    def _release_throttle(self):
-        """Drop our throttle press, unless the driver is holding the key.
-
-        The mirror image of the brake's rule and it points the same way here:
-        our release would take away throttle *the driver commanded*, so it is
-        suppressed while the key is physically down. Their own release will
-        arrive when they let go.
+        A pulse carries its own release, but a *continuous* hold is re-armed
+        every cycle and would otherwise stay down for two more periods after
+        the last one. Handing the car back with the throttle still on for a
+        fifth of a second is not a handback, so the holds are cut here.
         """
-        if not self._throttle_down:
-            return
-        self._throttle_down = False
-        key = self.throttle_key
-        if self.physical.physically_down(key):
-            return
-        spelling = spelling_for(key)
-        if spelling is None:
-            return
-        try:
-            with instant_input() as keyboard:
-                if is_mouse_button(key):
-                    keyboard.mouseUp(button=_MOUSE_BUTTONS[key])
-                else:
-                    keyboard.keyUp(spelling.pyautogui)
-        except Exception as exc:
-            logger.error("Throttle key release failed: %s: %s",
-                         type(exc).__name__, exc)
+        self._throttle.release(self.throttle_key)
+        self._brake.release(self.brake_key)
 
 
 class GearSelector:

@@ -10,7 +10,7 @@ lane keeper or an automated test driver needs exactly the same three numbers;
 none of them needs to know that the path came from a parking slot. Whatever
 actuates the car reads a ``ControlDemand`` and never sees a ``Trajectory``.
 
-### Lateral: the path's own arc, corrected by pure pursuit
+### Lateral: the path's own arc, plus a correction for the error against it
 
 The steering demand is a **curvature**, not a steering angle, and that is the
 important choice. A steering angle would have to be converted through a
@@ -20,28 +20,42 @@ car. Curvature is measurable from data LFS already sends -- ``yaw_rate / v``
 from ``CompCar`` -- so the loop that turns a demanded curvature into steering
 can *learn* the car it is driving instead of assuming one.
 
-The demand is the **curvature of the path under the car**, plus a pure-pursuit
-correction for being off it. Feeding the path's own arc forward matters most
-exactly where this feature lives: a parking shuffle's last strokes are under a
-metre long, and pure pursuit alone has to *infer* their arc from a lookahead
-point that is barely further away than the car is long. Measured on the
-shortest space the detector offers, pure pursuit alone parked the car 12.6
-degrees crooked; with the feedforward the same manoeuvre ends square.
+The law is feedforward plus error feedback, and nothing else::
 
-Pure pursuit then picks a point on the path a lookahead ahead of the car and
-asks for the arc that reaches it::
+    kappa = kappa_path  -  CROSS_TRACK_GAIN * e  -  HEADING_GAIN * direction * theta
 
-    kappa = 2 * sin(alpha) / lookahead
+``kappa_path`` is the arc the path is on under the car, ``e`` is how far the
+car is to the **left** of it and ``theta`` how far its heading is turned out of
+it. Both errors are zero when the car is on its path, so a car that is tracking
+perfectly asks for exactly the arc that was planned.
 
-with ``alpha`` the angle to that point in the car's frame. Reversing flips the
-frame: the car chases a point behind itself, and the arc that takes it there is
-the mirror image, which the code handles by projecting into the *travel*
-direction rather than the heading. Get that wrong and the steering fights the
-manoeuvre exactly when it matters.
+That last sentence is the whole point of this rewrite. The previous version fed
+the path's arc forward and then added a **pure-pursuit** term on top -- and
+pure pursuit is not an error term. Aimed at a point on the path, it asks for
+the arc that reaches that point, which on a curved path is the path's own arc
+again. A car sitting exactly on a 6 m arc therefore demanded 0.233 1/m where
+the plan said 0.167: half as much steering again as the manoeuvre was planned
+with, before any error at all. Only :data:`MAX_CORRECTION_FACTOR` kept it
+finite, which is why a live run found the demand pinned at that cap for ten
+seconds and the car ended up visibly crooked in the space.
 
-The lookahead is short -- :data:`MIN_LOOKAHEAD_M` -- because a parking path
-turns inside its own length. Long lookaheads cut corners, and the corner being
-cut is usually a bumper.
+### Why the heading term flips with direction and the cross-track term does not
+
+For a rear-axle kinematic model with signed speed ``v``, the errors move as::
+
+    de/dt     = v * theta
+    dtheta/dt = v * (kappa - kappa_path)
+
+Writing the correction as ``-alpha*e - beta*theta`` gives a closed loop with
+trace ``-v*beta`` and determinant ``v^2*alpha``. The determinant is positive
+either way round, so the cross-track gain is the same forwards and backwards;
+the trace is only negative when ``beta`` carries the sign of ``v``, so the
+heading gain must flip. Get that one sign wrong and the controller is a saddle
+point -- stable driving forwards, divergent reversing into the space, which is
+the half of the manoeuvre that matters.
+
+The gains are stated as a settling length rather than tuned: see
+:data:`CORRECTION_LENGTH_M`.
 
 ### Longitudinal: stop where the path says to stop
 
@@ -61,49 +75,53 @@ abort conditions live.
 """
 
 import math
+import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Tuple
 
 from assistance.parking.geometry import Pose, normalise_angle
-from assistance.parking.trajectory import (DIRECTION_FORWARD, DIRECTION_REVERSE,
+from assistance.parking.trajectory import (DIRECTION_FORWARD,
+                                           PLAN_RADIUS_MARGIN,
                                            Trajectory)
 
 # ─── Lateral ──────────────────────────────────────────────────────────────
 
-# Pure-pursuit lookahead. A parking manoeuvre's arcs have a 6 m radius and run
-# for two or three metres, so the lookahead has to be short or the controller
-# cuts across them. It grows a little with speed so that the crawl down a long
-# straight is not twitchy.
-MIN_LOOKAHEAD_M = 1.2
-LOOKAHEAD_PER_MPS = 0.6
-MAX_LOOKAHEAD_M = 3.0
-# Never look further than the stroke being driven, and never shorter than this.
-# The shuffle into a tight space is made of strokes under a metre long, where a
-# fixed 1.2 m lookahead means aiming permanently at the end of the stroke and
-# ignoring the arc in between.
-ABSOLUTE_MIN_LOOKAHEAD_M = 0.4
-
-# Pure pursuit tracks a *position*; on a stroke shorter than its own lookahead
-# it will happily arrive there pointing the wrong way, and in a five-stroke
-# shuffle those errors add up -- measured at 9.5 degrees of final heading error
-# in a 6.5 m space before this term existed. This is a proportional correction
-# on the heading error against the path, in 1/m per radian: 0.6 turns 10
-# degrees of error into a 10 m radius correction, gentle next to the 6 m radius
-# the manoeuvre itself uses.
-HEADING_GAIN = 0.6
-
-# How much tighter than the planned arc a correction may ask for. The plan's
-# own arcs are at the planning radius, so 1.0 would leave no authority to
-# correct at all and a large number leaves no authority to the *plan*: a live
-# run watched an uncorrected cross-track error wind pure pursuit up to
-# -0.757 1/m -- a 1.3 m radius, on a manoeuvre planned at 6 m -- and the car
-# swung hard one way, hit the parked car it was avoiding, and then swung hard
-# back. A demand no car can follow is not a correction, it is an oscillator.
+# Over what distance an error against the path is taken out. Stated as a
+# length rather than as gains, because that is the quantity that has to be
+# right: a parking stroke is one to five metres long, so an error has to be
+# gone inside a couple of metres of travel or the stroke ends before the
+# correction does -- which is exactly how a five-stroke shuffle accumulates a
+# crooked finish.
 #
-# 1.4 is a third more lock than the manoeuvre itself uses, which is enough to
-# pull a car back onto a parking path at walking pace and still inside what a
-# real steering lock will give.
-MAX_CORRECTION_FACTOR = 1.4
+# The gains follow from it. With ``de/ds = theta`` and ``dtheta/ds = -alpha*e
+# - beta*theta`` the closed loop is a second-order system in *distance*:
+# ``alpha = 1/L^2`` sets the length scale and ``beta = 2/L`` makes it
+# critically damped, i.e. it converges without ever crossing the path. No
+# overshoot is worth more here than speed is: an overshoot in a parking space
+# is a wheel against a kerb.
+CORRECTION_LENGTH_M = 2.0
+# 1/m per metre of cross-track error.
+CROSS_TRACK_GAIN = 1.0 / (CORRECTION_LENGTH_M * CORRECTION_LENGTH_M)
+# 1/m per radian of heading error, applied with the sign of travel.
+HEADING_GAIN = 2.0 / CORRECTION_LENGTH_M
+
+# How much tighter than the planned arc the total demand may go. The plan's own
+# arcs are at the planning radius and the planning radius is deliberately
+# *wider* than the car's steering lock by
+# :data:`~assistance.parking.trajectory.PLAN_RADIUS_MARGIN`, so this is the
+# margin that exists -- less a little, so that a saturated correction is still
+# a curvature the car can actually produce.
+#
+# A demand no car can follow is not a correction, it is an oscillator: a live
+# run watched an uncapped correction ask for a 1.3 m radius on a manoeuvre
+# planned at 6 m, and the car swung hard one way, hit the parked car it was
+# avoiding, and then swung hard back.
+#
+# It is the planning margin itself, which makes the cap exactly the car's
+# steering lock: the plan is that factor wider than the lock, so a demand that
+# factor tighter than the plan is the lock. Anything beyond it is a number the
+# steering cannot produce.
+MAX_CORRECTION_FACTOR = PLAN_RADIUS_MARGIN
 
 # How far off the path the car may be before the follower says so. Well beyond
 # anything it produces at these speeds, and inside the clearance the plan was
@@ -125,6 +143,16 @@ APPROACH_MPS = 2.2
 # The straight is only "long" past this; below it the crawl applies.
 APPROACH_LENGTH_M = 6.0
 
+# How fast the *demand* may rise, in m/s^2. Without it a stroke begins with a
+# step from standstill to the crawl, and a step is a demand no controller can
+# meet: whatever drives the car answers it with everything it has, overshoots,
+# and has to brake -- which is the throttle-and-brake sawtooth a live run
+# recorded at every direction change, 2.3 m/s against a 1.1 m/s demand.
+#
+# Matched to the deceleration below so that a stroke's speed profile is
+# symmetric, and well inside what a car does at walking pace, so the demand is
+# always something the car is physically able to be doing.
+ACCELERATION_MPS2 = 0.8
 # Deceleration used to plan the stop at the end of each segment. Gentle by
 # design -- this is a comfort limit, not a grip limit (``conventions.md`` §7).
 DECELERATION_MPS2 = 0.8
@@ -190,15 +218,18 @@ class PathFollower:
     """
 
     def __init__(self, trajectory: Trajectory,
-                 cruise_mps: float = CRUISE_MPS,
-                 lookahead_min: float = MIN_LOOKAHEAD_M):
+                 cruise_mps: float = CRUISE_MPS, clock=time.monotonic):
         self.trajectory = trajectory
         self.cruise_mps = cruise_mps
-        self.lookahead_min = lookahead_min
+        self.clock = clock
         self.bounds = trajectory.segment_bounds()
         self._index = 0          # index into trajectory.points
         self._segment = 0
         self._awaiting_stop = False
+        # The demand the last cycle issued, and when. Both only exist for the
+        # acceleration limit; see ACCELERATION_MPS2.
+        self._demanded_speed = 0.0
+        self._last_update = None
 
     # ─── Progress ─────────────────────────────────────────────────────
 
@@ -243,14 +274,17 @@ class PathFollower:
     def update(self, pose: Pose, speed_mps: float) -> ControlDemand:
         """One control cycle. *speed_mps* is an unsigned speed.
 
-        Cost: the forward search window plus a lookahead walk, both bounded --
-        a few dozen float operations, well under 50 microseconds. It runs once
-        per assistance cycle while a manoeuvre is active and not at all
-        otherwise.
+        Cost: the bounded forward search plus a handful of float operations,
+        well under 50 microseconds. It runs once per assistance cycle while a
+        manoeuvre is active and not at all otherwise.
         """
         points = self.trajectory.points
         if not points:
             return ControlDemand(0.0, DIRECTION_FORWARD, 0.0, finished=True)
+
+        now = self.clock()
+        dt = 0.0 if self._last_update is None else max(0.0, now - self._last_update)
+        self._last_update = now
 
         self._advance_index(pose)
         current = points[self._index]
@@ -265,6 +299,7 @@ class PathFollower:
         # the one state this manoeuvre cannot recover from.
         remaining_segment = self.bounds[self._segment][1] - current.s
         if self._direction_change_pending(remaining_segment, speed_mps):
+            self._demanded_speed = 0.0
             return self._demand(0.0, segment.direction, 0.0, current,
                                 cross_track=cross_track,
                                 heading_error=heading_error,
@@ -277,18 +312,18 @@ class PathFollower:
 
         remaining_total = self.trajectory.length - current.s
         if remaining_total <= FINISH_TOLERANCE_M:
+            self._demanded_speed = 0.0
             return self._demand(0.0, segment.direction, 0.0, current,
                                 finished=True, cross_track=cross_track,
                                 heading_error=heading_error)
 
-        # Feedforward the arc the path is actually on, and let pure pursuit
-        # correct the error rather than reproduce the arc from scratch. The
-        # sum is capped at something the car can actually steer; see
-        # MAX_CORRECTION_FACTOR.
-        curvature = self._capped(current.curvature + self._pursuit_curvature(
-            pose, segment.direction, speed_mps, remaining_segment,
-            heading_error))
-        speed = self._speed_limit(remaining_segment, remaining_total, segment)
+        # Feedforward the arc the path is actually on, plus a correction that
+        # is zero while the car is on it. The sum is capped at something the
+        # car can actually steer; see MAX_CORRECTION_FACTOR.
+        curvature = self._capped(current.curvature + self._correction(
+            segment.direction, cross_track, heading_error))
+        speed = self._speed_limit(remaining_segment, remaining_total, segment,
+                                  dt)
         return self._demand(speed, segment.direction, curvature, current,
                             cross_track=cross_track,
                             heading_error=heading_error, off_track=off_track)
@@ -310,59 +345,20 @@ class PathFollower:
         limit = MAX_CORRECTION_FACTOR / radius
         return max(-limit, min(limit, curvature))
 
-    def _lookahead(self, speed_mps: float, remaining_segment: float) -> float:
-        """How far ahead to aim: speed-scaled, but never past this stroke."""
-        wanted = min(MAX_LOOKAHEAD_M,
-                     self.lookahead_min + LOOKAHEAD_PER_MPS * max(0.0, speed_mps))
-        return max(ABSOLUTE_MIN_LOOKAHEAD_M, min(wanted, remaining_segment))
+    def _correction(self, direction: int, cross_track: float,
+                    heading_error: float) -> float:
+        """Curvature to add for being off the path. Zero when on it.
 
-    def _pursuit_curvature(self, pose: Pose, direction: int, speed_mps: float,
-                           remaining_segment: float,
-                           heading_error: float) -> float:
-        """Pure pursuit to a point one lookahead further along the path.
-
-        The reversing case is the one worth reading twice. The car chases a
-        point *behind* itself, so the geometry is done in the frame of the
-        direction of travel -- the heading turned through 180 degrees -- and
-        the resulting curvature is then negated, because turning the wheel one
-        way sends the car the other way round when it is going backwards. Doing
-        it in the heading frame instead produces a controller that steers away
-        from the path precisely while reversing into a parking space.
+        Four multiplications, and the only thing in it worth reading twice is
+        the ``direction`` on the heading term and its absence on the
+        cross-track one. The module docstring derives why: the closed loop's
+        determinant is even in the direction of travel and its trace is odd,
+        so one gain flips and the other does not. Flipping both -- or neither
+        -- gives a controller that converges driving forwards and diverges
+        reversing, which is the half of a parking manoeuvre that matters.
         """
-        lookahead = self._lookahead(speed_mps, remaining_segment)
-        target = self._lookahead_point(lookahead)
-        travel = Pose(pose.x, pose.y,
-                      pose.yaw if direction == DIRECTION_FORWARD
-                      else normalise_angle(pose.yaw + math.pi))
-        ahead, left = travel.to_local(target.x, target.y)
-        distance = math.hypot(ahead, left)
-        pursuit = 0.0
-        if distance >= 1e-3:
-            pursuit = 2.0 * left / (distance * distance)
-            if direction != DIRECTION_FORWARD:
-                pursuit = -pursuit
-        # Heading term. Reducing a heading error needs the opposite sign of
-        # curvature depending on which way the car is travelling, for the same
-        # reason the pursuit term does: ``dyaw = kappa * s``, and ``s`` carries
-        # the direction.
-        return pursuit - HEADING_GAIN * heading_error * direction
-
-    def _lookahead_point(self, lookahead: float) -> Pose:
-        """The path point *lookahead* further on, clamped to the current stroke.
-
-        Clamped on purpose: a lookahead that reaches past a direction change
-        would aim the car at where it will be going *after* it has reversed,
-        which is the wrong way round by exactly 180 degrees.
-        """
-        points = self.trajectory.points
-        end_of_segment = self.bounds[self._segment][1]
-        target_s = min(points[self._index].s + lookahead, end_of_segment)
-        index = self._index
-        while index + 1 < len(points) and points[index].s < target_s:
-            if points[index + 1].segment_index != self._segment:
-                break
-            index += 1
-        return points[index].pose
+        return (-CROSS_TRACK_GAIN * cross_track
+                - HEADING_GAIN * heading_error * direction)
 
     def _errors(self, pose: Pose, current) -> Tuple[float, float]:
         """Cross-track and heading error against the nearest path point."""
@@ -400,13 +396,18 @@ class PathFollower:
         return False
 
     def _speed_limit(self, remaining_segment: float, remaining_total: float,
-                     segment) -> float:
-        """The smallest of the crawl, the stopping distance, and the finish.
+                     segment, dt: float) -> float:
+        """The smallest of the crawl, the stopping distance, and the finish --
+        then rate-limited on the way up.
 
         ``v = sqrt(2 a s)`` with the deceleration stated in
         :data:`DECELERATION_MPS2`. Both distances are used because the end of
         the last stroke is also the end of the manoeuvre, and a demand that
         only watched the stroke would arrive at the space at walking pace.
+
+        The rate limit applies to **rising** demands only. Falling ones are
+        already a physical limit -- the stopping-distance curve -- and slewing
+        those would ask the car to arrive somewhere faster than it can stop.
         """
         cruise = self.cruise_mps
         if (segment.curvature == 0.0
@@ -416,7 +417,14 @@ class PathFollower:
             cruise = max(cruise, APPROACH_MPS)
         stopping = math.sqrt(2.0 * DECELERATION_MPS2
                              * max(0.0, min(remaining_segment, remaining_total)))
-        return max(0.0, min(cruise, stopping))
+        wanted = max(0.0, min(cruise, stopping))
+        # ``dt`` is zero on the very first cycle of a manoeuvre, and it has to
+        # limit that one too: without it the first demand a stroke ever issues
+        # is the full crawl against a standing car, which is the step this
+        # whole limit exists to remove.
+        wanted = min(wanted, self._demanded_speed + ACCELERATION_MPS2 * dt)
+        self._demanded_speed = wanted
+        return wanted
 
 
 # How many sampled points ahead the progress search looks. At the 0.2 m

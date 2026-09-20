@@ -14,7 +14,8 @@ from assistance.park_assist import (BTN_PARK_CANCEL, BTN_PARK_OFFER,
                                     OFFER_SETTLE_S, ParkAssist, SCAN_INTERVAL_S,
                                     STATE_ABORTED, STATE_DONE, STATE_OFF,
                                     STATE_OFFERED, STATE_PARKING,
-                                    STATE_SCANNING, UNPLANNABLE_TTL_S,
+                                    STATE_SCANNING, STATE_STOPPING,
+                                    STOPPING_TIMEOUT_S, UNPLANNABLE_TTL_S,
                                     BRAKE_SETTLE_S, PASSED_TTL_S)
 from assistance.parking.slot_detection import ParkingSlot
 from core.event_bus import EventBus
@@ -48,6 +49,26 @@ class PermissiveGuard:
         return self.refusal
 
 
+class RecordingOutput:
+    """Stands in for one of the controller's three injected devices."""
+
+    def __init__(self):
+        self.releases = 0
+
+    def release(self):
+        self.releases += 1
+
+
+class RecordingPedals(RecordingOutput):
+    def __init__(self):
+        super().__init__()
+        self.calls = []
+
+    def set(self, throttle, brake):
+        self.calls.append((throttle, brake))
+        return True
+
+
 class RecordingController:
     def __init__(self, reason=None, fault=None):
         self.reason = reason
@@ -55,7 +76,13 @@ class RecordingController:
         self.applied = []
         self.releases = 0
         self.resets = 0
-        self.pedals = None
+        # The three devices the real controller owns. The abort path hands
+        # steering and gears back on their own and keeps the brake for a
+        # moment (``ParkAssist._begin_stopping``), so they have to exist
+        # separately here too.
+        self.steering = RecordingOutput()
+        self.gears = RecordingOutput()
+        self.pedals = RecordingPedals()
 
     def unavailable_reason(self):
         return self.reason
@@ -507,14 +534,31 @@ class TestDriving:
         assert system.reason == 'driver_brake'
 
     def test_cancelling_ends_it(self, tmp_path):
-        system, bus, _, controller = self._started(tmp_path)
+        """And the car is brought to rest rather than left rolling.
+
+        Cancelling at 4 km/h in reverse used to drop every input and leave
+        the car creeping, in gear, with nothing holding it.
+        """
+        system, bus, clock, controller = self._started(tmp_path)
         bus.emit('button_clicked', type('Click', (), {'ClickID': BTN_PARK_CANCEL}))
         system.process(own_vehicle(), a_parallel_space())
-        assert system.state == STATE_ABORTED
+        assert system.state == STATE_STOPPING
         assert system.reason == 'driver_cancel'
+        assert controller.steering.releases == 1
+        assert controller.gears.releases == 1
+        assert controller.pedals.calls[-1] == (0.0, 1.0)
+        # And it lets go once the car is actually stopped.
+        system.process(own_vehicle(speed_kmh=0.0), a_parallel_space())
+        assert system.state == STATE_ABORTED
         assert controller.releases == 1
 
     def test_the_input_guard_refusing_ends_it(self, tmp_path):
+        """And it does *not* keep braking: the guard has forbidden injecting.
+
+        Every other abort brings the car to rest first. This one cannot --
+        a menu is open, or LFS has lost focus, and the brake keystroke would
+        go wherever the keyboard focus now is.
+        """
         guard = PermissiveGuard()
         system, _, _, controller = self._started(tmp_path, guard=guard)
         guard.refusal = 'lfs_not_focused'
@@ -522,14 +566,17 @@ class TestDriving:
         assert system.state == STATE_ABORTED
         assert system.reason == 'lfs_not_focused'
         assert controller.releases == 1
+        assert controller.pedals.calls == []
 
     def test_an_actuator_fault_ends_it(self, tmp_path):
         controller = RecordingController()
         system, _, _, _ = self._started(tmp_path, controller=controller)
         controller.fault = 'steering_failed'
         system.process(own_vehicle(), a_parallel_space())
-        assert system.state == STATE_ABORTED
+        assert system.state == STATE_STOPPING
         assert system.reason == 'steering_failed'
+        system.process(own_vehicle(speed_kmh=0.0), a_parallel_space())
+        assert system.state == STATE_ABORTED
 
     def test_leaving_the_track_ends_it(self, tmp_path):
         system, bus, _, controller = self._started(tmp_path)
@@ -540,15 +587,56 @@ class TestDriving:
     def test_a_runaway_ends_it(self, tmp_path):
         system, _, _, controller = self._started(tmp_path)
         system.process(own_vehicle(speed_kmh=40.0), a_parallel_space())
-        assert system.state == STATE_ABORTED
+        assert system.state == STATE_STOPPING
         assert system.reason == 'runaway'
 
     def test_a_manoeuvre_that_never_ends_is_given_up_on(self, tmp_path):
         system, _, clock, controller = self._started(tmp_path)
         clock.tick(500.0)
         system.process(own_vehicle(), a_parallel_space())
-        assert system.state == STATE_ABORTED
+        assert system.state == STATE_STOPPING
         assert system.reason == 'timeout'
+
+    def test_the_driver_asking_for_throttle_ends_the_stopping_brake(self, tmp_path):
+        """They want to drive away; holding the brake against them must not."""
+        system, bus, _, controller = self._started(tmp_path)
+        bus.emit('park_assist_cancel', {})
+        system.process(own_vehicle(), a_parallel_space())
+        assert system.state == STATE_STOPPING
+        rolling = own_vehicle()
+        rolling.throttle = 0.5
+        system.process(rolling, a_parallel_space())
+        assert system.state == STATE_ABORTED
+        assert controller.releases == 1
+
+    def test_the_stopping_brake_gives_up_after_its_timeout(self, tmp_path):
+        """A brake nobody asked for may not outlive its welcome."""
+        system, bus, clock, controller = self._started(tmp_path)
+        bus.emit('park_assist_cancel', {})
+        system.process(own_vehicle(), a_parallel_space())
+        assert system.state == STATE_STOPPING
+        clock.tick(STOPPING_TIMEOUT_S + 0.1)
+        system.process(own_vehicle(), a_parallel_space())
+        assert system.state == STATE_ABORTED
+        assert controller.releases == 1
+
+    def test_the_guard_refusing_mid_stop_releases_at_once(self, tmp_path):
+        guard = PermissiveGuard()
+        system, bus, _, controller = self._started(tmp_path, guard=guard)
+        bus.emit('park_assist_cancel', {})
+        system.process(own_vehicle(), a_parallel_space())
+        assert system.state == STATE_STOPPING
+        guard.refusal = 'lfs_not_focused'
+        system.process(own_vehicle(), a_parallel_space())
+        assert system.state == STATE_ABORTED
+        assert controller.releases == 1
+
+    def test_an_abort_at_a_standstill_does_not_brake_at_all(self, tmp_path):
+        system, bus, _, controller = self._started(tmp_path)
+        bus.emit('park_assist_cancel', {})
+        system.process(own_vehicle(speed_kmh=0.0), a_parallel_space())
+        assert system.state == STATE_ABORTED
+        assert controller.releases == 1
 
     def test_shutdown_releases_the_car(self, tmp_path):
         system, _, _, controller = self._started(tmp_path)

@@ -620,6 +620,15 @@ class UIManager:
             return
 
         self.message_sender.remove_button(BTN_PARK_CANCEL)
+        if name == 'stopping':
+            # Das Manoever ist vorbei, die Bremse noch nicht: solange das Auto
+            # zum Stehen gebracht wird, haelt der Assistent genau ein Pedal
+            # (park_assist.STOPPING_TIMEOUT_S). Das muss man sehen koennen -
+            # sonst bremst das Auto ohne erkennbaren Grund.
+            self.message_sender.create_button(
+                BTN_PARK_STATUS, *PARK_SLOT_STATUS,
+                "^1Stopping the car...", pyinsim.ISB_LIGHT)
+            return
         if name == 'done':
             self.message_sender.create_button(BTN_PARK_STATUS,
                                               *PARK_SLOT_STATUS, "^2Parked.",

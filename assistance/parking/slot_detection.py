@@ -65,29 +65,31 @@ from assistance.parking.geometry import (OrientedBox, Pose, VehicleShape,
 # this used to be.
 #
 # The measurement is a grid over car sizes 4.5-5.2 m, turning radii 4-7 m and
-# lateral offsets 2.6-4.2 m, run against the planner itself
+# lateral offsets 3.0-4.2 m, run against the planner itself
 # (``tests/test_parking_agreement.py`` pins the result). Over that grid the
-# shortest space the planner can enter needs between 1.5 and 2.45 m more than
-# the car, depending mostly on the car's size. 2.5 m is the figure that holds
+# shortest space the planner can enter needs at most 2.6 m more than the car.
+# 2.75 m is that figure with a little over it, so the constant holds
 # everywhere rather than on average, and it agrees with what driving schools
-# teach -- roughly one and a half car lengths: 4.5 + 2.5 = 7.0 m.
+# teach -- roughly one and a half car lengths: 4.5 + 2.75 = 7.25 m.
 #
-# One corner of the grid is deliberately outside that promise and is called
-# out here rather than averaged away: the **largest** car (5.2 m) with the
-# driver **closest** to the row (2.6 m centre-to-centre) needs up to 4.3 m,
-# and no length constant that also serves a small car can cover it.
+# It was 2.5 m while the planner planned at the car's own lock radius. The
+# planner now plans :data:`~assistance.parking.trajectory.PLAN_RADIUS_MARGIN`
+# wider than that, deliberately, so that the follower has steering left to
+# correct with -- and a flatter manoeuvre needs a longer space. This is what
+# that costs.
 #
 # **Length is the only thing this constant can answer for.** The same grid
 # shows the binding limit is often not length at all but how far out from the
-# parked row the driver stopped: at 2.4 m the requirement jumps to over 5 m
-# of slack and at some radii nothing works at any length, because the car is
-# too close to the row to swing in. The detector cannot answer that -- it is
+# parked row the driver stopped: below about 3 m centre-to-centre -- roughly
+# 0.8 m of clear air between the flanks -- the requirement jumps past 5 m of
+# slack and at most radii nothing works at any length, because the car is too
+# close to the row to swing in. The detector cannot answer that -- it is
 # a property of the manoeuvre, not of the gap -- so the planner rejects it,
 # and ``ParkAssist`` remembers the rejection and offers the next candidate
 # instead of re-offering this one (``park_assist.UNPLANNABLE_TTL_S``). That
 # split is deliberate: the detector owns the gap, the planner owns the
 # manoeuvre.
-PARALLEL_LENGTH_MARGIN_M = 2.5
+PARALLEL_LENGTH_MARGIN_M = 2.75
 # Perpendicular: the door has to open, and the swept path of the rear end needs
 # room. 0.7 m total, i.e. 35 cm a side, is the narrow end of a marked bay.
 PERPENDICULAR_WIDTH_MARGIN_M = 0.7

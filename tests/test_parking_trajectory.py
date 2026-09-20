@@ -128,7 +128,7 @@ class TestParallelPlan:
         assert result.trajectory.direction_changes == 2
 
     def test_a_tight_space_shuffles_and_still_fits(self):
-        ego, slot, obstacles = parallel_scene(gap=7.0, ego_x=13.5)
+        ego, slot, obstacles = parallel_scene(gap=7.3, ego_x=13.6)
         result = planner().plan(ego, slot, boxes(obstacles))
         assert result.ok, result.reason
         assert result.trajectory.direction_changes >= 2
@@ -136,7 +136,7 @@ class TestParallelPlan:
                                (p.pose for p in result.trajectory.points),
                                boxes(obstacles), 0.15) is None
 
-    @pytest.mark.parametrize('gap,ego_x', [(7.0, 13.5), (8.0, 14.0), (12.0, 18.0)])
+    @pytest.mark.parametrize('gap,ego_x', [(7.3, 13.6), (8.0, 14.0), (12.0, 18.0)])
     def test_every_plan_ends_at_the_slot_target(self, gap, ego_x):
         ego, slot, obstacles = parallel_scene(gap=gap, ego_x=ego_x)
         trajectory = planner().plan(ego, slot, boxes(obstacles)).trajectory
@@ -146,7 +146,7 @@ class TestParallelPlan:
         assert normalise_angle(end.yaw - slot.target.yaw) == pytest.approx(
             0.0, abs=math.radians(1.0))
 
-    @pytest.mark.parametrize('gap,ego_x', [(7.0, 13.5), (8.0, 14.0), (12.0, 18.0)])
+    @pytest.mark.parametrize('gap,ego_x', [(7.3, 13.6), (8.0, 14.0), (12.0, 18.0)])
     def test_every_plan_is_clear_of_the_neighbours(self, gap, ego_x):
         ego, slot, obstacles = parallel_scene(gap=gap, ego_x=ego_x)
         trajectory = planner().plan(ego, slot, boxes(obstacles)).trajectory
@@ -175,7 +175,7 @@ class TestParallelPlan:
 
     def test_the_first_move_is_backwards(self):
         """Every parallel manoeuvre reverses into the space; none drives in."""
-        for gap, ego_x in ((7.0, 13.5), (8.0, 14.0), (12.0, 18.0)):
+        for gap, ego_x in ((7.3, 13.6), (8.0, 14.0), (12.0, 18.0)):
             ego, slot, obstacles = parallel_scene(gap=gap, ego_x=ego_x)
             segments = planner().plan(ego, slot, boxes(obstacles)).trajectory.segments
             assert segments[0].direction == DIRECTION_REVERSE
@@ -204,7 +204,7 @@ class TestManoeuvreArea:
     """
 
     def test_the_manoeuvre_never_goes_behind_the_parked_row(self):
-        ego, slot, obstacles = parallel_scene(gap=7.0, ego_x=13.5)
+        ego, slot, obstacles = parallel_scene(gap=7.3, ego_x=13.6)
         trajectory = planner().plan(ego, slot, boxes(obstacles)).trajectory
         # The kerb line is 2.1 m out; the parked row is 1.8 m deep behind it.
         deepest = min(point.pose.y - SHAPE.length * 0.5
@@ -212,7 +212,7 @@ class TestManoeuvreArea:
         assert deepest > -(2.1 + 1.8 + CAR_W), "drove round the back of the row"
 
     def test_the_manoeuvre_stays_near_the_driver_s_own_lane(self):
-        ego, slot, obstacles = parallel_scene(gap=7.0, ego_x=13.5)
+        ego, slot, obstacles = parallel_scene(gap=7.3, ego_x=13.6)
         trajectory = planner().plan(ego, slot, boxes(obstacles)).trajectory
         widest = max(point.pose.y for point in trajectory.points)
         assert widest < 4.0, "swung across the road"
@@ -267,7 +267,7 @@ class TestTrajectoryHelpers:
 
     def test_no_zero_length_or_duplicated_segments(self):
         """A stroke split in two would tell the follower to stop for nothing."""
-        for gap, ego_x in ((7.0, 13.5), (8.0, 14.0)):
+        for gap, ego_x in ((7.3, 13.6), (8.0, 14.0)):
             ego, slot, obstacles = parallel_scene(gap=gap, ego_x=ego_x)
             segments = planner().plan(ego, slot,
                                       boxes(obstacles)).trajectory.segments
@@ -282,7 +282,7 @@ class TestCost:
     def test_planning_stays_within_a_cycle_budget(self):
         """The shuffle is the expensive path; it still has to be affordable."""
         import time
-        ego, slot, obstacles = parallel_scene(gap=7.0, ego_x=13.5)
+        ego, slot, obstacles = parallel_scene(gap=7.3, ego_x=13.6)
         obstacle_boxes = boxes(obstacles) + [
             OrientedBox(i * 3.0 - 20.0, 9.0, 0.0, 2.0, 2.0) for i in range(10)]
         instance = planner()

@@ -52,13 +52,14 @@ from assistance.park_distance_control import (axm_object_id,
 from assistance.parking.geometry import (MCI_TO_M, OrientedBox, Pose,
                                          VehicleShape, box_from_corners,
                                          heading_to_rad, pose_from_mci)
-from assistance.parking.path_follower import PathFollower
+from assistance.parking.path_follower import PathFollower, STANDSTILL_MPS
 from assistance.parking.scene_dump import dump_scene
 from assistance.parking.slot_detection import (Obstacle, ParkingSlot,
                                                ParkingSlotDetector,
                                                SCAN_MAX_SPEED_KMH)
 from assistance.parking.trajectory import (DEFAULT_MIN_TURN_RADIUS_M,
-                                           ParkingPlanner)
+                                           ParkingPlanner,
+                                           planning_radius_for)
 from Controls.manoeuvre_outputs import (GearSelector, KeyPedalOutput,
                                         MouseSteeringOutput)
 from Controls.vehicle_control import VehicleController, VehicleState
@@ -85,6 +86,7 @@ STATE_OFF = 'off'                  # switched off, or nothing to do here
 STATE_SCANNING = 'scanning'        # crawling along, looking
 STATE_OFFERED = 'offered'          # a space is on screen, waiting for a click
 STATE_PARKING = 'parking'          # driving the manoeuvre
+STATE_STOPPING = 'stopping'        # gave up, still bringing the car to rest
 STATE_DONE = 'done'                # parked
 STATE_ABORTED = 'aborted'          # gave up, driver has the car back
 
@@ -198,6 +200,48 @@ STICKY_MARGIN_M = 2.0
 # crawl and never asks for more than 2.2 m/s.
 RUNAWAY_SPEED_MPS = 4.0
 
+# ─── Why the turn radius is not learned ──────────────────────────────────
+#
+# It was, for one live session, and it has been taken out again. The idea was
+# sound: ``CurvatureModel.gain`` measures the curvature a full steering
+# command produces, so ``1 / gain`` looks like the tightest arc the car can be
+# asked for, and adopting it would stop the planner assuming a radius the car
+# cannot drive.
+#
+# It is a **positive feedback loop**. A radius learned too large makes the
+# next plan flatter; a flatter plan needs less steering; the gain is then
+# only ever measured at part lock, where it reads lower; and a lower gain
+# means a larger radius again. Measured in game: the first two manoeuvres
+# planned at 6.9 m and both finished, the fit adopted 11.0 m, and every
+# manoeuvre after that planned at 12.7 m, never commanded more than 0.76 of
+# lock, needed 25-38 m of path, and ended ``off_track``.
+#
+# The measurement is still worth having -- the same session's good run
+# settled at a gain of 0.168, i.e. a 5.9 m radius against the 6.0 m setting,
+# which says the setting is right for that car. What is missing is a way to
+# measure it that does not feed its own input: a deliberate calibration
+# sweep at full lock, like ``Controls/throttle_axis_check.py`` does for the
+# pedal, rather than an estimate taken from the manoeuvre it then changes.
+
+# ─── Giving the car back ──────────────────────────────────────────────────
+#
+# A manoeuvre that stops does not leave a rolling car. Dropping every input at
+# 1 m/s in reverse hands the driver a car that is still moving and in gear,
+# creeping, with nothing holding it -- which is what the last live run did
+# after an abort. The assistant may only ever *add* braking
+# (``control-intervention.md`` §1), and braking a car it was already driving
+# to a standstill is squarely inside that.
+#
+# It is bounded three ways, because a brake nobody asked for is its own
+# hazard: it stops at a standstill, it stops after STOPPING_TIMEOUT_S
+# whatever happens, and it stops the moment the driver touches the throttle.
+# And it never runs when the input guard says we may not inject -- a menu
+# opened or LFS lost focus means the keystroke is not ours to send.
+STOPPING_TIMEOUT_S = 4.0
+# The driver asking for throttle ends it at once: they want to drive away,
+# and holding the brake against them is the one thing this must not do.
+DRIVER_THROTTLE_RELEASE = 0.15
+
 # Why a manoeuvre ended, in the words the screen uses.
 ABORT_REASONS = {
     'driver_brake': "Parking cancelled - you braked",
@@ -281,6 +325,10 @@ class ParkAssist(AssistanceSystem):
         self._brake_free_since = None
         self._last_progress_log = 0.0
         self._last_trace = 0.0
+        # Where to go once an aborted manoeuvre's car has come to rest, and
+        # when that stopping phase began. See STOPPING_TIMEOUT_S.
+        self._after_stopping = STATE_ABORTED
+        self._stopping_since = 0.0
 
     # ─── Events ───────────────────────────────────────────────────────
 
@@ -349,11 +397,16 @@ class ParkAssist(AssistanceSystem):
         shape = VehicleShape(length, width,
                              wheelbase=length * 0.58,
                              rear_axle_offset=length * 0.28)
-        radius = self.settings.get(SETTING_TURN_RADIUS) or DEFAULT_MIN_TURN_RADIUS_M
         self._shape = shape
         self._shape_cname = cname
         self._detector = ParkingSlotDetector(shape)
-        self._planner = ParkingPlanner(shape, min_turn_radius=float(radius))
+        # The setting is the *car's* radius at full lock; the planner wants
+        # the radius to plan at, which is deliberately wider so the follower
+        # has something left to steer with
+        # (``trajectory.PLAN_RADIUS_MARGIN``).
+        lock = self.settings.get(SETTING_TURN_RADIUS) or DEFAULT_MIN_TURN_RADIUS_M
+        self._planner = ParkingPlanner(
+            shape, min_turn_radius=planning_radius_for(float(lock)))
         return shape
 
     @property
@@ -383,11 +436,17 @@ class ParkAssist(AssistanceSystem):
             if self.state == STATE_PARKING:
                 self._finish(STATE_ABORTED, self._refusal(own_vehicle))
             else:
+                if self.state == STATE_STOPPING:
+                    self._release_everything()
                 self._set_state(STATE_OFF)
             return self._publish()
 
         if self.state == STATE_PARKING:
             self._drive(own_vehicle, own)
+            return self._publish()
+
+        if self.state == STATE_STOPPING:
+            self._stop_the_car(own_vehicle, own)
             return self._publish()
 
         if self._cancel_requested:
@@ -802,13 +861,21 @@ class ParkAssist(AssistanceSystem):
             self._hooks_pending = False
 
     def _drive(self, own_vehicle: OwnVehicle, own):
-        """One control cycle of an active manoeuvre."""
+        """One control cycle of an active manoeuvre.
+
+        Every exit here goes through :meth:`_finish` with the car's speed, so
+        that an abort at 1 m/s brings the car to rest instead of dropping the
+        inputs and letting it creep away (:data:`STOPPING_TIMEOUT_S`).
+        """
+        speed_mps = own.speed / 3.6
         if self._cancel_requested:
             self._cancel_requested = False
-            self._finish(STATE_ABORTED, 'driver_cancel')
+            self._finish(STATE_ABORTED, 'driver_cancel', own_vehicle, speed_mps)
             return
         refusal = self.guard.may_inject(own_vehicle)
         if refusal is not None:
+            # No stopping phase: the guard has just said we may not inject,
+            # and that applies to the brake as much as to anything else.
             self._finish(STATE_ABORTED, refusal)
             return
         now = self.clock()
@@ -817,21 +884,21 @@ class ParkAssist(AssistanceSystem):
         if (self._brake_free_since is not None
                 and now - self._brake_free_since >= BRAKE_SETTLE_S
                 and own_vehicle.brake >= DRIVER_BRAKE_OVERRIDE):
+            # The driver is already on the brake; ours would add nothing.
             self._finish(STATE_ABORTED, 'driver_brake')
             return
         if now - self._started_at > MAX_MANOEUVRE_S:
-            self._finish(STATE_ABORTED, 'timeout')
+            self._finish(STATE_ABORTED, 'timeout', own_vehicle, speed_mps)
             return
 
-        speed_mps = own.speed / 3.6
         if speed_mps > RUNAWAY_SPEED_MPS:
-            self._finish(STATE_ABORTED, 'runaway')
+            self._finish(STATE_ABORTED, 'runaway', own_vehicle, speed_mps)
             return
 
         pose = pose_from_mci(own.x, own.y, own.heading)
         demand = self.follower.update(pose, speed_mps)
         if demand.off_track:
-            self._finish(STATE_ABORTED, 'off_track')
+            self._finish(STATE_ABORTED, 'off_track', own_vehicle, speed_mps)
             return
         if demand.finished:
             self._finish(STATE_DONE, None)
@@ -845,7 +912,7 @@ class ParkAssist(AssistanceSystem):
         self._last_demand = demand
         self._log_progress(demand, state, status)
         if status.fault is not None:
-            self._finish(STATE_ABORTED, status.fault)
+            self._finish(STATE_ABORTED, status.fault, own_vehicle, speed_mps)
 
     def _note_commanded_brake(self, brake: float, now: float):
         """Track when the manoeuvre's own brake was last off. See above."""
@@ -874,7 +941,9 @@ class ParkAssist(AssistanceSystem):
         logger.info("Parking: stroke %d/%d %s %.0f%%, v %.2f/%.2f m/s, "
                     "gear %d/%d%s, kappa %+.3f/%+.3f 1/m, steer %+.2f "
                     "(gain %.3f), thr %.2f brk %.2f",
-                    demand.stroke + 1, len(self.trajectory.segments),
+                    # ``stroke`` is already 1-based (``ControlDemand``); the
+                    # + 1 that used to be here printed "stroke 6/5".
+                    demand.stroke, demand.strokes,
                     'rev' if demand.direction < 0 else 'fwd',
                     100.0 * demand.progress, state.speed_mps, demand.speed,
                     state.gear, status.gear_wanted,
@@ -884,17 +953,91 @@ class ParkAssist(AssistanceSystem):
                             'gain', float('nan')),
                     status.throttle, status.brake)
 
-    def _finish(self, state: str, reason: Optional[str]):
-        """End a manoeuvre, whichever way it ended. Always releases first."""
+    # ─── Giving the car back ──────────────────────────────────────────
+
+    def _begin_stopping(self):
+        """Hand back steering and gears now; keep the brake until standstill.
+
+        The two that are given back immediately are the two that can only do
+        harm from here: a held steering command is a wheel the driver has to
+        fight, and a gear request is a shift they did not ask for. The brake
+        is the only input this project is ever allowed to *add*
+        (``control-intervention.md`` §1), which is why it is the only one
+        that may outlive the manoeuvre.
+        """
+        controller = self.controller
+        for output in (controller.steering, controller.gears):
+            try:
+                output.release()
+            except Exception as exc:
+                logger.error("Releasing %s failed: %s: %s",
+                             type(output).__name__, type(exc).__name__, exc)
+        controller.reset()
+        self._stopping_since = self.clock()
+        # And brake on this cycle, not the next one. A 100 ms gap with every
+        # input dropped is the car creeping away before the stop begins.
+        self._brake_hard()
+
+    def _brake_hard(self):
+        try:
+            self.controller.pedals.set(0.0, 1.0)
+        except Exception as exc:
+            logger.error("Braking after the abort failed: %s: %s",
+                         type(exc).__name__, exc)
+
+    def _stop_the_car(self, own_vehicle: OwnVehicle, own):
+        """One cycle of bringing an abandoned manoeuvre's car to rest."""
+        speed_mps = own.speed / 3.6
+        why = None
+        if speed_mps <= STANDSTILL_MPS:
+            why = 'stopped'
+        elif own_vehicle.throttle >= DRIVER_THROTTLE_RELEASE:
+            why = 'driver wants to drive'
+        elif self.clock() - self._stopping_since > STOPPING_TIMEOUT_S:
+            why = 'timed out'
+        elif self.guard.may_inject(own_vehicle) is not None:
+            why = 'may no longer inject'
+        if why is not None:
+            logger.info("Parking: brake released after the abort (%s, "
+                        "%.2f m/s).", why, speed_mps)
+            self._release_everything()
+            self._set_state(self._after_stopping)
+            return
+        self._brake_hard()
+
+    def _release_everything(self):
+        self._stopping_since = 0.0
+        if self._controller is not None:
+            self.controller.release()
+
+    def _finish(self, state: str, reason: Optional[str],
+                own_vehicle: Optional[OwnVehicle] = None,
+                speed_mps: float = 0.0):
+        """End a manoeuvre, whichever way it ended. Always releases first.
+
+        The steering and the gears go back immediately and unconditionally.
+        The *brake* may stay on a moment longer, and only in one case: the
+        manoeuvre was driving a car that is still rolling, and we are still
+        allowed to inject. See :data:`STOPPING_TIMEOUT_S`.
+        """
         was_parking = self.state == STATE_PARKING
-        if was_parking or self._controller is not None:
+        stopping = (was_parking and state == STATE_ABORTED
+                    and speed_mps > STANDSTILL_MPS
+                    and own_vehicle is not None
+                    and self.guard.may_inject(own_vehicle) is None)
+        if stopping:
+            self._begin_stopping()
+        elif was_parking or self._controller is not None:
             self.controller.release()
         self.follower = None
         self._brake_free_since = None
         self._accept_requested = False
         self._cancel_requested = False
         self.reason = reason
-        self._set_state(state)
+        self._set_state(STATE_STOPPING if stopping else state)
+        # Where to go once the car is at rest. Kept so the screen and the
+        # scan resume in the state the abort actually meant.
+        self._after_stopping = state
         if not was_parking:
             return
         if state == STATE_DONE:
@@ -954,8 +1097,11 @@ class ParkAssist(AssistanceSystem):
 
     def is_enabled(self) -> bool:
         # Keep running while a manoeuvre is live even if the switch is turned
-        # off underneath it: something has to give the car back.
-        return bool(self.settings.get(SETTING_ENABLED)) or self.state == STATE_PARKING
+        # off underneath it: something has to give the car back. That includes
+        # the stopping phase, which is holding the brake and is the one state
+        # where being switched off would strand an input.
+        return (bool(self.settings.get(SETTING_ENABLED))
+                or self.state in (STATE_PARKING, STATE_STOPPING))
 
     def shutdown(self):
         """Give every input back before the process ends."""

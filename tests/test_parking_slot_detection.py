@@ -57,13 +57,13 @@ class TestParallelSlots:
         assert slot.target.yaw == pytest.approx(0.0)
 
     def test_gap_one_metre_too_short_is_rejected(self):
-        """4.5 m car, 2.5 m margin -- 7.0 m is the line, 6.0 m is not a slot."""
+        """4.5 m car, 2.75 m margin -- 7.25 m is the line, 6.0 m is not."""
         obstacles = [parked(0.0, -3.0), parked(10.5, -3.0)]  # 6.0 m gap
         closed = [s for s in detector().scan(EGO, obstacles) if not s.open_ended]
         assert closed == []
 
     def test_gap_just_long_enough_is_accepted(self):
-        obstacles = [parked(0.0, -3.0), parked(11.6, -3.0)]  # 7.1 m gap
+        obstacles = [parked(0.0, -3.0), parked(11.8, -3.0)]  # 7.3 m gap
         closed = [s for s in detector().scan(EGO, obstacles) if not s.open_ended]
         assert len(closed) == 1
 

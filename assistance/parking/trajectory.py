@@ -79,6 +79,20 @@ from assistance.parking.slot_detection import (KIND_PARALLEL,
 # path the car cannot follow, and the follower would discover that halfway into
 # a parking space. ``conventions.md`` §4: no table keyed on CName.
 DEFAULT_MIN_TURN_RADIUS_M = 6.0
+# How much wider than the car's lock the tightest *plan* is allowed to be.
+#
+# A plan at exactly the lock radius is a plan with no steering left to correct
+# with: every disturbance that needs a tighter arc is simply unanswerable, and
+# the follower spends the rest of the manoeuvre saturated. That is not a
+# theoretical worry -- the live runs planned at 6.0 m in a car whose measured
+# full-lock curvature was 0.15 1/m, i.e. a 6.7 m radius, so the plan was
+# *tighter than the car could drive* and every arc came out short.
+#
+# 1.15 is the measured compromise: the closed-loop simulation parks within 2
+# degrees of square with it against 4 degrees at 1.0, and it is the largest
+# margin that still leaves the tight perpendicular space drivable. Wider plans
+# need more room, so this is not free.
+PLAN_RADIUS_MARGIN = 1.15
 # Radii tried, as multiples of the minimum. A tighter arc needs less road
 # length; a wider one sweeps less into the neighbours. Trying a few and keeping
 # the first that is clear costs a handful of milliseconds, once, at plan time.
@@ -394,8 +408,23 @@ class PlanResult:
         return self.trajectory is not None
 
 
+def planning_radius_for(lock_radius: float) -> float:
+    """The radius to plan at, given what the car can do at full lock.
+
+    One function so that the margin lives in one place: the setting and the
+    measurement both describe the *car*, the planner wants the *plan*, and
+    confusing the two is what put a live run on a path it could not steer.
+    """
+    return max(0.5, float(lock_radius)) * PLAN_RADIUS_MARGIN
+
+
 class ParkingPlanner:
-    """Builds the manoeuvre for a slot the detector has already accepted."""
+    """Builds the manoeuvre for a slot the detector has already accepted.
+
+    ``min_turn_radius`` is the radius of the tightest arc this planner will
+    *plan*, not the car's steering lock. Callers that start from the car go
+    through :func:`planning_radius_for`.
+    """
 
     def __init__(self, shape: VehicleShape,
                  min_turn_radius: float = DEFAULT_MIN_TURN_RADIUS_M,
