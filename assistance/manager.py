@@ -12,6 +12,7 @@ from assistance.collision_warning import ForwardCollisionWarning
 from assistance.cross_traffic_warning import CrossTrafficWarning
 from assistance.emergency_brake import EmergencyBrake
 from assistance.gearbox import Gearbox
+from assistance.park_assist import ParkAssist
 from assistance.park_distance_control import ParkDistanceControl
 from core.event_bus import EventBus
 from core.settings_manager import SettingsManager
@@ -108,6 +109,10 @@ class AssistanceManager:
         self.systems['aeb'] = EmergencyBrake(self.event_bus, self.settings,
                                             pedals=self.pedals)
         self.systems['pdc'] = ParkDistanceControl(self.event_bus, self.settings)
+        # Behind the PDC on purpose: the two share a speed gate and the driver
+        # reads them as one feature, so the parking display is drawn on the
+        # same cycle as the sensor display it sits next to.
+        self.systems['park'] = ParkAssist(self.event_bus, self.settings)
         self.systems['autoh'] = AutoHold(self.event_bus, self.settings)
         self.systems['lighta'] = LightAssists(self.event_bus, self.settings)
         self.systems['gearbox'] = Gearbox(self.event_bus, self.settings,

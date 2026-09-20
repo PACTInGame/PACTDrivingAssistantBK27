@@ -48,6 +48,14 @@ PDC_RANGE = (41, 60)
 BTN_NOTIFICATION = 61
 BTN_SIREN = 62
 BTN_STROBE = 63
+# Selbst-Einparken (assistance/park_assist.py). Drei eigene Slots, weil das
+# Angebot *anklickbar* sein muss und deshalb weder in die Meldungszeile noch
+# in das Menue passt: die Meldungszeile zeigt eine Zeile nach der anderen und
+# das Menue ist beim Rangieren zu. Die Klicks nimmt ParkAssist selbst entgegen.
+BTN_PARK_OFFER = 64
+BTN_PARK_CANCEL = 65
+BTN_PARK_STATUS = 66
+PARK_RANGE = (64, 66)
 BTN_DEBUG_DECEL = 100
 BTN_DEBUG_DIST = 101
 ALL_BUTTONS_RANGE = (0, 239)
@@ -97,6 +105,20 @@ NOTIFICATION_SLOT = (0, 8, 26, 5)
 OUTGAUGE_WARNING_SLOT = (55, 32, 90, 6)
 CALIBRATION_SLOT_PROMPT = (55, 40, 90, 7)
 CALIBRATION_SLOT_STATUS = (55, 47, 90, 6)
+
+# Einparkhilfe: ueber der Bildmitte, wo der Fahrer beim Rangieren ohnehin
+# hinsieht, und deutlich neben HUD (ab x 87) und Menue (0-50 x, 70-120 y).
+# Absolute Koordinaten wie beim Kalibrierfeld: der Fahrer soll es ansehen, und
+# der HUD-Platz ist frei verschiebbar.
+PARK_SLOT_OFFER = (60, 150, 46, 7)
+PARK_SLOT_CANCEL = (106, 150, 16, 7)
+PARK_SLOT_STATUS = (60, 157, 62, 6)
+
+# Was die drei Zustaende auf dem Schirm sagen. Nur ``offered`` ist anklickbar -
+# ein Angebot wird *bestaetigt*, nie automatisch ausgefuehrt
+# (reference/control-intervention.md).
+PARK_KIND_TEXTS = {'parallel': "parallel", 'perpendicular': "bay"}
+PARK_SIDE_TEXTS = {'left': "left", 'right': "right"}
 
 # Notbremseingriff: im Meldungsslot, direkt unter dem Tacho.
 # Bewusst nicht blinkend: ein Eingriff dauert oft unter einer Sekunde, ein
@@ -276,6 +298,7 @@ class UIManager:
         self.event_bus.subscribe('outgauge_status', self._on_outgauge_status)
         self.event_bus.subscribe('state_data', self._state_change)
         self.event_bus.subscribe("pdc_changed", self._update_pdc)
+        self.event_bus.subscribe("park_assist_changed", self._update_park_assist)
         self.event_bus.subscribe("pdc_beep_allowed", self._update_pdc_beep)
         self.event_bus.subscribe("notification", self._update_notifications)
         self.event_bus.subscribe("show_siren_ui", self._show_siren_ui)
@@ -290,6 +313,9 @@ class UIManager:
                                  self._update_calibration_panel)
         #self.event_bus.subscribe("decel_debug", self._decel_debug)
         #self.event_bus.subscribe("dist_debug", self._dist_debug)
+
+        # Zustand der Einparkhilfe, oder None wenn sie nichts zu sagen hat.
+        self.park_state = None
 
         self.speed = 0
         self.rpm = 0
@@ -532,6 +558,72 @@ class UIManager:
         if mode == 2 and self.pdc_beep_allowed:
             self.pdc_beeper.beep()
 
+    # ─── Einparkhilfe ─────────────────────────────────────────────────
+
+    def _update_park_assist(self, data):
+        """Nimmt den Zustand entgegen - gezeichnet wird im UI-Durchlauf.
+
+        Das Ereignis kommt vom Assistenzthread, gezeichnet wird auf dem
+        UI-Thread; hier wird nur abgelegt. Genau wie bei der
+        Getriebekalibrierung.
+        """
+        self.park_state = data if isinstance(data, dict) else None
+
+    def _draw_park_assist(self):
+        """Angebot, Abbruch und Fortschritt des Selbst-Einparkens.
+
+        Unabhaengig von ``hud_active``, wie der Notbrems-Anzeiger: das ist
+        keine Anzeige, sondern die Bedienung eines Eingriffs, und ein Fahrer,
+        der den HUD abgeschaltet hat, soll trotzdem abbrechen koennen
+        (reference/ui.md §1.5). Jeden Durchlauf neu gezeichnet, damit es nach
+        SHIFT+B von selbst wiederkommt; die Button-Registry unterdrueckt die
+        Wiederholung.
+        """
+        state = self.park_state or {}
+        name = state.get('state')
+        if not (self.drawing and self.buttons_allowed) or name in (None, 'off'):
+            self.message_sender.remove_range(*PARK_RANGE)
+            return
+
+        if name == 'offered':
+            kind = PARK_KIND_TEXTS.get(state.get('kind'), "space")
+            side = PARK_SIDE_TEXTS.get(state.get('side'), "")
+            self.message_sender.create_button(
+                BTN_PARK_OFFER, *PARK_SLOT_OFFER,
+                f"^3Park here? ^7{kind} {side}, {state.get('length', 0)} m",
+                pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+            self.message_sender.create_button(
+                BTN_PARK_CANCEL, *PARK_SLOT_CANCEL, "^1No",
+                pyinsim.ISB_DARK | pyinsim.ISB_CLICK)
+            strokes = state.get('strokes', 0)
+            self.message_sender.create_button(
+                BTN_PARK_STATUS, *PARK_SLOT_STATUS,
+                f"^7{strokes} move(s) - click to let the car park itself",
+                pyinsim.ISB_DARK)
+            return
+
+        self.message_sender.remove_button(BTN_PARK_OFFER)
+        if name == 'parking':
+            self.message_sender.create_button(
+                BTN_PARK_CANCEL, *PARK_SLOT_CANCEL, "^1Stop",
+                pyinsim.ISB_LIGHT | pyinsim.ISB_CLICK)
+            percent = int(round(state.get('progress', 0.0) * 100))
+            self.message_sender.create_button(
+                BTN_PARK_STATUS, *PARK_SLOT_STATUS,
+                f"^3Parking - move {state.get('stroke', 1)}/"
+                f"{state.get('strokes', 1)}, {percent} %", pyinsim.ISB_LIGHT)
+            return
+
+        self.message_sender.remove_button(BTN_PARK_CANCEL)
+        if name == 'done':
+            self.message_sender.create_button(BTN_PARK_STATUS,
+                                              *PARK_SLOT_STATUS, "^2Parked.",
+                                              pyinsim.ISB_DARK)
+        else:
+            # 'scanning' und 'aborted' brauchen keine stehende Zeile: das eine
+            # ist der Normalzustand, das andere hat schon eine Meldung erzeugt.
+            self.message_sender.remove_button(BTN_PARK_STATUS)
+
     # ─── Bildschirmwechsel ────────────────────────────────────────────
 
     def _state_change(self, data):
@@ -585,6 +677,7 @@ class UIManager:
         self.emergency_brake_active = False
         self.current_menu = None
         self.calibration_state = None
+        self.park_state = None
         self.clear_notifications()
 
     def _draw_idle_screen(self):
@@ -721,6 +814,9 @@ class UIManager:
         # 12 s misst. Jeden Durchlauf neu gezeichnet, damit sie nach SHIFT+B
         # von selbst wiederkommt (reference/ui.md §1.5).
         self._draw_calibration_panel()
+        # Ebenfalls unabhaengig von ``hud_active``: das Angebot ist ein
+        # Bedienelement, kein Anzeigewert.
+        self._draw_park_assist()
         # Ebenfalls unabhaengig von ``hud_active``: sie erklaert, warum die
         # Anzeigen stehen, und waere ausgerechnet dann weg, wenn jemand sie
         # abgeschaltet hat (known-issues #24).

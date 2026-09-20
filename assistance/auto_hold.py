@@ -42,7 +42,13 @@ class AutoHold(AssistanceSystem):
         self._attempted = False
         self._pending_since = None
         self._context = None
+        # Waehrend ein Manoever das Auto fuehrt (assistance/park_assist.py)
+        # haelt es an jedem Zugende an - und genau dort wuerde Auto-Hold die
+        # Handbremse anziehen und das Manoever festsetzen. Ein Eingriff, der
+        # alle drei Eingaben haelt, duldet keinen zweiten daneben.
+        self._manoeuvre_active = False
         self.event_bus.subscribe('state_data', self._on_state)
+        self.event_bus.subscribe('manoeuvre_active', self._on_manoeuvre)
 
     def _reset_attempt(self):
         self._attempted = False
@@ -58,13 +64,19 @@ class AutoHold(AssistanceSystem):
         if not data.get('on_track', False):
             self._reset_attempt()
 
+    def _on_manoeuvre(self, data):
+        active = bool(data.get('active', False)) if isinstance(data, dict) else False
+        if active != self._manoeuvre_active:
+            self._manoeuvre_active = active
+            self._reset_attempt()
+
     def process(self, own_vehicle: OwnVehicle, vehicles: Dict[int, Vehicle]) -> Dict[str, Any]:
         """Verarbeitet die Auto-Hold-Logik
 
         Kosten pro Zyklus: konstante Vergleiche, waehrend einer ausstehenden
         Bestaetigung eine monotonic-Abfrage. Kein I/O, keine Konfigurationsscans.
         """
-        if not self.is_enabled():
+        if not self.is_enabled() or self._manoeuvre_active:
             self._reset_attempt()
             return {'auto_hold_active': False}
         key = self.settings.get('user_handbrake_key')

@@ -429,6 +429,12 @@ class MenuSystem:
             else "^1" + self.translator.get("Off", lang)
         )
 
+        # Das Selbst-Einparken haengt am PDC-Tempofenster: es sucht nur, wo
+        # der Parkpieper ohnehin laeuft. Ohne PDC bleibt der Schalter deshalb
+        # gesperrt statt still wirkungslos zu sein.
+        park = "^2" if self.settings.get('park_assist') else "^1"
+        park_reason = self._park_assist_reason()
+
         return [
             (21, 0, MENU_TOP, MENU_WIDTH, 5, self.translator.get("Parking Settings", lang),
              pyinsim.ISB_LIGHT),
@@ -436,9 +442,29 @@ class MenuSystem:
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
             (23, 25, MENU_TOP + MENU_ROW_HEIGHT, 20, 5, pdc_mode_text,
              (pyinsim.ISB_DARK | pyinsim.ISB_CLICK) if pdc_on else pyinsim.ISB_LIGHT),
-            (BTN_CLOSE, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
+            (24, 0, MENU_TOP + 2 * MENU_ROW_HEIGHT, MENU_WIDTH, 5,
+             park + self.translator.get("Self Parking", lang),
+             (pyinsim.ISB_DARK | pyinsim.ISB_CLICK) if park_reason is None
+             else pyinsim.ISB_LIGHT),
+            (25, 25, MENU_TOP + 2 * MENU_ROW_HEIGHT, 30, 5,
+             park_reason or "^7" + self.translator.get(
+                 "Offers a space, parks after you click", lang),
+             pyinsim.ISB_LIGHT),
+            (BTN_CLOSE, 0, MENU_TOP + 3 * MENU_ROW_HEIGHT, MENU_WIDTH, 5, "^1" + self.translator.get("Close", lang),
              pyinsim.ISB_DARK | pyinsim.ISB_CLICK),
         ]
+
+    def _park_assist_reason(self):
+        """Why self-parking cannot be switched on, or ``None``.
+
+        One reason only, and it is the one the driver can act on: the feature
+        shares the park distance control's speed window and there is no point
+        in a switch that turns on something that will not look.
+        """
+        if not self.settings.get('park_distance_control'):
+            return "^1" + self.translator.get("Needs Park Distance Control",
+                                              self.language)
+        return None
 
     def open_parking_menu(self):
         """Öffnet das Parken-Menü"""
@@ -730,6 +756,7 @@ class MenuSystem:
             'parking': {
                 22: self._toggle_pdc,
                 23: self._cycle_pdc_mode,
+                24: self._toggle_park_assist,
             },
             'system': {
                 22: lambda: self._cycle('unit', ('metric', 'imperial'), system),
@@ -789,6 +816,14 @@ class MenuSystem:
         if not self.settings.get('park_distance_control'):
             return
         self._cycle('park_distance_control_mode', (1, 2), self.open_parking_menu)
+
+    def _toggle_park_assist(self):
+        """Self-parking on/off, refused with a reason while the PDC is off."""
+        reason = self._park_assist_reason()
+        if reason is not None:
+            self._notify('^1', "Needs Park Distance Control")
+            return
+        self._toggle('park_assist', self.open_parking_menu)
 
     def _toggle_ai_traffic(self):
         """Startet/stoppt den KI-Verkehr - der Start erst nach Rueckfrage

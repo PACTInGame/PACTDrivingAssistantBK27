@@ -68,6 +68,25 @@ _SCHEMA: Dict[str, Setting] = {
     'park_distance_control_mode': Setting(1, int, choices=(0, 1, 2),
                                           comment="0 = Off, 1 = Visual, 2 = Visual & Audio"),
 
+    # ─── Selbst-Einparken (assistance/park_assist.py) ─────────────────
+    # Sucht Parkluecken, waehrend langsam gefahren wird, und faehrt eine
+    # angebotene Luecke *nur nach Klick des Fahrers* aus.
+    'park_assist': Setting(False, bool),
+    # Nimmt ein Angebot selbst an. Existiert ausschliesslich fuer die
+    # aufgezeichneten Szenarien in simulation_tests/ - eine Wiedergabe kann
+    # keinen Button klicken. Steht nicht im Menue und protokolliert jeden
+    # Einsatz (reference/control-intervention.md).
+    'park_assist_auto_accept': Setting(False, bool),
+    # Wendekreis der Hinterachse bei vollem Lenkeinschlag, in Metern.
+    # Bewusst gross voreingestellt: ein zu grosser Wert plant ein flacheres
+    # Manoever und verlangt mehr Platz, ein zu kleiner eines, das das Auto
+    # nicht fahren kann (reference/conventions.md §4).
+    'park_assist_turn_radius': Setting(6.0, float, minimum=3.0, maximum=12.0),
+    # Anteil der halben LFS-Fensterbreite, den ein voller Lenkbefehl auf dem
+    # Bildschirm zuruecklegt. Bestimmt nur die Aufloesung des Befehls - was er
+    # an Kruemmung wert ist, wird gemessen (Controls/vehicle_control.py).
+    'park_assist_mouse_span': Setting(0.25, float, minimum=0.05, maximum=1.0),
+
     # ─── Darstellung ──────────────────────────────────────────────────
     'language': Setting('de', str, choices=SUPPORTED_LANGUAGES),
     'unit': Setting('metric', str, choices=('metric', 'imperial')),

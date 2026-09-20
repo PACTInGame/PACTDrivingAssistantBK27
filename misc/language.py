@@ -371,6 +371,36 @@ class LanguageManager:
                 "dk": "Parkindstillinger",
                 "se": "Parkinställningar"
             },
+            "Self Parking": {
+                "en": "Self Parking",
+                "de": "Selbst-Einparken",
+                "it": "Parcheggio Automatico",
+                "fr": "Stationnement Automatique",
+                "tr": "Otomatik Park",
+                "no": "Automatisk Parkering",
+                "dk": "Automatisk Parkering",
+                "se": "Automatisk Parkering"
+            },
+            "Offers a space, parks after you click": {
+                "en": "Offers a space, parks after you click",
+                "de": "Schlaegt Luecken vor, parkt erst nach Klick",
+                "it": "Propone un posto, parcheggia dopo il clic",
+                "fr": "Propose une place, se gare apres votre clic",
+                "tr": "Yer onerir, tikladiktan sonra park eder",
+                "no": "Foreslar en plass, parkerer etter klikk",
+                "dk": "Foreslar en plads, parkerer efter klik",
+                "se": "Foreslar en plats, parkerar efter klick"
+            },
+            "Needs Park Distance Control": {
+                "en": "Needs Park Distance Control",
+                "de": "Braucht die Einparkhilfe",
+                "it": "Richiede i sensori di parcheggio",
+                "fr": "Necessite le radar de recul",
+                "tr": "Park sensoru gerekir",
+                "no": "Krever parkeringssensor",
+                "dk": "Kraever parkeringssensor",
+                "se": "Kraver parkeringssensor"
+            },
             "Park Distance Control": {
                 "en": "Park Distance Control",
                 "de": "Einparkhilfe",

@@ -176,6 +176,12 @@ class Gearbox(AssistanceSystem):
         # Vorher hielt pyautogui.PAUSE die Tasten - mit time.sleep im
         # 100-ms-Thread, also ~440 ms Blockade pro Gangwechsel (#43).
         self.tapper = get_key_tapper()
+        # Ein laufendes Fahrmanoever (assistance/park_assist.py) waehlt die
+        # Gaenge selbst - vorwaerts und rueckwaerts, im Stillstand. Zwei
+        # Systeme, die dieselben Schalttasten druecken, schalten aneinander
+        # vorbei; die Automatik haelt sich so lange heraus.
+        self._manoeuvre_active = False
+        self.event_bus.subscribe('manoeuvre_active', self._on_manoeuvre)
 
         # Listen for calibration request from menu
         self.event_bus.subscribe('gearbox_calibrate', self._on_calibration_requested)
@@ -903,10 +909,14 @@ class Gearbox(AssistanceSystem):
         self._process_shifting(own_vehicle)
         return {'auto_gearbox_active': True}
 
+    def _on_manoeuvre(self, data):
+        self._manoeuvre_active = (bool(data.get('active', False))
+                                  if isinstance(data, dict) else False)
+
     def is_enabled(self) -> bool:
         # Auch ausgeschaltet Verfuegbarkeit pruefen und Kalibrierung bedienen.
         # Pro Zyklus nur konstante Vergleiche und vorhandene Profilabfragen.
-        return self.enabled
+        return self.enabled and not self._manoeuvre_active
 
     def shutdown(self):
         """Kupplung oder Gangtaste duerfen den Prozess nicht ueberleben
